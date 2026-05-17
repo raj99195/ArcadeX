@@ -183,19 +183,7 @@ export default function Home() {
               Fast · Secure · Interoperable
             </div>
 
-            {!isConnected && (
-              <button onClick={() => open()} style={{
-                display: "inline-flex", alignItems: "center", gap: 7,
-                padding: "8px 13px", background: "rgba(0,255,136,0.05)",
-                border: "1px solid rgba(0,255,136,0.15)", borderRadius: 7,
-                color: "rgba(0,255,136,0.55)", fontSize: 10, cursor: "pointer",
-                width: "fit-content", fontFamily: "inherit",
-              }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "rgba(0,255,136,0.35)" }} />
-                Connect wallet to play & earn
-              </button>
-            )}
-          </div>
+                     </div>
 
           {/* Floating tags — desktop only */}
           {!isMobile && (
