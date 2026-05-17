@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
-import { useAccount, useWalletClient, usePublicClient } from "wagmi";
-import { saveGame, saveCreator, getGamesByCreator, registerCreator, getCreatorStatus } from "../lib/gameService";
+import { useAccount, usePublicClient } from "wagmi";
+import { saveGame, saveCreator, getGamesByCreator, registerCreator, getCreatorStatus, getGameById } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
+import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
+import { wagmiAdapter } from "../Providers";
 
 const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
 const CREATOR_NFT_ADDRESS = import.meta.env.VITE_CREATOR_NFT_ADDRESS;
@@ -42,6 +44,20 @@ const statusMap = {
   pending: { bg: "rgba(255,184,0,0.08)", color: "#FFB800", border: "rgba(255,184,0,0.2)", label: "⏳ Pending" },
   rejected: { bg: "rgba(255,68,68,0.08)", color: "#ff4444", border: "rgba(255,68,68,0.2)", label: "✗ Rejected" },
 };
+
+const TOURNAMENT_ADDRESS = import.meta.env.VITE_TOURNAMENT_ADDRESS;
+const ARCADE_TOKEN_ADDRESS = import.meta.env.VITE_ARCADE_TOKEN_ADDRESS;
+
+const TOURNAMENT_ABI = [
+  { name: "createTournament", type: "function", stateMutability: "nonpayable", inputs: [{ name: "gameId", type: "uint256" }, { name: "gameName", type: "string" }, { name: "gameThumbnail", type: "string" }, { name: "entryFee", type: "uint256" }, { name: "maxPlayers", type: "uint256" }, { name: "startTime", type: "uint256" }, { name: "durationInHours", type: "uint256" }], outputs: [] },
+  { name: "getTournamentInfo", type: "function", stateMutability: "view", inputs: [{ name: "tournamentId", type: "uint256" }], outputs: [{ name: "", type: "tuple", components: [{ name: "id", type: "uint256" }, { name: "gameId", type: "uint256" }, { name: "gameName", type: "string" }, { name: "gameThumbnail", type: "string" }, { name: "creator", type: "address" }, { name: "entryFee", type: "uint256" }, { name: "maxPlayers", type: "uint256" }, { name: "startTime", type: "uint256" }, { name: "endTime", type: "uint256" }, { name: "prizePool", type: "uint256" }, { name: "status", type: "uint8" }, { name: "players", type: "address[]" }, { name: "prizesDistributed", type: "bool" }] }] },
+  { name: "nextTournamentId", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+  { name: "endTournamentAndDistribute", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tournamentId", type: "uint256" }], outputs: [] },
+];
+
+const ERC20_APPROVE_ABI = [
+  { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
+];
 
 const AVATAR_COLORS = ["#7B2FFF", "#00d4ff", "#00FF88", "#FFB800", "#ff4444", "#ff69b4", "#00bfff", "#ff7f50"];
 
@@ -112,7 +128,6 @@ function GateScreen({ icon, title, accent, sub, children }) {
 
 export default function Creator() {
   const { address, isConnected } = useAccount();
-const { data: walletClient } = useWalletClient();
   const publicClient = usePublicClient();
   const { balance } = useArcadeBalance();
 
@@ -130,6 +145,14 @@ const { data: walletClient } = useWalletClient();
   const [creatorStatus, setCreatorStatus] = useState(null);
   const [creatorLoading, setCreatorLoading] = useState(false);
   const [form, setForm] = useState({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50" });
+
+  // Tournament states
+  const [myTournaments, setMyTournaments] = useState([]);
+  const [tournamentsLoading, setTournamentsLoading] = useState(false);
+  const [showCreateTournament, setShowCreateTournament] = useState(false);
+  const [tForm, setTForm] = useState({ gameId: "", entryFee: "100", maxPlayers: "10", durationInHours: "24" });
+  const [tCreating, setTCreating] = useState(false);
+  const [tMsg, setTMsg] = useState("");
 
   // NFT states
   const [nftProfile, setNftProfile] = useState(null);
@@ -230,20 +253,22 @@ const { data: walletClient } = useWalletClient();
     setMintLoading(true);
     try {
       // 1. Mint NFT
-      const hash = await walletClient.writeContract({
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: CREATOR_NFT_ADDRESS,
         abi: NFT_ABI,
         functionName: "mintCreatorNFT",
         args: [username, selectedColor],
+        gas: BigInt(500000),
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
       // 2. initCreator on Platform
-      await walletClient.writeContract({
+      await writeContract(wagmiAdapter.wagmiConfig, {
         address: PLATFORM_ADDRESS,
         abi: PLATFORM_ABI,
         functionName: "initCreator",
         args: [address],
+        gas: BigInt(200000),
       });
 
       // 3. Save to Firebase
@@ -268,6 +293,59 @@ const { data: walletClient } = useWalletClient();
   useEffect(() => { if (address) fetchMyGames(); }, [address]);
   useEffect(() => { if (address && creatorStatus === "approved") fetchMyGames(); }, [address, creatorStatus]);
 
+  const fetchMyTournaments = async () => {
+    if (!address || !publicClient) return;
+    setTournamentsLoading(true);
+    try {
+      const nextId = await publicClient.readContract({ address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "nextTournamentId" });
+      const total = Number(nextId) - 1;
+      if (total <= 0) { setMyTournaments([]); setTournamentsLoading(false); return; }
+      const results = await Promise.all(
+        Array.from({ length: total }, (_, i) =>
+          publicClient.readContract({ address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "getTournamentInfo", args: [BigInt(i + 1)] })
+        )
+      );
+      const mine = results
+        .map(t => ({ ...t, id: Number(t.id), status: Number(t.status), prizePool: t.prizePool, players: t.players }))
+        .filter(t => t.creator?.toLowerCase() === address?.toLowerCase());
+      setMyTournaments(mine);
+    } catch (err) { console.error(err); }
+    finally { setTournamentsLoading(false); }
+  };
+
+  useEffect(() => { if (address && creatorStatus === "approved") fetchMyTournaments(); }, [address, creatorStatus]);
+
+  const handleCreateTournament = async () => {
+    if (!tForm.gameId) return;
+    setTCreating(true);
+    setTMsg("");
+    try {
+      const selectedGame = myGames.find(g => String(g.id) === String(tForm.gameId));
+      if (!selectedGame) throw new Error("Game not found");
+      const startTime = BigInt(Math.floor(Date.now() / 1000) + 60);
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "createTournament",
+        args: [BigInt(selectedGame.id), selectedGame.name, selectedGame.thumbnailUrl || "", BigInt(Number(tForm.entryFee) * 1e18), BigInt(tForm.maxPlayers), startTime, BigInt(tForm.durationInHours)],
+        gas: BigInt(500000),
+      });
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      setTMsg("✓ Tournament created successfully!");
+      setShowCreateTournament(false);
+      setTForm({ gameId: "", entryFee: "100", maxPlayers: "10", durationInHours: "24" });
+      await fetchMyTournaments();
+    } catch (err) { setTMsg("Error: " + err.message); }
+    finally { setTCreating(false); }
+  };
+
+  const handleEndTournament = async (tournamentId) => {
+    try {
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, { address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "endTournamentAndDistribute", args: [BigInt(tournamentId)], gas: BigInt(300000) });
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      setTMsg("🏆 Prizes distributed!");
+      await fetchMyTournaments();
+    } catch (err) { setTMsg("Error: " + err.message); }
+  };
+
   const submitGame = async () => {
     if (!form.name || !form.iframeUrl || !form.description || !form.thumbnailUrl) { setError("Fill in all required fields."); return; }
     if (!validateUrl(form.iframeUrl)) { setError("Enter a valid game URL."); return; }
@@ -275,13 +353,38 @@ const { data: walletClient } = useWalletClient();
     setError("");
     setLoading(true);
     try {
-      const totalGames = await publicClient.readContract({ address: PLATFORM_ADDRESS, abi: PLATFORM_ABI, functionName: "getTotalGames" });
-      const assignedGameId = Number(totalGames) + 1;
-      const hash = await walletClient.writeContract({ address: PLATFORM_ADDRESS, abi: PLATFORM_ABI, functionName: "registerGame", args: [form.name, form.iframeUrl, BigInt(parseInt(form.rewardRate) || 50)] });
-      await publicClient.waitForTransactionReceipt({ hash });
-      await saveGame({ gameId: assignedGameId, name: form.name, description: form.description, iframeUrl: form.iframeUrl, thumbnailUrl: form.thumbnailUrl || "", category: form.category, rewardRate: form.rewardRate, creator: address, txHash: hash });
+      // Step 1: Firebase mein available game ID dhundho
+      const totalGames = await publicClient.readContract({ 
+        address: PLATFORM_ADDRESS, 
+        abi: PLATFORM_ABI, 
+        functionName: "getTotalGames" 
+      });
+      
+      let candidateId = Number(totalGames) + 1;
+      let attempts = 0;
+      while (attempts < 20) {
+        const exists = await getGameById(candidateId);
+        if (!exists) break; // ID available hai!
+        candidateId++;
+        attempts++;
+      }
+      
+      console.log("✅ Available Game ID:", candidateId);
+
+      // Step 2: Transaction karo
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address: PLATFORM_ADDRESS,
+        abi: PLATFORM_ABI,
+        functionName: "registerGame",
+        args: [form.name, form.iframeUrl, BigInt(parseInt(form.rewardRate) || 50)],
+        gas: BigInt(500000),
+      });
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+
+      // Step 3: Firebase mein save karo
+      await saveGame({ gameId: candidateId, name: form.name, description: form.description, iframeUrl: form.iframeUrl, thumbnailUrl: form.thumbnailUrl || "", category: form.category, rewardRate: form.rewardRate, creator: address, txHash: hash });
       await saveCreator({ address, displayName: nftProfile?.username || address.slice(0, 8) });
-      setNewGameId(assignedGameId);
+      setNewGameId(candidateId);
       setTxHash(hash);
       await fetchMyGames();
       setStep(3);
@@ -294,6 +397,13 @@ const { data: walletClient } = useWalletClient();
   const inputStyle = { width: "100%", padding: "11px 14px", background: "rgba(123,47,255,0.06)", border: `1px solid ${P.b}`, borderRadius: 7, color: "#d4b8ff", fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: P.raj, transition: "border-color 0.18s" };
   const labelStyle = { fontSize: 10, color: "#7755aa", display: "block", marginBottom: 6, fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" };
 
+  // Loading
+  if (creatorLoading) return (
+    <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ fontSize: 11, color: "#9977cc", fontFamily: P.raj, textTransform: "uppercase", letterSpacing: "2px" }}>Checking creator status...</div>
+    </div>
+  );
+
   // STATE 1: Not connected
   if (!isConnected) return (
     <GateScreen icon="🎮" title="Creator" accent="Dashboard" sub="Connect your wallet to publish games and earn ARCADE tokens.">
@@ -303,15 +413,8 @@ const { data: walletClient } = useWalletClient();
     </GateScreen>
   );
 
-  // Loading
-  if (creatorLoading) return (
-    <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ fontSize: 11, color: "#9977cc", fontFamily: P.raj, textTransform: "uppercase", letterSpacing: "2px" }}>Checking creator status...</div>
-    </div>
-  );
-
   // STATE 2: No NFT — Mint screen
-  if (!nftProfile && creatorStatus === null) return (
+  if (!nftProfile) return (
     <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ maxWidth: 500, width: "100%" }}>
 
@@ -410,18 +513,7 @@ const { data: walletClient } = useWalletClient();
     </div>
   );
 
-  // STATE 3: Pending approval
-  if (creatorStatus === "pending") return (
-    <GateScreen icon="⏳" title="Approval" accent="Pending" sub="Your creator account is being reviewed. This typically takes 1-2 hours.">
-      <div style={{ background: "rgba(255,184,0,0.07)", border: "1px solid rgba(255,184,0,0.18)", borderRadius: 10, padding: 20, marginBottom: 18 }}>
-        <div style={{ fontSize: 9, color: "#FFB800", textTransform: "uppercase", letterSpacing: "1.5px", fontFamily: P.raj, fontWeight: 700, marginBottom: 6 }}>Hang tight!</div>
-        <div style={{ fontSize: 14, color: "#FFB800", fontFamily: P.raj }}>Your NFT is minted. Admin approval pending.</div>
-      </div>
-      <Btn onClick={checkCreatorStatus} disabled={creatorLoading} variant="ghost">{creatorLoading ? "Checking..." : "↻ Check Status"}</Btn>
-    </GateScreen>
-  );
-
-  // STATE 4: APPROVED — Full Dashboard
+  // STATE 3: APPROVED — Full Dashboard
   return (
     <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, padding: "28px 36px" }}>
       <style>{`
@@ -472,7 +564,7 @@ const { data: walletClient } = useWalletClient();
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: `1px solid ${P.b}` }}>
-          {[{ id: "my-games", label: `My Games (${myGames.length})` }, { id: "earnings", label: "Earnings & Revenue" }, { id: "submit", label: "+ Submit New Game" }].map(t => (
+          {[{ id: "my-games", label: `My Games (${myGames.length})` }, { id: "tournaments", label: `🏆 Tournaments (${myTournaments.length})` }, { id: "earnings", label: "Earnings & Revenue" }, { id: "submit", label: "+ Submit New Game" }].map(t => (
             <button key={t.id} className="cr-tab" onClick={() => { setActiveTab(t.id); setStep(1); setError(""); }} style={{ padding: "10px 22px", background: "transparent", border: "none", borderBottom: activeTab === t.id ? "2px solid #7B2FFF" : "2px solid transparent", color: activeTab === t.id ? "#c4a0ff" : "#3a2a5a", fontSize: 12, cursor: "pointer", marginBottom: "-1px", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", transition: "color 0.18s" }}>
               {t.label}
             </button>
@@ -525,6 +617,101 @@ const { data: walletClient } = useWalletClient();
         )}
 
         {/* EARNINGS TAB */}
+        {activeTab === "tournaments" && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <div style={{ fontFamily: P.raj, fontSize: 13, color: "#9977cc" }}>Manage tournaments for your games</div>
+              <button onClick={() => setShowCreateTournament(true)} style={{ padding: "10px 20px", background: "linear-gradient(135deg,#FFB700,#FF6B00)", border: "none", borderRadius: 8, color: "#000", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: P.raj, letterSpacing: "0.5px" }}>
+                + Create Tournament
+              </button>
+            </div>
+
+            {tMsg && (
+              <div style={{ marginBottom: 14, padding: "12px 16px", background: tMsg.startsWith("✓") || tMsg.startsWith("🏆") ? "rgba(0,255,136,0.06)" : "rgba(255,68,68,0.06)", border: `1px solid ${tMsg.startsWith("✓") || tMsg.startsWith("🏆") ? "rgba(0,255,136,0.2)" : "rgba(255,68,68,0.2)"}`, borderRadius: 8, fontSize: 12, color: tMsg.startsWith("✓") || tMsg.startsWith("🏆") ? "#00FF88" : "#ff4444", fontFamily: P.raj, fontWeight: 700 }}>
+                {tMsg}
+              </div>
+            )}
+
+            {showCreateTournament && (
+              <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 12, padding: 20, marginBottom: 20 }}>
+                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#FFB700", marginBottom: 16 }}>🏆 New Tournament</div>
+                {[
+                  { label: "Select Game", key: "gameId", type: "select" },
+                  { label: "Entry Fee (ARCADE)", key: "entryFee", type: "number", placeholder: "100" },
+                  { label: "Max Players", key: "maxPlayers", type: "number", placeholder: "10" },
+                  { label: "Duration (hours)", key: "durationInHours", type: "number", placeholder: "24" },
+                ].map(field => (
+                  <div key={field.key} style={{ marginBottom: 12 }}>
+                    <label style={{ fontSize: 9, color: "#7755aa", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", display: "block", marginBottom: 5 }}>{field.label}</label>
+                    {field.type === "select" ? (
+                      <select value={tForm[field.key]} onChange={e => setTForm({ ...tForm, [field.key]: e.target.value })} style={{ width: "100%", padding: "10px 12px", background: "rgba(123,47,255,0.06)", border: `1px solid ${P.b}`, borderRadius: 7, color: "#d4b8ff", fontSize: 12, fontFamily: P.raj, outline: "none" }}>
+                        <option value="">-- Select your game --</option>
+                        {myGames.filter(g => g.status === "approved").map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                      </select>
+                    ) : (
+                      <input type="number" value={tForm[field.key]} onChange={e => setTForm({ ...tForm, [field.key]: e.target.value })} placeholder={field.placeholder} style={{ width: "100%", padding: "10px 12px", background: "rgba(123,47,255,0.06)", border: `1px solid ${P.b}`, borderRadius: 7, color: "#d4b8ff", fontSize: 12, fontFamily: P.raj, outline: "none", boxSizing: "border-box" }} />
+                    )}
+                  </div>
+                ))}
+                {tForm.gameId && tForm.entryFee && tForm.maxPlayers && (
+                  <div style={{ background: "rgba(0,0,0,0.3)", border: `1px solid ${P.b}`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+                    <div style={{ fontSize: 9, color: "#7755aa", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 8 }}>Prize Preview (95% of pool)</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, textAlign: "center" }}>
+                      {[["🥇", 60], ["🥈", 25], ["🥉", 15]].map(([medal, pct]) => (
+                        <div key={medal} style={{ background: "rgba(123,47,255,0.08)", borderRadius: 6, padding: "8px 4px" }}>
+                          <div style={{ fontSize: 14, marginBottom: 3 }}>{medal}</div>
+                          <div style={{ fontFamily: P.orb, fontSize: 11, color: "#FFB700", fontWeight: 700 }}>{Math.floor(Number(tForm.entryFee) * Number(tForm.maxPlayers) * 0.95 * pct / 100)}</div>
+                          <div style={{ fontSize: 8, color: "#5533aa", fontFamily: P.raj }}>ARCADE</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 10 }}>
+                  <Btn onClick={() => setShowCreateTournament(false)} variant="ghost" style={{ flex: 1 }}>Cancel</Btn>
+                  <Btn onClick={handleCreateTournament} disabled={tCreating || !tForm.gameId} style={{ flex: 2 }}>{tCreating ? "Creating..." : "🚀 Create Tournament"}</Btn>
+                </div>
+              </div>
+            )}
+
+            {tournamentsLoading ? (
+              <div style={{ padding: 40, textAlign: "center", fontSize: 11, color: "#5533aa", fontFamily: P.raj }}>Loading tournaments...</div>
+            ) : myTournaments.length === 0 ? (
+              <div style={{ padding: 48, textAlign: "center" }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>🏆</div>
+                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 6 }}>No tournaments yet</div>
+                <div style={{ fontSize: 11, color: "#5533aa", fontFamily: P.raj }}>Create your first tournament to engage your players!</div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {myTournaments.map(t => {
+                  const statusLabels = ["Upcoming", "Active", "Ended", "Cancelled"];
+                  const statusColors = { 0: "#00d4ff", 1: "#00FF88", 2: "#7755aa", 3: "#ff4444" };
+                  const canEnd = t.status === 1 && Number(t.endTime) * 1000 < Date.now();
+                  return (
+                    <div key={t.id} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: "14px 18px", display: "flex", alignItems: "center", gap: 14 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 13, color: "#d4b8ff", marginBottom: 4 }}>{t.gameName}</div>
+                        <div style={{ fontSize: 10, color: "#5533aa", fontFamily: P.raj }}>
+                          Entry: {Number(t.entryFee) / 1e18} ARCADE · Players: {t.players?.length || 0}/{Number(t.maxPlayers)} · Pool: {Number(t.prizePool) / 1e18} ARCADE
+                        </div>
+                      </div>
+                      <div style={{ padding: "4px 10px", borderRadius: 20, fontSize: 9, fontWeight: 700, color: statusColors[t.status], background: `${statusColors[t.status]}15`, border: `1px solid ${statusColors[t.status]}40`, fontFamily: P.raj }}>
+                        {statusLabels[t.status]}
+                      </div>
+                      {canEnd && (
+                        <button onClick={() => handleEndTournament(t.id)} style={{ padding: "7px 14px", background: "rgba(255,183,0,0.1)", border: "1px solid rgba(255,183,0,0.3)", borderRadius: 7, color: "#FFB700", fontSize: 10, cursor: "pointer", fontFamily: P.raj, fontWeight: 700 }}>
+                          End & Distribute
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {activeTab === "earnings" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 10 }}>

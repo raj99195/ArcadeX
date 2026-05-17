@@ -16,8 +16,9 @@ export default function Home() {
   const [scores, setScores] = useState([]);
   const [page, setPage] = useState(0);
   const [visible, setVisible] = useState(true);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
 
-  const CARDS_PER_PAGE = 3;
+  const CARDS_PER_PAGE = isMobile ? 1 : 3;
   const featured = games;
   const totalPages = Math.max(1, Math.ceil(featured.length / CARDS_PER_PAGE));
   const currentCards = featured.slice(page * CARDS_PER_PAGE, page * CARDS_PER_PAGE + CARDS_PER_PAGE);
@@ -26,13 +27,15 @@ export default function Home() {
     const clamped = Math.max(0, Math.min(newPage, totalPages - 1));
     if (clamped === page) return;
     setVisible(false);
-    setTimeout(() => {
-      setPage(clamped);
-      setVisible(true);
-    }, 280);
+    setTimeout(() => { setPage(clamped); setVisible(true); }, 280);
   };
 
-  useEffect(() => { getScores().then(setScores).catch(() => { }); }, []);
+  useEffect(() => {
+    getScores().then(setScores).catch(() => {});
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   const leaderboard = Object.values(
     scores.reduce((acc, s) => {
@@ -50,37 +53,62 @@ export default function Home() {
   const fmtScore = (s) => s >= 1000000 ? (s / 1000000).toFixed(1) + "M" : s >= 1000 ? (s / 1000).toFixed(1) + "K" : (s ? String(s) : "—");
 
   return (
-    <div style={{ height: "calc(100vh - 54px)", overflow: "hidden", display: "grid", gridTemplateColumns: "1fr 280px", background: "#08070f" }}>
+    <div style={{
+      minHeight: "calc(100vh - 54px)",
+      background: "#08070f",
+      display: "grid",
+      gridTemplateColumns: isMobile ? "1fr" : "1fr 280px",
+      overflow: isMobile ? "auto" : "hidden",
+      height: isMobile ? "auto" : "calc(100vh - 54px)",
+      position: "relative",
+    }}>
 
       <style>{`
-        @keyframes bgBreath { 0%,100%{opacity:0.88;transform:scale(1)} 50%{opacity:1;transform:scale(1.025)} }
         @keyframes tagFloat  { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-7px)} }
         @keyframes lbPulse   { 0%,100%{opacity:1} 50%{opacity:0.3} }
         @keyframes medalGlow { 0%,100%{filter:drop-shadow(0 0 4px rgba(255,215,0,0.4))} 50%{filter:drop-shadow(0 0 8px rgba(255,215,0,0.8))} }
       `}</style>
 
       {/* ══════ LEFT ══════ */}
-      <div style={{ position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", borderRight: "1px solid rgba(123,47,255,0.1)", height: "100%" }}>
+      <div style={{
+        position: "relative",
+        overflow: isMobile ? "visible" : "hidden",
+        display: "flex", flexDirection: "column",
+        borderRight: isMobile ? "none" : "1px solid rgba(123,47,255,0.1)",
+        borderBottom: isMobile ? "1px solid rgba(123,47,255,0.1)" : "none",
+        height: isMobile ? "auto" : "100%",
+      }}>
 
-        {/* Portal BG */}
-        <img src="/Bg-website.png" alt="" aria-hidden="true" style={{
-          position: "absolute", inset: 0, width: "100%", height: "100%",
-          objectFit: "cover", objectPosition: "60% center",
-          animation: "bgBreath 5s ease-in-out infinite",
-          pointerEvents: "none", zIndex: 0,
-        }} />
-
-        {/* Left-side dark so text readable, fades right */}
+        {/* Grid BG */}
         <div style={{
-          position: "absolute", inset: 0, zIndex: 1, pointerEvents: "none",
-          background: "linear-gradient(105deg, rgba(8,7,15,0.97) 0%, rgba(8,7,15,0.92) 28%, rgba(8,7,15,0.2) 58%, transparent 100%)"
+          position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none",
+          backgroundImage: "linear-gradient(rgba(123,47,255,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(123,47,255,0.07) 1px, transparent 1px)",
+          backgroundSize: "50px 50px",
+        }} />
+        {/* Purple glow top center */}
+        <div style={{
+          position: "absolute", top: "-10%", left: "40%", transform: "translateX(-50%)",
+          width: 500, height: 400,
+          background: "radial-gradient(circle, rgba(123,47,255,0.18) 0%, transparent 70%)",
+          borderRadius: "50%", pointerEvents: "none", zIndex: 0,
+        }} />
+        {/* Cyan glow bottom right */}
+        <div style={{
+          position: "absolute", bottom: 0, right: 0,
+          width: 300, height: 300,
+          background: "radial-gradient(circle, rgba(0,212,255,0.07) 0%, transparent 70%)",
+          borderRadius: "50%", pointerEvents: "none", zIndex: 0,
         }} />
 
-        {/* Hero: text | portal tags */}
-        <div style={{ position: "relative", zIndex: 2, flex: 1, display: "grid", gridTemplateColumns: "420px 1fr", minHeight: 0 }}>
-
-          {/* TEXT SIDE */}
-          <div style={{ padding: "16px 36px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+        {/* Hero */}
+        <div style={{
+          position: "relative", zIndex: 2, flex: isMobile ? "none" : 1,
+          display: "grid",
+          gridTemplateColumns: isMobile ? "1fr" : "420px 1fr",
+          minHeight: 0,
+        }}>
+          {/* TEXT */}
+          <div style={{ padding: isMobile ? "20px 16px" : "16px 36px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
 
             <div style={{
               display: "inline-flex", alignItems: "center", gap: 6,
@@ -95,7 +123,7 @@ export default function Home() {
             </div>
 
             <h1 style={{
-              fontSize: 48, fontWeight: 700, lineHeight: 0.93,
+              fontSize: isMobile ? 34 : 48, fontWeight: 700, lineHeight: 0.93,
               letterSpacing: "-0.5px", marginBottom: 12,
               fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", color: "#fff",
             }}>
@@ -110,16 +138,14 @@ export default function Home() {
               True ownership. Real rewards. Infinite possibilities.
             </p>
 
-            <div style={{ display: "flex", gap: 9, marginBottom: 10 }}>
+            <div style={{ display: "flex", gap: 9, marginBottom: 10, flexWrap: "wrap" }}>
               <button onClick={() => navigate("/games")} style={{
-                display: "flex", alignItems: "center", gap: 8, padding: "11px 22px",
+                display: "flex", alignItems: "center", gap: 8,
+                padding: isMobile ? "10px 18px" : "11px 22px",
                 background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 7,
                 fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer",
-                fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1px", textTransform: "uppercase", transition: "all 0.18s",
-              }}
-                onMouseEnter={e => { e.currentTarget.style.background = "linear-gradient(135deg,#8f44ff,#6b2fe8)"; e.currentTarget.style.transform = "translateY(-1px)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "linear-gradient(135deg,#7B2FFF,#5a1fd4)"; e.currentTarget.style.transform = "translateY(0)"; }}
-              >
+                fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1px", textTransform: "uppercase",
+              }}>
                 <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
                   <rect x="1" y="1" width="5" height="5" rx="1" fill="white" opacity="0.9" />
                   <rect x="7" y="1" width="5" height="5" rx="1" fill="white" opacity="0.55" />
@@ -129,14 +155,12 @@ export default function Home() {
                 Play Games
               </button>
               <button onClick={() => navigate("/publish")} style={{
-                padding: "11px 20px", background: "rgba(123,47,255,0.09)",
+                padding: isMobile ? "10px 16px" : "11px 20px",
+                background: "rgba(123,47,255,0.09)",
                 border: "1px solid rgba(180,150,255,0.28)", borderRadius: 7,
                 fontSize: 12, fontWeight: 700, color: "rgba(210,185,255,0.85)", cursor: "pointer",
-                fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1px", textTransform: "uppercase", transition: "all 0.18s",
-              }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(180,150,255,0.5)"; e.currentTarget.style.color = "#d4b8ff"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(180,150,255,0.28)"; e.currentTarget.style.color = "rgba(210,185,255,0.85)"; }}
-              >
+                fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1px", textTransform: "uppercase",
+              }}>
                 Publish Game +
               </button>
             </div>
@@ -147,11 +171,8 @@ export default function Home() {
               fontSize: 11, color: "rgba(180,150,255,0.55)", cursor: "pointer",
               fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
               letterSpacing: "1px", textTransform: "uppercase",
-              transition: "color 0.18s", marginBottom: 10, width: "fit-content",
-            }}
-              onMouseEnter={e => e.currentTarget.style.color = "#c4a0ff"}
-              onMouseLeave={e => e.currentTarget.style.color = "rgba(180,150,255,0.55)"}
-            >
+              marginBottom: 10, width: "fit-content",
+            }}>
               Explore All Games
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                 <path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
@@ -162,55 +183,54 @@ export default function Home() {
               Fast · Secure · Interoperable
             </div>
 
-            {/* Connect button — Privy login */}
             {!isConnected && (
-  <button onClick={() => open()} style={{
+              <button onClick={() => open()} style={{
                 display: "inline-flex", alignItems: "center", gap: 7,
                 padding: "8px 13px", background: "rgba(0,255,136,0.05)",
                 border: "1px solid rgba(0,255,136,0.15)", borderRadius: 7,
                 color: "rgba(0,255,136,0.55)", fontSize: 10, cursor: "pointer",
-                width: "fit-content", fontFamily: "inherit", transition: "all 0.18s",
-              }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(0,255,136,0.3)"; e.currentTarget.style.color = "rgba(0,255,136,0.8)"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(0,255,136,0.15)"; e.currentTarget.style.color = "rgba(0,255,136,0.55)"; }}
-              >
+                width: "fit-content", fontFamily: "inherit",
+              }}>
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: "rgba(0,255,136,0.35)" }} />
                 Connect wallet to play & earn
               </button>
             )}
           </div>
 
-          {/* PORTAL FLOATING TAGS */}
-          <div style={{ position: "relative" }}>
-            <div style={{ position: "absolute", left: "5%", top: "30%", background: "rgba(8,7,15,0.82)", border: "1px solid rgba(123,47,255,0.45)", borderRadius: 8, padding: "9px 13px", backdropFilter: "blur(14px)", animation: "tagFloat 3.2s ease-in-out infinite", zIndex: 3 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
-                <span style={{ fontSize: 9, color: "rgba(180,150,255,0.7)" }}>◈</span>
-                <span style={{ fontSize: 8, color: "rgba(200,170,255,0.6)", textTransform: "uppercase", letterSpacing: "1px", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>Own</span>
-              </div>
-              <div style={{ fontSize: 12, color: "#d4b8ff", fontWeight: 700, fontFamily: "'Rajdhani',sans-serif" }}>Your Assets</div>
+          {/* Floating tags — desktop only */}
+          {!isMobile && (
+            <div style={{ position: "relative" }}>
+              {[
+                { style: { left: "5%", top: "30%", border: "1px solid rgba(123,47,255,0.45)" }, icon: "◈", iconColor: "rgba(180,150,255,0.7)", label: "Own", labelColor: "rgba(200,170,255,0.6)", value: "Your Assets", valueColor: "#d4b8ff", delay: "0s", dur: "3.2s" },
+                { style: { right: "4%", top: "18%", border: "1px solid rgba(0,212,255,0.4)" }, icon: "◎", iconColor: "rgba(0,212,255,0.7)", label: "Earn", labelColor: "rgba(0,212,255,0.6)", value: "Real Rewards", valueColor: "#00d4ff", delay: "0.7s", dur: "3.5s" },
+                { style: { right: "4%", bottom: "28%", border: "1px solid rgba(0,255,136,0.35)" }, icon: "▶", iconColor: "rgba(0,255,136,0.65)", label: "Play", labelColor: "rgba(0,255,136,0.55)", value: "No Limits", valueColor: "#00FF88", delay: "1.4s", dur: "2.9s" },
+              ].map((tag, i) => (
+                <div key={i} style={{
+                  position: "absolute", ...tag.style,
+                  background: "rgba(8,7,15,0.82)", borderRadius: 8, padding: "9px 13px",
+                  backdropFilter: "blur(14px)", animation: `tagFloat ${tag.dur} ease-in-out infinite`,
+                  animationDelay: tag.delay, zIndex: 3,
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
+                    <span style={{ fontSize: 9, color: tag.iconColor }}>{tag.icon}</span>
+                    <span style={{ fontSize: 8, color: tag.labelColor, textTransform: "uppercase", letterSpacing: "1px", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>{tag.label}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: tag.valueColor, fontWeight: 700, fontFamily: "'Rajdhani',sans-serif" }}>{tag.value}</div>
+                </div>
+              ))}
             </div>
-            <div style={{ position: "absolute", right: "4%", top: "18%", background: "rgba(8,7,15,0.82)", border: "1px solid rgba(0,212,255,0.4)", borderRadius: 8, padding: "9px 13px", backdropFilter: "blur(14px)", animation: "tagFloat 3.5s ease-in-out infinite", animationDelay: "0.7s", zIndex: 3 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
-                <span style={{ fontSize: 9, color: "rgba(0,212,255,0.7)" }}>◎</span>
-                <span style={{ fontSize: 8, color: "rgba(0,212,255,0.6)", textTransform: "uppercase", letterSpacing: "1px", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>Earn</span>
-              </div>
-              <div style={{ fontSize: 12, color: "#00d4ff", fontWeight: 700, fontFamily: "'Rajdhani',sans-serif" }}>Real Rewards</div>
-            </div>
-            <div style={{ position: "absolute", right: "4%", bottom: "28%", background: "rgba(8,7,15,0.82)", border: "1px solid rgba(0,255,136,0.35)", borderRadius: 8, padding: "9px 13px", backdropFilter: "blur(14px)", animation: "tagFloat 2.9s ease-in-out infinite", animationDelay: "1.4s", zIndex: 3 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
-                <span style={{ fontSize: 9, color: "rgba(0,255,136,0.65)" }}>▶</span>
-                <span style={{ fontSize: 8, color: "rgba(0,255,136,0.55)", textTransform: "uppercase", letterSpacing: "1px", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>Play</span>
-              </div>
-              <div style={{ fontSize: 12, color: "#00FF88", fontWeight: 700, fontFamily: "'Rajdhani',sans-serif" }}>No Limits</div>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* FEATURED GAMES */}
         {featured.length > 0 && (
-          <div
-            style={{ position: "relative", zIndex: 2, flexShrink: 0, padding: "8px 36px 10px", marginTop: "-60px", borderTop: "1px solid rgba(123,47,255,0.1)", background: "transparent" }}
-            onWheel={e => { e.preventDefault(); if (e.deltaY > 0) goTo(page + 1); else goTo(page - 1); }}
+          <div style={{
+            position: "relative", zIndex: 2, flexShrink: 0,
+            padding: isMobile ? "12px 16px" : "8px 36px 10px",
+            marginTop: 0,
+            borderTop: "1px solid rgba(123,47,255,0.1)",
+          }}
+            onWheel={e => { if (!isMobile) { e.preventDefault(); if (e.deltaY > 0) goTo(page + 1); else goTo(page - 1); } }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
               <span style={{ fontSize: 10, color: "rgba(210,185,255,0.8)", textTransform: "uppercase", letterSpacing: "2px", fontWeight: 700, fontFamily: "'Rajdhani',sans-serif" }}>
@@ -226,11 +246,8 @@ export default function Home() {
                         cursor: disabled ? "not-allowed" : "pointer",
                         background: disabled ? "rgba(123,47,255,0.04)" : "rgba(123,47,255,0.16)",
                         border: `1px solid ${disabled ? "rgba(123,47,255,0.08)" : "rgba(123,47,255,0.38)"}`,
-                        display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.18s",
-                      }}
-                        onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = "rgba(123,47,255,0.3)"; }}
-                        onMouseLeave={e => { if (!disabled) e.currentTarget.style.background = "rgba(123,47,255,0.16)"; }}
-                      >
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
                         <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
                           {dir === "prev"
                             ? <path d="M5 1.5L2 4l3 2.5" stroke={disabled ? "rgba(123,47,255,0.25)" : "#c4a0ff"} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
@@ -245,7 +262,9 @@ export default function Home() {
             </div>
 
             <div style={{
-              display: "grid", gridTemplateColumns: "repeat(3, 250px)", gap: 6,
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 250px)",
+              gap: 6,
               opacity: visible ? 1 : 0,
               transform: visible ? "translateY(0px)" : "translateY(12px)",
               transition: "opacity 0.28s ease, transform 0.28s ease",
@@ -270,16 +289,18 @@ export default function Home() {
 
       {/* ══════ RIGHT: Leaderboard ══════ */}
       <div style={{
-        display: "flex", flexDirection: "column", overflow: "hidden",
+        display: "flex", flexDirection: "column",
+        overflow: isMobile ? "visible" : "hidden",
         background: "linear-gradient(180deg, #0f0820 0%, #0a0618 40%, #0d0a20 100%)",
-        borderLeft: "1px solid rgba(123,47,255,0.15)",
+        borderLeft: isMobile ? "none" : "1px solid rgba(123,47,255,0.15)",
         position: "relative",
+        maxHeight: isMobile ? "none" : "calc(100vh - 54px)",
       }}>
         <div style={{ position: "absolute", top: -40, left: "50%", transform: "translateX(-50%)", width: 200, height: 200, background: "radial-gradient(circle, rgba(123,47,255,0.18) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
 
         {/* Header */}
-        <div style={{ position: "relative", zIndex: 1, padding: "10px 14px 10px", borderBottom: "1px solid rgba(123,47,255,0.15)", flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ position: "relative", zIndex: 1, padding: "10px 14px", borderBottom: "1px solid rgba(123,47,255,0.15)", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "1.5px", color: "#e0d0ff" }}>
               Live Leaderboard
             </span>
@@ -288,29 +309,25 @@ export default function Home() {
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "lbPulse 1.5s ease-in-out infinite" }} />
                 <span style={{ fontSize: 9, color: "#4aaa6a", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>Live</span>
               </div>
-              <button onClick={() => navigate("/leaderboard")} style={{ fontSize: 9, color: "#8866cc", background: "transparent", border: "none", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", transition: "color 0.15s" }}
-                onMouseEnter={e => e.currentTarget.style.color = "#c4a0ff"}
-                onMouseLeave={e => e.currentTarget.style.color = "#8866cc"}
-              >View All</button>
+              <button onClick={() => navigate("/leaderboard")} style={{ fontSize: 9, color: "#8866cc", background: "transparent", border: "none", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase" }}>
+                View All
+              </button>
             </div>
           </div>
         </div>
 
         {/* Top 3 Podium */}
         <div style={{ position: "relative", zIndex: 1, padding: "14px 8px 12px", borderBottom: "1px solid rgba(123,47,255,0.1)", display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 10, flexShrink: 0 }}>
-          {/* 2nd */}
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
             <div style={{ width: 38, height: 38, borderRadius: "50%", background: "rgba(123,47,255,0.2)", border: "2px solid rgba(192,192,192,0.5)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🥈</div>
             <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 6, color: "#7755aa", textAlign: "center", maxWidth: 58, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{top3[1] ? shortAddr(top3[1].player) : "—"}</div>
             <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, color: "#C0C0C0" }}>{top3[1] ? fmtScore(top3[1].bestScore) : "—"}</div>
           </div>
-          {/* 1st */}
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, marginBottom: 10 }}>
             <div style={{ width: 46, height: 46, borderRadius: "50%", background: "rgba(123,47,255,0.15)", border: "2px solid rgba(255,215,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, boxShadow: "0 0 20px rgba(255,215,0,0.25)" }}>🥇</div>
             <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 6, color: "#9977dd", textAlign: "center", maxWidth: 68, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{top3[0] ? shortAddr(top3[0].player) : "—"}</div>
             <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 15, color: "#d4b8ff" }}>{top3[0] ? fmtScore(top3[0].bestScore) : "0.0K"}</div>
           </div>
-          {/* 3rd */}
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
             <div style={{ width: 38, height: 38, borderRadius: "50%", background: "rgba(123,47,255,0.15)", border: "2px solid rgba(205,127,50,0.5)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🥉</div>
             <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 6, color: "#6644aa", textAlign: "center", maxWidth: 58, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{top3[2] ? shortAddr(top3[2].player) : "—"}</div>
@@ -318,8 +335,8 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Rows 4-8 + BOTChain Panel */}
-        <div style={{ flex: 1, overflowY: "hidden", position: "relative", zIndex: 1 }}>
+        {/* Rows 4-8 */}
+        <div style={{ flex: 1, overflowY: isMobile ? "visible" : "hidden", position: "relative", zIndex: 1 }}>
           {rest.map((row, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", borderBottom: "1px solid rgba(123,47,255,0.07)", cursor: "pointer", transition: "background 0.15s" }}
               onMouseEnter={e => e.currentTarget.style.background = "rgba(123,47,255,0.08)"}
@@ -339,71 +356,13 @@ export default function Home() {
             </div>
           ))}
 
-          {/* ARCADE Token Utility */}
-          <div style={{ margin: "10px 12px", background: "linear-gradient(135deg,rgba(123,47,255,0.1),rgba(0,212,255,0.05))", border: "1px solid rgba(123,47,255,0.25)", borderRadius: 12, overflow: "hidden" }}>
-            <div style={{ padding: "12px 14px 10px", borderBottom: "1px solid rgba(123,47,255,0.12)", display: "flex", alignItems: "center", gap: 8 }}>
-              <img src="/Arcade-token-logo.png" alt="ARCADE" style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} onError={e => e.target.style.display = "none"} />
-              <div>
-                <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#c4a0ff", textTransform: "uppercase", letterSpacing: "1px" }}>ARCADE Token</div>
-                <div style={{ fontSize: 8, color: "#5533aa", fontFamily: "'Rajdhani',sans-serif" }}>Utility · Governance · Rewards</div>
-              </div>
-            </div>
-
-            <div style={{ padding: "10px 14px 6px" }}>
-              <div style={{ fontSize: 8, color: "#00FF88", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "lbPulse 1.5s ease-in-out infinite" }} />
-                Live Now
-              </div>
-              {[
-                { icon: "🎮", label: "Play & Earn", desc: "80% rewards to players" },
-                { icon: "🏆", label: "Creator Revenue", desc: "20% split to game creators" },
-              ].map((item, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid rgba(123,47,255,0.07)" }}>
-                  <span style={{ fontSize: 13, flexShrink: 0 }}>{item.icon}</span>
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "#a67fff", fontFamily: "'Rajdhani',sans-serif" }}>{item.label}</div>
-                    <div style={{ fontSize: 9, color: "#5533aa", fontFamily: "'Rajdhani',sans-serif" }}>{item.desc}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ padding: "8px 14px 12px" }}>
-              <div style={{ fontSize: 8, color: "#FFB800", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6 }}>
-                🔮 Coming Soon
-              </div>
-              {[
-                { icon: "🛒", label: "In-Game Shop", desc: "Spend tokens on items & skins" },
-                { icon: "🗳️", label: "Governance", desc: "Vote on platform decisions" },
-                { icon: "💎", label: "Staking", desc: "Lock tokens, earn yield" },
-                { icon: "🏅", label: "NFT Achievements", desc: "Mint badges on BOTChain" },
-              ].map((item, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0" }}>
-                  <span style={{ fontSize: 12, flexShrink: 0 }}>{item.icon}</span>
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "#7755aa", fontFamily: "'Rajdhani',sans-serif" }}>{item.label}</div>
-                    <div style={{ fontSize: 8, color: "#3a2a5a", fontFamily: "'Rajdhani',sans-serif" }}>{item.desc}</div>
-                  </div>
-                  <span style={{ marginLeft: "auto", fontSize: 7, color: "#FFB800", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(255,184,0,0.08)", padding: "2px 6px", borderRadius: 3, border: "1px solid rgba(255,184,0,0.18)", flexShrink: 0 }}>SOON</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
           {/* BOTChain Panel */}
           <div style={{ padding: "20px", background: "linear-gradient(180deg,rgba(20,8,40,0.95),rgba(10,4,25,0.98))", borderRadius: 12, border: "1px solid rgba(123,47,255,0.25)", margin: "10px 12px" }}>
             <div style={{ textAlign: "center", padding: "18px 12px", borderBottom: "1px solid rgba(123,47,255,0.15)" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "#fff", fontFamily: "Rajdhani", marginBottom: 6 }}>
-                Built on BOTChain
-              </div>
-              <div style={{ fontSize: 12, background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: 700, marginBottom: 8 }}>
-                Powered by the Future
-              </div>
-              <p style={{ fontSize: 10, color: "#7755aa", lineHeight: 1.6 }}>
-                High-performance EVM L1 for scalable, secure on-chain gaming.
-              </p>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#fff", fontFamily: "Rajdhani", marginBottom: 6 }}>Built on BOTChain</div>
+              <div style={{ fontSize: 12, background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: 700, marginBottom: 8 }}>Powered by the Future</div>
+              <p style={{ fontSize: 10, color: "#7755aa", lineHeight: 1.6 }}>High-performance EVM L1 for scalable, secure on-chain gaming.</p>
             </div>
-
             {[
               { title: "Built on BOTChain", desc: "High-performance EVM L1", icon: "⛓️" },
               { title: "True Ownership", desc: "Your assets live on-chain", icon: "⭐" },
@@ -411,16 +370,13 @@ export default function Home() {
               { title: "Interoperable", desc: "Connect across ecosystem", icon: "🔗" },
             ].map((item, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 10px", borderBottom: i < 3 ? "1px solid rgba(123,47,255,0.1)" : "none" }}>
-                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(123,47,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, border: "1px solid rgba(123,47,255,0.3)" }}>
-                  {item.icon}
-                </div>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(123,47,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, border: "1px solid rgba(123,47,255,0.3)" }}>{item.icon}</div>
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#c4a0ff", marginBottom: 3 }}>{item.title}</div>
                   <div style={{ fontSize: 10, color: "#7755aa" }}>{item.desc}</div>
                 </div>
               </div>
             ))}
-
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 10px", marginTop: 6, background: "rgba(123,47,255,0.05)", borderRadius: 8 }}>
               <span style={{ fontSize: 20 }}>⛓️</span>
               <div>

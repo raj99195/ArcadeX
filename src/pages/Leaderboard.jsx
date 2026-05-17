@@ -69,6 +69,7 @@ function RankMedal({ rank }) {
 
 export default function Leaderboard() {
   const navigate = useNavigate();
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const { games } = useGames();
@@ -106,6 +107,9 @@ export default function Leaderboard() {
   useEffect(() => {
     fetchScores();
     if (address) fetchMyStats();
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, [address]);
 
   const refresh = async () => {
@@ -155,22 +159,23 @@ export default function Leaderboard() {
         .lb-scroll::-webkit-scrollbar { display: none; }
       `}</style>
 
-      {/* BG */}
-      <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none" }}>
-        <img src="/Leaderboard-BG.png" alt="" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top", opacity: 1 }} />
-        <div style={{ position: "absolute", inset: 0, background: "rgba(8,7,15,0.55)" }} />
+      {/* Grid BG */}
+      <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", background: "#08070f" }}>
+        <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(123,47,255,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(123,47,255,0.07) 1px, transparent 1px)", backgroundSize: "50px 50px" }} />
+        <div style={{ position: "absolute", top: "10%", left: "50%", transform: "translateX(-50%)", width: 600, height: 400, background: "radial-gradient(circle, rgba(123,47,255,0.15) 0%, transparent 70%)", borderRadius: "50%" }} />
+        <div style={{ position: "absolute", bottom: 0, right: 0, width: 400, height: 400, background: "radial-gradient(circle, rgba(0,212,255,0.06) 0%, transparent 70%)", borderRadius: "50%" }} />
       </div>
 
       <div style={{ position: "relative", zIndex: 1 }}>
 
         {/* HERO HEADER */}
-        <div style={{ padding: "36px 36px 28px" }}>
+        <div style={{ padding: isMobile ? "20px 16px 16px" : "36px 36px 28px" }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 11px", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 4, fontSize: 9, color: "rgba(180,150,255,0.6)", letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 14, background: "rgba(123,47,255,0.06)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 600 }}>
             <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "lbPulse 1.5s ease-in-out infinite" }} />
             Live On-Chain Scores
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <h1 style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 48, letterSpacing: "-0.5px", textTransform: "uppercase", lineHeight: 1, color: "#fff" }}>
+            <h1 style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: isMobile ? 28 : 48, letterSpacing: "-0.5px", textTransform: "uppercase", lineHeight: 1, color: "#fff" }}>
               Global{" "}
               <span style={{ background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>
                 Leaderboard
@@ -193,7 +198,7 @@ export default function Leaderboard() {
         </div>
 
         {/* MAIN CONTENT */}
-        <div style={{ padding: "0 36px 36px", display: "grid", gridTemplateColumns: "minmax(800px, 1fr) 380px", gap: 200 }}>
+        <div style={{ padding: isMobile ? "0 16px 24px" : "0 36px 36px", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(600px, 1fr) 340px", gap: isMobile ? 20 : 40 }}>
 
           {/* LEFT */}
           <div style={{ minWidth: 0 }}>
@@ -236,7 +241,7 @@ export default function Leaderboard() {
               </div>
 
               {/* Col headers */}
-              <div style={{ display: "grid", gridTemplateColumns: "52px 160px 1fr 130px", padding: "10px 20px", borderBottom: "1px solid rgba(123,47,255,0.08)", background: "rgba(0,0,0,0.2)" }}>
+              <div style={{ display: isMobile ? "grid" : "grid", gridTemplateColumns: isMobile ? "36px 1fr 80px" : "52px 160px 1fr 130px", padding: "10px 20px", borderBottom: "1px solid rgba(123,47,255,0.08)", background: "rgba(0,0,0,0.2)" }}>
                 {["Rank", "Player", activeTab === "global" ? "Best Game" : "Game", "Score"].map((h, i) => (
                   <div key={i} style={{ fontSize: 9, color: "#5533aa", textTransform: "uppercase", letterSpacing: "1.2px", textAlign: i === 2 ? "center" : i === 3 ? "right" : "left", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>{h}</div>
                 ))}
@@ -258,7 +263,7 @@ export default function Leaderboard() {
                     const copyAddr = () => { if (row.player) navigator.clipboard.writeText(row.player); };
                     return (
                       <div key={idx} className="lb-row" style={{
-                        display: "grid", gridTemplateColumns: "52px 160px 1fr 130px",
+                        display: isMobile ? "grid" : "grid", gridTemplateColumns: isMobile ? "36px 1fr 80px" : "52px 160px 1fr 130px",
                         padding: "12px 20px",
                         borderBottom: "1px solid rgba(123,47,255,0.05)",
                         transition: "background 0.15s",

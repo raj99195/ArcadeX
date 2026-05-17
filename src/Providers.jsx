@@ -67,13 +67,15 @@ createAppKit({
     "--w3m-border-radius-master": "8px",
   },
 });
-
 // Contract Addresses
 export const ARCADE_TOKEN_ADDRESS = import.meta.env.VITE_ARCADE_TOKEN_ADDRESS;
 export const LEADERBOARD_ADDRESS = import.meta.env.VITE_LEADERBOARD_ADDRESS;
 export const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
 export const ADMIN_ADDRESS = import.meta.env.VITE_ADMIN_ADDRESS;
 export const CHAIN_ID = parseInt(import.meta.env.VITE_BOTCHAIN_TESTNET_CHAIN_ID);
+
+// wagmiAdapter export — saari files use karengi
+export { wagmiAdapter };
 
 export default function Providers({ children }) {
   return (

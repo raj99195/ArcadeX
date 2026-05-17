@@ -7,6 +7,8 @@ import Leaderboard from "./pages/Leaderboard";
 import Admin from "./pages/Admin";
 import Creator from "./pages/Creator";
 import SDK from "./pages/SDK";
+import Tournaments from "./pages/Tournaments";
+import Marketplace from "./pages/Marketplace";
 
 export default function App() {
   return (
@@ -20,7 +22,9 @@ export default function App() {
         <Route path="/admin" element={<Admin />} />
         <Route path="/publish" element={<Creator />} />
         <Route path="/sdk" element={<SDK />} />
-           </Routes>
+        <Route path="/tournaments" element={<Tournaments />} />
+        <Route path="/marketplace" element={<Marketplace />} />
+      </Routes>
     </div>
   );
 }

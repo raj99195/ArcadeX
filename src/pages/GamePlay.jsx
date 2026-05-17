@@ -1,6 +1,8 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useState, useRef } from "react";
-import { useAccount, usePublicClient, useWalletClient } from "wagmi";
+import { useAccount, usePublicClient } from "wagmi";
+import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
+import { wagmiAdapter } from "../Providers";
 import { useGames } from "../hooks/useGames";
 import { saveScore } from "../lib/gameService";
 import { db } from "../lib/firebase";
@@ -39,12 +41,13 @@ function timeAgo(date) {
 
 export default function GamePlay() {
   const { gameId } = useParams();
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const navigate = useNavigate();
   const { games } = useGames();
   const game = games.find(g => g.id === Number(gameId));
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
-  const { data: walletClient } = useWalletClient();
+  
 
   const [score, setScore] = useState(0);
   const [submitting, setSubmitting] = useState(false);
@@ -66,7 +69,12 @@ export default function GamePlay() {
   const iframeRef = useRef(null);
   const submittingRef = useRef(false);
 
-  useEffect(() => { if (games.length > 0) setGameLoading(false); }, [games]);
+  useEffect(() => {
+    if (games.length > 0) setGameLoading(false);
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [games]);
   useEffect(() => { if (game) setLikeCount(game.likes || 0); }, [game]);
   useEffect(() => {
     const key = `liked_game_${gameId}_${address || 'anon'}`;
@@ -139,7 +147,7 @@ export default function GamePlay() {
   }, [address, game, submitted]);
 
   const submitScore = async (finalScore) => {
-    if (submittingRef.current || !address || !game || !walletClient) return;
+    if (submittingRef.current || !address || !game) return;
     submittingRef.current = true;
     setSubmitting(true);
     setSubmitError("");
@@ -149,16 +157,14 @@ export default function GamePlay() {
       const playerReward = Math.floor(rewardRate * 80 / 100);
 
       // EVM contract call — recordPlayAndEarn (direct, no simulate)
-      const hash = await walletClient.writeContract({
-        address: PLATFORM_ADDRESS,
-        abi: PLATFORM_ABI,
-        functionName: "recordPlayAndEarn",
-        args: [BigInt(game.id), BigInt(finalScore)],
-        account: address,
-      });
-
-      // Wait for transaction
-      await publicClient.waitForTransactionReceipt({ hash });
+     const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+  address: PLATFORM_ADDRESS,
+  abi: PLATFORM_ABI,
+  functionName: "recordPlayAndEarn",
+  args: [BigInt(game.id), BigInt(finalScore)],
+  gas: BigInt(300000), // manually gas set karo
+});
+await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
       setTokensEarned(playerReward);
       await saveScore({
@@ -192,7 +198,7 @@ export default function GamePlay() {
   const shortAddr = (a) => a ? a.slice(0, 6) + "..." + a.slice(-4) : "?";
 
   return (
-    <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, padding: "16px 36px" }}>
+    <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, padding: isMobile ? "12px 14px" : "16px 36px" }}>
       <style>{`
         @keyframes lbPulse{0%,100%{opacity:1}50%{opacity:0.3}}
         @keyframes poweredGlow{0%,100%{opacity:0.7}50%{opacity:1}}
@@ -218,12 +224,12 @@ export default function GamePlay() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 290px", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 290px", gap: 16 }}>
 
         {/* Iframe */}
         <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 12, overflow: "hidden" }}>
           {game.iframeUrl && !game.iframeUrl.includes("your-unity-game") ? (
-            <iframe ref={iframeRef} src={game.iframeUrl} style={{ width: "100%", height: "calc(100vh - 54px - 130px)", minHeight: 480, border: "none", display: "block" }} allow="fullscreen" title={game.name} />
+            <iframe ref={iframeRef} src={game.iframeUrl} style={{ width: "100%", height: isMobile ? "60vw" : "calc(100vh - 54px - 130px)", minHeight: isMobile ? 280 : 480, border: "none", display: "block" }} allow="fullscreen" title={game.name} />
           ) : (
             <div style={{ height: "calc(100vh - 54px - 130px)", minHeight: 480, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14 }}>
               <div style={{ fontSize: 56, filter: "drop-shadow(0 0 20px rgba(123,47,255,0.5))" }}>🎮</div>

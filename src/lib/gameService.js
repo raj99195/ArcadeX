@@ -80,7 +80,14 @@ export async function registerCreator({ address, displayName }) {
     });
   }
 }
-
+// Game by ID check
+export async function getGameById(gameId) {
+  try {
+    const { doc, getDoc } = await import("firebase/firestore");
+    const snap = await getDoc(doc(db, "games", String(gameId)));
+    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  } catch { return null; }
+}
 // Creator status check karo + auto-approve
 export async function getCreatorStatus(address) {
   const ref = doc(db, "creators", address);
