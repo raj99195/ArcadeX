@@ -227,11 +227,22 @@ await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 290px", gap: 16 }}>
 
         {/* Iframe */}
-        <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 12, overflow: "hidden", position: "relative" }}>
           {game.iframeUrl && !game.iframeUrl.includes("your-unity-game") ? (
-            <iframe ref={iframeRef} src={game.iframeUrl} style={{ width: "100%", height: isMobile ? "60vw" : "calc(100vh - 54px - 130px)", minHeight: isMobile ? 280 : 480, border: "none", display: "block" }} allow="fullscreen" title={game.name} />
+            <>
+              <iframe ref={iframeRef} src={game.iframeUrl} style={{ width: "100%", height: isMobile ? "75vw" : "calc(100vh - 54px - 130px)", minHeight: isMobile ? 320 : 480, border: "none", display: "block" }} allow="fullscreen" allowFullScreen title={game.name} />
+              {/* Fullscreen button */}
+              <button onClick={() => {
+  const iframe = iframeRef.current;
+  if (iframe.requestFullscreen) iframe.requestFullscreen();
+  else if (iframe.webkitRequestFullscreen) iframe.webkitRequestFullscreen();
+  else if (iframe.mozRequestFullScreen) iframe.mozRequestFullScreen();
+}} style={{ position: "absolute", bottom: 10, right: 10, padding: "6px 12px", background: "rgba(0,0,0,0.75)", border: "1px solid rgba(123,47,255,0.4)", borderRadius: 7, color: "#a67fff", fontSize: 11, cursor: "pointer", fontFamily: P.raj, fontWeight: 700, backdropFilter: "blur(8px)", display: "flex", alignItems: "center", gap: 5 }}>
+                <span>⛶</span> Fullscreen
+              </button>
+            </>
           ) : (
-            <div style={{ height: "calc(100vh - 54px - 130px)", minHeight: 480, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14 }}>
+            <div style={{ height: isMobile ? "75vw" : "calc(100vh - 54px - 130px)", minHeight: isMobile ? 320 : 480, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14 }}>
               <div style={{ fontSize: 56, filter: "drop-shadow(0 0 20px rgba(123,47,255,0.5))" }}>🎮</div>
               <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#7755aa" }}>Game coming soon</div>
               <button onClick={() => { const s = Math.floor(Math.random() * 10000); setScore(s); submitScore(s); }} style={{ marginTop: 8, padding: "11px 28px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 8, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: P.raj }}>
