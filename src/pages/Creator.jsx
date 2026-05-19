@@ -47,6 +47,8 @@ const statusMap = {
 
 const TOURNAMENT_ADDRESS = import.meta.env.VITE_TOURNAMENT_ADDRESS;
 const ARCADE_TOKEN_ADDRESS = import.meta.env.VITE_ARCADE_TOKEN_ADDRESS;
+const CLOUDINARY_CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+const CLOUDINARY_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
 
 const TOURNAMENT_ABI = [
   { name: "createTournament", type: "function", stateMutability: "nonpayable", inputs: [{ name: "gameId", type: "uint256" }, { name: "gameName", type: "string" }, { name: "gameThumbnail", type: "string" }, { name: "entryFee", type: "uint256" }, { name: "maxPlayers", type: "uint256" }, { name: "startTime", type: "uint256" }, { name: "durationInHours", type: "uint256" }], outputs: [] },
@@ -127,6 +129,7 @@ function GateScreen({ icon, title, accent, sub, children }) {
 }
 
 export default function Creator() {
+  const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth <= 768 : false);
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const { balance } = useArcadeBalance();
@@ -145,6 +148,9 @@ export default function Creator() {
   const [creatorStatus, setCreatorStatus] = useState(null);
   const [creatorLoading, setCreatorLoading] = useState(false);
   const [form, setForm] = useState({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50" });
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const fileInputRef = { current: null };
 
   // Tournament states
   const [myTournaments, setMyTournaments] = useState([]);
@@ -223,6 +229,12 @@ export default function Creator() {
   };
 
   useEffect(() => { if (address) checkCreatorStatus(); }, [address]);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Username availability check
   const checkUsername = async (name) => {
@@ -346,10 +358,44 @@ export default function Creator() {
     } catch (err) { setTMsg("Error: " + err.message); }
   };
 
+  const uploadToCloudinary = async (file) => {
+    if (!file) return null;
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", CLOUDINARY_PRESET);
+      formData.append("folder", "arcadex-games");
+      const xhr = new XMLHttpRequest();
+      const uploadUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`;
+      return await new Promise((resolve, reject) => {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+          if (xhr.status === 200) {
+            const data = JSON.parse(xhr.responseText);
+            resolve(data.secure_url);
+          } else reject(new Error("Upload failed"));
+        };
+        xhr.onerror = () => reject(new Error("Upload failed"));
+        xhr.open("POST", uploadUrl);
+        xhr.send(formData);
+      });
+    } catch (err) {
+      setError("Image upload failed: " + err.message);
+      return null;
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+    }
+  };
+
   const submitGame = async () => {
-    if (!form.name || !form.iframeUrl || !form.description || !form.thumbnailUrl) { setError("Fill in all required fields."); return; }
+    if (!form.name || !form.iframeUrl || !form.description) { setError("Fill in all required fields."); return; }
     if (!validateUrl(form.iframeUrl)) { setError("Enter a valid game URL."); return; }
-    if (!validateUrl(form.thumbnailUrl)) { setError("Thumbnail URL is invalid."); return; }
+    if (!form.thumbnailUrl) { setError("Please upload a thumbnail image."); return; }
     setError("");
     setLoading(true);
     try {
@@ -515,7 +561,18 @@ export default function Creator() {
 
   // STATE 3: APPROVED — Full Dashboard
   return (
-    <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, padding: "28px 36px" }}>
+    <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, padding: isMobile ? "16px 14px" : "28px 36px" }}>
+      <style>{`
+        @keyframes lbPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+        .cr-input:focus { border-color: rgba(123,47,255,0.45) !important; }
+        .cr-input::placeholder { color: #3a2a5a; }
+        .cr-select option { background: #0e0c1a; color: #d4b8ff; }
+        .cr-tab:hover { color: #c4a0ff !important; }
+        .game-card-cr:hover { border-color: rgba(123,47,255,0.35) !important; transform: translateY(-2px); }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(123,47,255,0.3); border-radius: 2px; }
+      `}</style>
       <style>{`
         @keyframes lbPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
         .cr-input:focus { border-color: rgba(123,47,255,0.45) !important; }
@@ -532,7 +589,7 @@ export default function Creator() {
             <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "lbPulse 1.5s ease-in-out infinite" }} />
             Creator Hub · ArcadeX
           </div>
-          <h1 style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 36, textTransform: "uppercase", letterSpacing: "-0.3px", color: "#fff", marginBottom: 6 }}>
+          <h1 style={{ fontFamily: P.raj, fontWeight: 700, fontSize: isMobile ? 24 : 36, textTransform: "uppercase", letterSpacing: "-0.3px", color: "#fff", marginBottom: 6 }}>
             Creator <span style={{ background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Dashboard</span>
           </h1>
           <p style={{ color: "#9977cc", fontSize: 12, fontFamily: P.raj }}>Manage your published games, track earnings, and publish new games.</p>
@@ -563,8 +620,8 @@ export default function Creator() {
         </div>
 
         {/* Tabs */}
-        <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: `1px solid ${P.b}` }}>
-          {[{ id: "my-games", label: `My Games (${myGames.length})` }, { id: "tournaments", label: `🏆 Tournaments (${myTournaments.length})` }, { id: "earnings", label: "Earnings & Revenue" }, { id: "submit", label: "+ Submit New Game" }].map(t => (
+        <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: `1px solid ${P.b}`, overflowX: isMobile ? "auto" : "visible", WebkitOverflowScrolling: "touch" }}>
+          {[{ id: "my-games", label: `My Games (${myGames.length})` }, { id: "tournaments", label: `🏆 Tournaments (${myTournaments.length})` }, { id: "submit", label: "+ Submit New Game" }].map(t => (
             <button key={t.id} className="cr-tab" onClick={() => { setActiveTab(t.id); setStep(1); setError(""); }} style={{ padding: "10px 22px", background: "transparent", border: "none", borderBottom: activeTab === t.id ? "2px solid #7B2FFF" : "2px solid transparent", color: activeTab === t.id ? "#c4a0ff" : "#3a2a5a", fontSize: 12, cursor: "pointer", marginBottom: "-1px", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", transition: "color 0.18s" }}>
               {t.label}
             </button>
@@ -584,7 +641,7 @@ export default function Creator() {
                 <Btn onClick={() => setActiveTab("submit")}>Submit Your First Game →</Btn>
               </div>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(3,1fr)", gap: 10 }}>
                 {myGames.map(game => {
                   const s = statusMap[game.status] || statusMap.pending;
                   return (
@@ -616,169 +673,11 @@ export default function Creator() {
           </div>
         )}
 
-        {/* EARNINGS TAB */}
-        {activeTab === "tournaments" && (
-          <div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-              <div style={{ fontFamily: P.raj, fontSize: 13, color: "#9977cc" }}>Manage tournaments for your games</div>
-              <button onClick={() => setShowCreateTournament(true)} style={{ padding: "10px 20px", background: "linear-gradient(135deg,#FFB700,#FF6B00)", border: "none", borderRadius: 8, color: "#000", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: P.raj, letterSpacing: "0.5px" }}>
-                + Create Tournament
-              </button>
-            </div>
-
-            {tMsg && (
-              <div style={{ marginBottom: 14, padding: "12px 16px", background: tMsg.startsWith("✓") || tMsg.startsWith("🏆") ? "rgba(0,255,136,0.06)" : "rgba(255,68,68,0.06)", border: `1px solid ${tMsg.startsWith("✓") || tMsg.startsWith("🏆") ? "rgba(0,255,136,0.2)" : "rgba(255,68,68,0.2)"}`, borderRadius: 8, fontSize: 12, color: tMsg.startsWith("✓") || tMsg.startsWith("🏆") ? "#00FF88" : "#ff4444", fontFamily: P.raj, fontWeight: 700 }}>
-                {tMsg}
-              </div>
-            )}
-
-            {showCreateTournament && (
-              <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 12, padding: 20, marginBottom: 20 }}>
-                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#FFB700", marginBottom: 16 }}>🏆 New Tournament</div>
-                {[
-                  { label: "Select Game", key: "gameId", type: "select" },
-                  { label: "Entry Fee (ARCADE)", key: "entryFee", type: "number", placeholder: "100" },
-                  { label: "Max Players", key: "maxPlayers", type: "number", placeholder: "10" },
-                  { label: "Duration (hours)", key: "durationInHours", type: "number", placeholder: "24" },
-                ].map(field => (
-                  <div key={field.key} style={{ marginBottom: 12 }}>
-                    <label style={{ fontSize: 9, color: "#7755aa", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", display: "block", marginBottom: 5 }}>{field.label}</label>
-                    {field.type === "select" ? (
-                      <select value={tForm[field.key]} onChange={e => setTForm({ ...tForm, [field.key]: e.target.value })} style={{ width: "100%", padding: "10px 12px", background: "rgba(123,47,255,0.06)", border: `1px solid ${P.b}`, borderRadius: 7, color: "#d4b8ff", fontSize: 12, fontFamily: P.raj, outline: "none" }}>
-                        <option value="">-- Select your game --</option>
-                        {myGames.filter(g => g.status === "approved").map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                      </select>
-                    ) : (
-                      <input type="number" value={tForm[field.key]} onChange={e => setTForm({ ...tForm, [field.key]: e.target.value })} placeholder={field.placeholder} style={{ width: "100%", padding: "10px 12px", background: "rgba(123,47,255,0.06)", border: `1px solid ${P.b}`, borderRadius: 7, color: "#d4b8ff", fontSize: 12, fontFamily: P.raj, outline: "none", boxSizing: "border-box" }} />
-                    )}
-                  </div>
-                ))}
-                {tForm.gameId && tForm.entryFee && tForm.maxPlayers && (
-                  <div style={{ background: "rgba(0,0,0,0.3)", border: `1px solid ${P.b}`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
-                    <div style={{ fontSize: 9, color: "#7755aa", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 8 }}>Prize Preview (95% of pool)</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, textAlign: "center" }}>
-                      {[["🥇", 60], ["🥈", 25], ["🥉", 15]].map(([medal, pct]) => (
-                        <div key={medal} style={{ background: "rgba(123,47,255,0.08)", borderRadius: 6, padding: "8px 4px" }}>
-                          <div style={{ fontSize: 14, marginBottom: 3 }}>{medal}</div>
-                          <div style={{ fontFamily: P.orb, fontSize: 11, color: "#FFB700", fontWeight: 700 }}>{Math.floor(Number(tForm.entryFee) * Number(tForm.maxPlayers) * 0.95 * pct / 100)}</div>
-                          <div style={{ fontSize: 8, color: "#5533aa", fontFamily: P.raj }}>ARCADE</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: 10 }}>
-                  <Btn onClick={() => setShowCreateTournament(false)} variant="ghost" style={{ flex: 1 }}>Cancel</Btn>
-                  <Btn onClick={handleCreateTournament} disabled={tCreating || !tForm.gameId} style={{ flex: 2 }}>{tCreating ? "Creating..." : "🚀 Create Tournament"}</Btn>
-                </div>
-              </div>
-            )}
-
-            {tournamentsLoading ? (
-              <div style={{ padding: 40, textAlign: "center", fontSize: 11, color: "#5533aa", fontFamily: P.raj }}>Loading tournaments...</div>
-            ) : myTournaments.length === 0 ? (
-              <div style={{ padding: 48, textAlign: "center" }}>
-                <div style={{ fontSize: 36, marginBottom: 12 }}>🏆</div>
-                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 6 }}>No tournaments yet</div>
-                <div style={{ fontSize: 11, color: "#5533aa", fontFamily: P.raj }}>Create your first tournament to engage your players!</div>
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {myTournaments.map(t => {
-                  const statusLabels = ["Upcoming", "Active", "Ended", "Cancelled"];
-                  const statusColors = { 0: "#00d4ff", 1: "#00FF88", 2: "#7755aa", 3: "#ff4444" };
-                  const canEnd = t.status === 1 && Number(t.endTime) * 1000 < Date.now();
-                  return (
-                    <div key={t.id} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: "14px 18px", display: "flex", alignItems: "center", gap: 14 }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 13, color: "#d4b8ff", marginBottom: 4 }}>{t.gameName}</div>
-                        <div style={{ fontSize: 10, color: "#5533aa", fontFamily: P.raj }}>
-                          Entry: {Number(t.entryFee) / 1e18} ARCADE · Players: {t.players?.length || 0}/{Number(t.maxPlayers)} · Pool: {Number(t.prizePool) / 1e18} ARCADE
-                        </div>
-                      </div>
-                      <div style={{ padding: "4px 10px", borderRadius: 20, fontSize: 9, fontWeight: 700, color: statusColors[t.status], background: `${statusColors[t.status]}15`, border: `1px solid ${statusColors[t.status]}40`, fontFamily: P.raj }}>
-                        {statusLabels[t.status]}
-                      </div>
-                      {canEnd && (
-                        <button onClick={() => handleEndTournament(t.id)} style={{ padding: "7px 14px", background: "rgba(255,183,0,0.1)", border: "1px solid rgba(255,183,0,0.3)", borderRadius: 7, color: "#FFB700", fontSize: 10, cursor: "pointer", fontFamily: P.raj, fontWeight: 700 }}>
-                          End & Distribute
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === "earnings" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 10 }}>
-              <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: "16px 18px" }}>
-                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 28, color: "#00d4ff", marginBottom: 4 }}>{myGames.length}</div>
-                <div style={{ fontSize: 9, color: "#9977cc", fontFamily: P.raj, textTransform: "uppercase", letterSpacing: "1px" }}>Games Published</div>
-              </div>
-              <div style={{ background: "linear-gradient(135deg,rgba(123,47,255,0.1),rgba(0,212,255,0.05))", border: `1px solid rgba(123,47,255,0.25)`, borderRadius: 10, overflow: "hidden", display: "grid", gridTemplateColumns: "1fr 1fr" }}>
-                <div style={{ padding: "14px 16px", borderRight: `1px solid ${P.b}` }}>
-                  <div style={{ fontSize: 8, color: "#00FF88", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 10, display: "flex", alignItems: "center", gap: 5 }}>
-                    <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88" }} />Live Now
-                  </div>
-                  {[{ icon: "🎮", label: "Play & Earn", desc: "80% to players" }, { icon: "🏆", label: "Creator Revenue", desc: "20% per play" }].map((item, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                      <span style={{ fontSize: 14 }}>{item.icon}</span>
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#a67fff", fontFamily: P.raj }}>{item.label}</div>
-                        <div style={{ fontSize: 9, color: "#9977cc", fontFamily: P.raj }}>{item.desc}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ padding: "14px 16px" }}>
-                  <div style={{ fontSize: 8, color: "#FFB800", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 10 }}>🔮 Coming Soon</div>
-                  {[{ icon: "🛒", label: "In-Game Shop" }, { icon: "🗳️", label: "Governance" }, { icon: "💎", label: "Staking" }, { icon: "🏅", label: "NFT Achievements" }].map((item, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
-                      <span style={{ fontSize: 12 }}>{item.icon}</span>
-                      <span style={{ fontSize: 10, color: "#7755aa", fontFamily: P.raj, fontWeight: 600 }}>{item.label}</span>
-                      <span style={{ marginLeft: "auto", fontSize: 7, color: "#FFB800", fontFamily: P.raj, fontWeight: 700, background: "rgba(255,184,0,0.08)", padding: "2px 6px", borderRadius: 3, border: "1px solid rgba(255,184,0,0.18)", flexShrink: 0 }}>SOON</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 20 }}>
-              <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 4 }}>ARCADE Token Balance</div>
-              <div style={{ padding: "14px 18px", background: P.bg, borderRadius: 8, border: `1px solid ${P.b}` }}>
-                <div style={{ fontSize: 9, color: "#9977cc", marginBottom: 4, fontFamily: P.raj, textTransform: "uppercase", letterSpacing: "1px" }}>On-chain balance</div>
-                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 26, color: "#a67fff" }}>{Number(balance).toLocaleString()} ARCADE</div>
-              </div>
-            </div>
-
-            <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 20 }}>
-              <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 4 }}>Claim Revenue</div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", background: P.bg, borderRadius: 8, border: `1px solid ${P.b}`, marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontSize: 9, color: "#9977cc", marginBottom: 4, fontFamily: P.raj, textTransform: "uppercase", letterSpacing: "1px" }}>Claimable balance</div>
-                  <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 24, color: "#a67fff" }}>{totalEarned.toLocaleString()} ARCADE</div>
-                </div>
-                <Btn onClick={() => { setClaimLoading(true); setTimeout(() => { setClaimLoading(false); setClaimMsg("Coming soon!"); }, 1000); }} disabled={claimLoading || totalEarned === 0}>
-                  {claimLoading ? "Processing..." : "Claim Tokens"}
-                </Btn>
-              </div>
-              {claimMsg && <div style={{ padding: 10, background: "rgba(123,47,255,0.06)", border: `1px solid ${P.b}`, borderRadius: 7, fontSize: 11, color: "#a67fff", fontFamily: P.raj }}>{claimMsg}</div>}
-              <div style={{ padding: 10, background: "rgba(255,184,0,0.06)", border: "1px solid rgba(255,184,0,0.15)", borderRadius: 7, fontSize: 11, color: "#FFB800", fontFamily: P.raj }}>
-                ⚠ Claim functionality coming soon!
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* SUBMIT TAB */}
         {activeTab === "submit" && (
           <div>
             <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
-              {[{ n: 1, label: "Game Details" }, { n: 2, label: "Review & Submit" }, { n: 3, label: "Published!" }].map(s => (
+              {[{ n: 1, label: isMobile ? "Details" : "Game Details" }, { n: 2, label: isMobile ? "Review" : "Review & Submit" }, { n: 3, label: "Published!" }].map(s => (
                 <div key={s.n} style={{ flex: 1, padding: "10px 14px", borderRadius: 8, border: `1px solid ${step === s.n ? "rgba(123,47,255,0.4)" : step > s.n ? "rgba(0,255,136,0.15)" : P.b}`, background: step === s.n ? P.p3 : "transparent", display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ width: 20, height: 20, borderRadius: "50%", background: step >= s.n ? (step > s.n ? "rgba(0,255,136,0.2)" : "#7B2FFF") : "rgba(123,47,255,0.1)", border: `1px solid ${step >= s.n ? (step > s.n ? "rgba(0,255,136,0.3)" : "#7B2FFF") : P.b}`, color: step >= s.n ? (step > s.n ? "#00FF88" : "#fff") : "#5533aa", fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: P.raj }}>
                     {step > s.n ? "✓" : s.n}
@@ -803,10 +702,60 @@ export default function Creator() {
                   <input name="iframeUrl" value={form.iframeUrl} onChange={handleChange} placeholder="https://username.github.io/my-game" className="cr-input" style={{ ...inputStyle, borderColor: form.iframeUrl ? (validateUrl(form.iframeUrl) ? "rgba(0,255,136,0.25)" : "rgba(255,68,68,0.25)") : P.b }} />
                 </div>
                 <div>
-                  <label style={labelStyle}>Thumbnail URL <span style={{ color: "#ff4444" }}>*</span></label>
-                  <input name="thumbnailUrl" value={form.thumbnailUrl} onChange={handleChange} placeholder="https://res.cloudinary.com/your-cloud/image/upload/game.jpg" className="cr-input" style={{ ...inputStyle, borderColor: form.thumbnailUrl ? (validateUrl(form.thumbnailUrl) ? "rgba(0,255,136,0.25)" : "rgba(255,68,68,0.25)") : P.b }} />
+                  <label style={labelStyle}>Game Thumbnail <span style={{ color: "#ff4444" }}>*</span></label>
+                  <div
+                    onClick={() => !uploading && document.getElementById("thumb-upload").click()}
+                    onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "rgba(123,47,255,0.5)"; }}
+                    onDragLeave={e => { e.currentTarget.style.borderColor = P.b; }}
+                    onDrop={async e => {
+                      e.preventDefault();
+                      e.currentTarget.style.borderColor = P.b;
+                      const file = e.dataTransfer.files[0];
+                      if (file && file.type.startsWith("image/")) {
+                        const url = await uploadToCloudinary(file);
+                        if (url) setForm(f => ({ ...f, thumbnailUrl: url }));
+                      }
+                    }}
+                    style={{ width: "100%", minHeight: 100, border: `2px dashed ${form.thumbnailUrl ? "rgba(0,255,136,0.3)" : P.b}`, borderRadius: 8, background: "rgba(123,47,255,0.04)", cursor: uploading ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, transition: "all 0.2s", position: "relative", overflow: "hidden", boxSizing: "border-box" }}
+                  >
+                    {form.thumbnailUrl ? (
+                      <>
+                        <img src={form.thumbnailUrl} alt="thumbnail" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7 }} />
+                        <div style={{ position: "relative", zIndex: 1, background: "rgba(0,0,0,0.6)", padding: "4px 12px", borderRadius: 20, display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 10, color: "#00FF88", fontFamily: P.raj, fontWeight: 700 }}>✓ Uploaded!</span>
+                          <span onClick={e => { e.stopPropagation(); setForm(f => ({ ...f, thumbnailUrl: "" })); }} style={{ fontSize: 10, color: "#ff4444", cursor: "pointer", fontFamily: P.raj, fontWeight: 700 }}>✕ Remove</span>
+                        </div>
+                      </>
+                    ) : uploading ? (
+                      <>
+                        <div style={{ fontSize: 12, color: "#a67fff", fontFamily: P.raj, fontWeight: 700 }}>Uploading... {uploadProgress}%</div>
+                        <div style={{ width: "60%", height: 4, background: "rgba(123,47,255,0.1)", borderRadius: 2, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${uploadProgress}%`, background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", borderRadius: 2, transition: "width 0.3s" }} />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 24 }}>🖼️</div>
+                        <div style={{ fontSize: 12, color: "#a67fff", fontFamily: P.raj, fontWeight: 700 }}>Click or drag & drop image</div>
+                        <div style={{ fontSize: 10, color: "#5533aa", fontFamily: P.raj }}>PNG, JPG, WebP — max 5MB</div>
+                      </>
+                    )}
+                  </div>
+                  <input
+                    id="thumb-upload"
+                    type="file"
+                    accept="image/*"
+                    style={{ display: "none" }}
+                    onChange={async e => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        const url = await uploadToCloudinary(file);
+                        if (url) setForm(f => ({ ...f, thumbnailUrl: url }));
+                      }
+                    }}
+                  />
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
                   <div>
                     <label style={labelStyle}>Category</label>
                     <select name="category" value={form.category} onChange={handleChange} className="cr-input cr-select" style={inputStyle}>
@@ -820,9 +769,9 @@ export default function Creator() {
                 </div>
                 {error && <div style={{ padding: 10, background: "rgba(255,68,68,0.07)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 7, color: "#ff4444", fontSize: 11, fontFamily: P.raj }}>{error}</div>}
                 <Btn onClick={() => {
-                  if (!form.name || !form.iframeUrl || !form.description || !form.thumbnailUrl) { setError("Please fill in all required fields."); return; }
+                  if (!form.name || !form.iframeUrl || !form.description) { setError("Please fill in all required fields."); return; }
                   if (!validateUrl(form.iframeUrl)) { setError("Please enter a valid game URL."); return; }
-                  if (!validateUrl(form.thumbnailUrl)) { setError("Please enter a valid thumbnail URL."); return; }
+                  if (!form.thumbnailUrl) { setError("Please upload a thumbnail image."); return; }
                   setError(""); setStep(2);
                 }} style={{ alignSelf: "flex-start", padding: "12px 28px" }}>
                   Continue to Review →

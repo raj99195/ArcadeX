@@ -1,1120 +1,849 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 
-/* ─── THEME TOKENS ─── */
 const C = {
-  bg:        "#08070f",
-  surface:   "#0e0c1a",
-  surface2:  "#13101f",
-  border:    "rgba(123,47,255,0.15)",
-  borderHi:  "rgba(123,47,255,0.35)",
-  purple:    "#7B2FFF",
-  purpleDim: "rgba(123,47,255,0.12)",
-  cyan:      "#00d4ff",
-  green:     "#00FF88",
-  gold:      "#FFB800",
-  red:       "#ff4444",
-  orange:    "#ff8800",
-  blue:      "#4499ff",
-  text:      "#fff",
-  muted:     "#aaa",
-  dim:       "#555",
-  mono:      "'Fira Code','Cascadia Code','Courier New',monospace",
-  ui:        "'Rajdhani',sans-serif",
-  display:   "'Orbitron','Rajdhani',sans-serif",
+  bg: "#08070f", surface: "#0e0c1a", surface2: "#13101f",
+  border: "rgba(123,47,255,0.15)", borderHi: "rgba(123,47,255,0.35)",
+  purple: "#7B2FFF", purpleDim: "rgba(123,47,255,0.12)",
+  cyan: "#00d4ff", green: "#00FF88", gold: "#FFB800",
+  red: "#ff4444", orange: "#ff8800", blue: "#4499ff",
+  text: "#fff", muted: "#aaa", dim: "#555",
+  mono: "'Fira Code','Cascadia Code','Courier New',monospace",
+  ui: "'Rajdhani',sans-serif", display: "'Orbitron','Rajdhani',sans-serif",
 };
 
-/* ─── CODE BLOCK ─── */
-const CodeBlock = ({ code, id, copied, onCopy }) => (
-  <div style={{ position: "relative" }}>
-    <div style={{
-      background: "#050408",
-      borderRadius: 10,
-      padding: "20px 20px 20px 24px",
-      border: `1px solid ${C.border}`,
-      overflowX: "auto",
-      boxShadow: "inset 0 1px 0 rgba(123,47,255,0.08)",
-    }}>
-      <pre style={{
-        color: "#c8b8ff",
-        fontSize: 12,
-        lineHeight: 1.9,
-        margin: 0,
-        fontFamily: C.mono,
-        tabSize: 2,
-        whiteSpace: "pre",
-      }}>
-        {code}
-      </pre>
+const CodeBlock = ({ code, id, copied, onCopy, lang = "js" }) => (
+  <div style={{ position: "relative", marginBottom: 8 }}>
+    <div style={{ background: "#050408", borderRadius: 10, padding: "20px 20px 20px 24px", border: `1px solid ${C.border}`, overflowX: "auto" }}>
+      <pre style={{ color: "#c8b8ff", fontSize: 12, lineHeight: 1.9, margin: 0, fontFamily: C.mono, tabSize: 2, whiteSpace: "pre" }}>{code}</pre>
     </div>
-    <button
-      onClick={() => onCopy(code, id)}
-      style={{
-        position: "absolute", top: 12, right: 12,
-        padding: "4px 12px",
-        background: copied === id ? "rgba(0,255,136,0.1)" : C.purpleDim,
-        border: `1px solid ${copied === id ? "rgba(0,255,136,0.3)" : C.border}`,
-        borderRadius: 6,
-        color: copied === id ? C.green : C.muted,
-        fontSize: 11, cursor: "pointer",
-        fontFamily: C.ui, fontWeight: 600,
-        letterSpacing: "0.3px",
-        transition: "all 0.2s",
-      }}>
-      {copied === id ? "✓ Copied" : "Copy"}
-    </button>
+    <div style={{ position: "absolute", top: 10, right: 10, display: "flex", gap: 6 }}>
+      <span style={{ padding: "3px 8px", background: "rgba(123,47,255,0.1)", border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 9, color: C.dim, fontFamily: C.ui }}>{lang}</span>
+      <button onClick={() => onCopy(code, id)} style={{ padding: "4px 12px", background: copied === id ? "rgba(0,255,136,0.1)" : C.purpleDim, border: `1px solid ${copied === id ? "rgba(0,255,136,0.3)" : C.border}`, borderRadius: 6, color: copied === id ? C.green : C.muted, fontSize: 11, cursor: "pointer", fontFamily: C.ui, fontWeight: 600, transition: "all 0.2s" }}>
+        {copied === id ? "✓ Copied" : "Copy"}
+      </button>
+    </div>
   </div>
 );
 
-/* ─── BADGE ─── */
 const Badge = ({ children, color = C.purple }) => (
-  <span style={{
-    padding: "2px 9px",
-    background: color + "22",
-    border: `1px solid ${color}44`,
-    borderRadius: 4,
-    fontSize: 10,
-    fontWeight: 700,
-    color,
-    fontFamily: C.ui,
-    letterSpacing: "0.5px",
-    textTransform: "uppercase",
-  }}>{children}</span>
+  <span style={{ padding: "2px 9px", background: color + "22", border: `1px solid ${color}44`, borderRadius: 4, fontSize: 10, fontWeight: 700, color, fontFamily: C.ui, letterSpacing: "0.5px", textTransform: "uppercase" }}>{children}</span>
 );
 
-/* ─── INFO BOX ─── */
 const InfoBox = ({ color = C.blue, icon = "ℹ", children }) => (
-  <div style={{
-    padding: "13px 18px",
-    background: color + "0d",
-    border: `1px solid ${color}30`,
-    borderRadius: 8,
-    fontSize: 12,
-    color: color + "cc",
-    lineHeight: 1.75,
-    display: "flex",
-    gap: 10,
-    alignItems: "flex-start",
-  }}>
+  <div style={{ padding: "13px 18px", background: color + "0d", border: `1px solid ${color}30`, borderRadius: 8, fontSize: 12, color: color + "cc", lineHeight: 1.75, display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 16 }}>
     <span style={{ flexShrink: 0, fontSize: 15 }}>{icon}</span>
     <span style={{ fontFamily: C.ui }}>{children}</span>
   </div>
 );
 
-/* ─── SECTION ─── */
-const Section = ({ children, style = {} }) => (
-  <div style={{
-    background: C.surface,
-    border: `1px solid ${C.border}`,
-    borderRadius: 14,
-    padding: 32,
-    ...style,
-  }}>{children}</div>
-);
-
-const SectionTitle = ({ children, sub }) => (
-  <div style={{ marginBottom: 22 }}>
-    <h2 style={{
-      fontSize: 18, fontWeight: 700,
-      color: C.text, fontFamily: C.ui,
-      letterSpacing: "0.3px", margin: 0,
-    }}>{children}</h2>
-    {sub && (
-      <p style={{
-        fontSize: 13, color: C.muted,
-        marginTop: 7, lineHeight: 1.75, fontFamily: C.ui,
-      }}>{sub}</p>
-    )}
+const H2 = ({ children, sub, id }) => (
+  <div id={id} style={{ marginBottom: 20, scrollMarginTop: 80 }}>
+    <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, fontFamily: C.ui, margin: "0 0 6px" }}>{children}</h2>
+    {sub && <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.75, fontFamily: C.ui }}>{sub}</p>}
   </div>
 );
 
-/* ─── STEP CARD ─── */
-const StepCard = ({ n, title, desc, tag }) => (
-  <div
-    style={{
-      padding: 22, background: C.surface2,
-      borderRadius: 12, border: `1px solid ${C.border}`,
-      display: "flex", flexDirection: "column", gap: 10,
-      transition: "border-color 0.2s, box-shadow 0.2s",
-    }}
-    onMouseEnter={e => {
-      e.currentTarget.style.borderColor = C.borderHi;
-      e.currentTarget.style.boxShadow = "0 4px 20px rgba(123,47,255,0.1)";
-    }}
-    onMouseLeave={e => {
-      e.currentTarget.style.borderColor = C.border;
-      e.currentTarget.style.boxShadow = "none";
-    }}
-  >
-    <div style={{
-      fontSize: 36, fontWeight: 700,
-      color: "rgba(123,47,255,0.15)",
-      fontFamily: C.display, letterSpacing: "-1px", lineHeight: 1,
-    }}>{n}</div>
-    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, fontFamily: C.ui, letterSpacing: "0.3px" }}>{title}</div>
-    <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.75 }}>{desc}</div>
-    {tag && (
-      <div style={{
-        fontSize: 10, color: C.dim, fontFamily: C.mono,
-        background: "#050408", padding: "5px 10px",
-        borderRadius: 5, border: `1px solid ${C.border}`, marginTop: "auto",
-      }}>{tag}</div>
-    )}
-  </div>
+const H3 = ({ children }) => (
+  <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, fontFamily: C.ui, margin: "20px 0 10px", letterSpacing: "0.3px" }}>{children}</h3>
 );
 
-/* ─── FLOW ROW ─── */
-const FlowRow = ({ color, label, desc, isArrow }) => {
-  if (isArrow) return (
-    <div style={{ fontSize: 18, color: C.border, padding: "2px 0 2px 20px" }}>↓</div>
-  );
+
+// FAQ Item component — hooks outside map
+function FAQItem({ q, a }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 14,
-      padding: "12px 16px", background: C.surface2,
-      borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 4,
-    }}>
-      <div style={{
-        width: 10, height: 10, borderRadius: "50%",
-        background: color, flexShrink: 0,
-        boxShadow: color !== C.dim ? `0 0 8px ${color}88` : "none",
-      }} />
-      <div>
-        <div style={{
-          fontSize: 12, fontWeight: 600,
-          color: color === C.dim ? C.muted : color, fontFamily: C.ui,
-        }}>{label}</div>
-        <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>{desc}</div>
-      </div>
+    <div style={{ marginBottom: 8, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+      <button onClick={() => setOpen(o => !o)} style={{ width: "100%", padding: "14px 18px", background: open ? "rgba(123,47,255,0.08)" : "transparent", border: "none", color: C.text, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: C.ui, textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        {q}
+        <span style={{ color: C.purple, fontSize: 16 }}>{open ? "−" : "+"}</span>
+      </button>
+      {open && <div style={{ padding: "0 18px 16px", fontSize: 12, color: C.muted, lineHeight: 1.75, fontFamily: C.ui }}>{a}</div>}
     </div>
   );
-};
+}
 
-/* ════════════════════════════════════════
-   MAIN COMPONENT
-════════════════════════════════════════ */
-export default function SDK() {
-  const [activeTab, setActiveTab] = useState("quickstart");
-  const [copied, setCopied]       = useState("");
+// AI Assistant
+function AIAssistant() {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState([
+    { role: "assistant", content: "Hi! I'm the ArcadeX SDK assistant. Ask me anything about integrating your game!" }
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
 
-  const copy = (text, id) => {
-    navigator.clipboard.writeText(text);
-    setCopied(id);
-    setTimeout(() => setCopied(""), 2000);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  const send = async () => {
+    if (!input.trim() || loading) return;
+    const userMsg = input.trim();
+    setInput("");
+    setMessages(prev => [...prev, { role: "user", content: userMsg }]);
+    setLoading(true);
+    try {
+      const allMessages = messages.concat({ role: "user", content: userMsg });
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: "You are the ArcadeX SDK documentation assistant. ArcadeX is a Web3 gaming platform on BOTChain EVM. Help developers integrate their games (Unity, Godot, Phaser.js, Plain HTML/JS) with ArcadeX. Key events: GAME_OVER (submit score on-chain), SCORE_UPDATE (update score UI), GET_PLAYER_INFO (get wallet address). Keep answers concise and include code examples when relevant.",
+          messages: allMessages.map(m => ({ role: m.role, content: m.content }))
+        })
+      });
+      const data = await res.json();
+      const reply = data.content?.[0]?.text || "Sorry, something went wrong.";
+      setMessages(prev => [...prev, { role: "assistant", content: reply }]);
+    } catch {
+      setMessages(prev => [...prev, { role: "assistant", content: "Error connecting. Please try again." }]);
+    }
+    setLoading(false);
   };
 
-  const tabs = [
-    { id: "quickstart", label: "Quick Start"   },
-    { id: "unity",      label: "Unity Setup"   },
-    { id: "events",     label: "API Reference" },
-    { id: "examples",   label: "Examples"      },
-  ];
-
   return (
-    <div style={{ minHeight: "calc(100vh - 54px)", background: "transparent", position: "relative" }}>
-
-      {/* ── FIXED BG ── */}
-      <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none" }}>
-        <div style={{
-          position: "absolute", inset: 0,
-          background: `
-            radial-gradient(ellipse 80% 50% at 50% -10%, rgba(123,47,255,0.12) 0%, transparent 65%),
-            radial-gradient(ellipse 50% 40% at 90% 60%, rgba(0,212,255,0.05) 0%, transparent 50%),
-            #08070f`,
-        }} />
-        <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.025 }}>
-          <defs>
-            <pattern id="sdkgrid" width="40" height="40" patternUnits="userSpaceOnUse">
-              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#7B2FFF" strokeWidth="0.5" />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#sdkgrid)" />
-        </svg>
-      </div>
-
-      {/* ── CONTENT ── */}
-      <div style={{
-        position: "relative", zIndex: 1,
-        padding: "36px 44px",
-        maxWidth: 1000, margin: "0 auto",
+    <>
+      {/* Floating button */}
+      <button onClick={() => setOpen(o => !o)} style={{
+        position: "fixed", bottom: 24, right: 24, zIndex: 1000,
+        width: 52, height: 52, borderRadius: "50%",
+        background: open ? "#ff4444" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)",
+        border: "none", cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 22, boxShadow: "0 8px 24px rgba(123,47,255,0.4)",
+        transition: "all 0.2s",
       }}>
+        {open ? "✕" : "✦"}
+      </button>
 
-        {/* ════ HEADER ════ */}
-        <div style={{ marginBottom: 48 }}>
-          <div style={{
-            display: "inline-flex", alignItems: "center", gap: 8,
-            padding: "5px 14px", border: `1px solid ${C.border}`,
-            borderRadius: 20, fontSize: 10, color: C.dim,
-            marginBottom: 20, textTransform: "uppercase",
-            letterSpacing: "1px", fontFamily: C.ui, fontWeight: 600,
-            background: C.purpleDim,
-          }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.purple, display: "inline-block" }} />
-            Developer Documentation
-          </div>
-
-          <h1 style={{
-            fontSize: 46, fontWeight: 700,
-            fontFamily: C.display, letterSpacing: "-1px",
-            lineHeight: 1.1, margin: "0 0 14px",
-          }}>
-            INITIA
-            <span style={{
-              background: `linear-gradient(90deg,${C.purple},${C.cyan})`,
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-            }}>ARCADE</span>{" "}
-            <span style={{ color: C.muted, fontWeight: 400 }}>SDK</span>
-          </h1>
-
-          <p style={{
-            color: C.muted, fontSize: 15, maxWidth: 600,
-            lineHeight: 1.8, marginBottom: 32, fontFamily: C.ui,
-          }}>
-            Integrate your Unity WebGL game with InitiaArcade in minutes.
-            Submit on-chain scores, reward players with ARCADE tokens, and
-            connect to the Initia blockchain — all with a single JS file.
-          </p>
-
-          {/* Download cards */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 740 }}>
-
-            {/* arcade-sdk.js */}
-            <div style={{
-              background: C.surface, border: "1px solid rgba(0,255,136,0.2)",
-              borderRadius: 14, padding: "20px 26px",
-              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20,
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                <div style={{
-                  width: 44, height: 44, borderRadius: 10, flexShrink: 0,
-                  background: "rgba(0,255,136,0.08)", border: "1px solid rgba(0,255,136,0.2)",
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20,
-                }}>⚡</div>
-                <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: C.green, fontFamily: C.mono }}>arcade-sdk.js</span>
-                    <Badge color={C.green}>v1.0.0</Badge>
-                    <Badge color={C.gold}>→ Build/ folder</Badge>
-                  </div>
-                  <div style={{ fontSize: 11, color: C.dim, fontFamily: C.ui }}>
-                    Copy to <code style={{ color: C.muted, fontFamily: C.mono }}>WebGLBuild/Build/</code> after Unity export · No dependencies
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
-                <a href="/arcade-sdk.js" download style={{
-                  padding: "9px 20px",
-                  background: "linear-gradient(135deg,#00FF88,#00cc66)",
-                  borderRadius: 8, color: "#040c08",
-                  fontSize: 12, fontWeight: 700, textDecoration: "none",
-                  fontFamily: C.ui, letterSpacing: "0.5px",
-                }}>↓ Download</a>
-                <a href="/arcade-sdk.js" target="_blank" rel="noreferrer" style={{
-                  padding: "9px 20px", background: "transparent",
-                  border: "1px solid rgba(0,255,136,0.25)",
-                  borderRadius: 8, color: C.green,
-                  fontSize: 12, fontWeight: 600, textDecoration: "none", fontFamily: C.ui,
-                }}>View Source</a>
-              </div>
-            </div>
-
-            {/* ArcadeBridge.jslib */}
-            <div style={{
-              background: C.surface, border: "1px solid rgba(0,212,255,0.2)",
-              borderRadius: 14, padding: "20px 26px",
-              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20,
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                <div style={{
-                  width: 44, height: 44, borderRadius: 10, flexShrink: 0,
-                  background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.2)",
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20,
-                }}>🔌</div>
-                <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: C.cyan, fontFamily: C.mono }}>ArcadeBridge.jslib</span>
-                    <Badge color={C.cyan}>Unity Plugin</Badge>
-                    <Badge color={C.purple}>→ Assets/Plugins/WebGL/</Badge>
-                  </div>
-                  <div style={{ fontSize: 11, color: C.dim, fontFamily: C.ui }}>
-                    Place in <code style={{ color: C.muted, fontFamily: C.mono }}>Assets/Plugins/WebGL/</code> · Bridges C# → JavaScript calls
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
-                <a href="/ArcadeBridge.jslib" download style={{
-                  padding: "9px 20px",
-                  background: `linear-gradient(135deg,${C.cyan},#0099bb)`,
-                  borderRadius: 8, color: "#040c10",
-                  fontSize: 12, fontWeight: 700, textDecoration: "none",
-                  fontFamily: C.ui, letterSpacing: "0.5px",
-                }}>↓ Download</a>
-                <a href="/ArcadeBridge.jslib" target="_blank" rel="noreferrer" style={{
-                  padding: "9px 20px", background: "transparent",
-                  border: "1px solid rgba(0,212,255,0.25)",
-                  borderRadius: 8, color: C.cyan,
-                  fontSize: 12, fontWeight: 600, textDecoration: "none", fontFamily: C.ui,
-                }}>View Source</a>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* ════ TABS ════ */}
+      {/* Chat window */}
+      {open && (
         <div style={{
-          display: "flex", gap: 0, marginBottom: 36,
-          borderBottom: `1px solid ${C.border}`,
+          position: "fixed", bottom: 88, right: 24, zIndex: 999,
+          width: 360, height: 480,
+          background: "#0e0c1a", border: "1px solid rgba(123,47,255,0.3)",
+          borderRadius: 16, overflow: "hidden",
+          display: "flex", flexDirection: "column",
+          boxShadow: "0 24px 60px rgba(0,0,0,0.8)",
         }}>
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
-              padding: "12px 26px", background: "transparent", border: "none",
-              borderBottom: activeTab === t.id ? `2px solid ${C.purple}` : "2px solid transparent",
-              color: activeTab === t.id ? "#fff" : C.dim,
-              fontSize: 13, cursor: "pointer", transition: "all 0.2s",
-              marginBottom: "-1px", fontFamily: C.ui, fontWeight: 600, letterSpacing: "0.3px",
-            }}
-              onMouseEnter={e => { if (activeTab !== t.id) e.currentTarget.style.color = C.muted; }}
-              onMouseLeave={e => { if (activeTab !== t.id) e.currentTarget.style.color = C.dim; }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+          {/* Header */}
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid rgba(123,47,255,0.15)", background: "rgba(123,47,255,0.08)", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg,#7B2FFF,#00d4ff)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>✦</div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: C.ui }}>ArcadeX SDK Assistant</div>
+              <div style={{ fontSize: 10, color: "#5533aa", fontFamily: C.ui }}>Ask anything about integration</div>
+            </div>
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00FF88" }} />
+              <span style={{ fontSize: 9, color: "#00FF88", fontFamily: C.ui }}>Online</span>
+            </div>
+          </div>
 
-        {/* ════ QUICK START ════ */}
-        {activeTab === "quickstart" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-
-            <Section>
-              <SectionTitle sub="From zero to a fully integrated blockchain game in under 10 minutes.">
-                Get started in 4 steps
-              </SectionTitle>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
-                <StepCard n="01" title="Build WebGL"
-                  desc="Place ArcadeBridge.jslib in Assets/Plugins/ before building. Export as WebGL from File → Build Settings."
-                  tag="File → Build Settings → WebGL" />
-                <StepCard n="02" title="Copy arcade-sdk.js"
-                  desc="After Unity exports, place arcade-sdk.js in the root of the output — same folder as index.html. The WebGL template loads it from there."
-                  tag="WebGLBuild/arcade-sdk.js (next to index.html)" />
-                <StepCard n="03" title="Deploy + Submit"
-                  desc="Push to GitHub, deploy on Vercel. Submit your game URL on the platform — leave Game ID empty for now."
-                  tag="initia-arcade.vercel.app/publish" />
-                <StepCard n="04" title="Update Game ID"
-                  desc="After admin approval you get a Game ID. Paste it into ArcadeManager.gameId, push again — Vercel auto-redeploys."
-                  tag="git push → auto redeploy" />
-              </div>
-            </Section>
-
-            {/* Game ID 3-step flow */}
-            <div style={{
-              background: C.surface,
-              border: `1px solid ${C.borderHi}`,
-              borderRadius: 14,
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gap: 0,
-              overflow: "hidden",
-            }}>
-              {[
-                { icon: "🚀", color: C.purple, title: "1. Deploy to Vercel", desc: 'Push your WebGL build to GitHub. Connect the repo on vercel.com. Get a public URL like your-game.vercel.app' },
-                { icon: "📋", color: C.cyan,   title: "2. Submit without Game ID", desc: 'Go to /publish on InitiaArcade. Fill in game details — leave Game ID blank. Submit for admin review.' },
-                { icon: "✅", color: C.green,  title: "3. Update & Redeploy", desc: 'After approval paste the Game ID into ArcadeManager.cs. Push to GitHub — Vercel redeploys automatically in ~30s.' },
-              ].map((item, i) => (
-                <div key={i} style={{
-                  padding: "24px 26px",
-                  borderRight: i < 2 ? `1px solid ${C.border}` : "none",
-                  background: i === 1 ? "rgba(0,212,255,0.02)" : "transparent",
+          {/* Messages */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+            {messages.map((m, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                <div style={{
+                  maxWidth: "85%", padding: "8px 12px",
+                  background: m.role === "user" ? "rgba(123,47,255,0.25)" : "rgba(0,0,0,0.4)",
+                  border: `1px solid ${m.role === "user" ? "rgba(123,47,255,0.3)" : "rgba(123,47,255,0.1)"}`,
+                  borderRadius: m.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+                  fontSize: 12, color: "#c4a0ff", fontFamily: C.ui, lineHeight: 1.6,
+                  whiteSpace: "pre-wrap",
                 }}>
-                  <div style={{
-                    width: 36, height: 36, borderRadius: 10,
-                    background: item.color + "18",
-                    border: `1px solid ${item.color}40`,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 18, marginBottom: 12,
-                  }}>{item.icon}</div>
-                  <div style={{
-                    fontSize: 13, fontWeight: 700, color: item.color,
-                    fontFamily: C.ui, marginBottom: 6, letterSpacing: "0.3px",
-                  }}>{item.title}</div>
-                  <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.75, fontFamily: C.ui }}>{item.desc}</div>
+                  {m.content}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div style={{ display: "flex", gap: 4, padding: "8px 12px" }}>
+                {[0, 1, 2].map(i => <span key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: "#7B2FFF", animation: `dot 1.2s ${i * 0.2}s ease-in-out infinite` }} />)}
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Input */}
+          <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(123,47,255,0.15)", display: "flex", gap: 8 }}>
+            <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()}
+              placeholder="Ask about integration..."
+              style={{ flex: 1, padding: "8px 12px", background: "rgba(123,47,255,0.06)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 20, color: "#d4b8ff", fontSize: 12, fontFamily: C.ui, outline: "none" }}
+            />
+            <button onClick={send} disabled={loading || !input.trim()} style={{ width: 34, height: 34, borderRadius: "50%", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", color: "#fff", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>↑</button>
+          </div>
+        </div>
+      )}
+      <style>{`@keyframes dot { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1.2)} }`}</style>
+    </>
+  );
+}
+
+// NAV SECTIONS
+const NAV = [
+  { label: "Getting Started", items: [
+    { id: "overview", label: "Overview" },
+    { id: "quickstart", label: "Quick Start" },
+    { id: "how-it-works", label: "How It Works" },
+  ]},
+  { label: "Integration Guides", items: [
+    { id: "unity", label: "Unity WebGL" },
+    { id: "godot", label: "Godot HTML5" },
+    { id: "phaser", label: "Phaser.js" },
+    { id: "vanilla", label: "Plain HTML/JS" },
+  ]},
+  { label: "Reference", items: [
+    { id: "api", label: "API Reference" },
+    { id: "events", label: "Events" },
+    { id: "faq", label: "FAQ" },
+  ]},
+];
+
+export default function SDK() {
+  const [activeSection, setActiveSection] = useState("overview");
+  const [copied, setCopied] = useState("");
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 900);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 900);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const copy = (text, id) => { navigator.clipboard.writeText(text); setCopied(id); setTimeout(() => setCopied(""), 2000); };
+
+  const renderContent = () => {
+    switch (activeSection) {
+
+      case "overview": return (
+        <div>
+          <div style={{ marginBottom: 36 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 14px", border: `1px solid ${C.border}`, borderRadius: 20, fontSize: 10, color: C.dim, marginBottom: 20, textTransform: "uppercase", letterSpacing: "1px", fontFamily: C.ui, fontWeight: 600, background: C.purpleDim }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.purple, display: "inline-block" }} />
+              Developer Documentation
+            </div>
+            <h1 style={{ fontSize: isMobile ? 32 : 46, fontWeight: 700, fontFamily: C.display, letterSpacing: "-1px", lineHeight: 1.1, margin: "0 0 14px" }}>
+              ARCADE<span style={{ background: `linear-gradient(90deg,${C.purple},${C.cyan})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>X</span>{" "}
+              <span style={{ color: C.muted, fontWeight: 400 }}>SDK</span>
+            </h1>
+            <p style={{ color: C.muted, fontSize: 15, maxWidth: 600, lineHeight: 1.8, marginBottom: 32, fontFamily: C.ui }}>
+              Integrate your game with ArcadeX in minutes. Submit on-chain scores, reward players with ARCADE tokens, and connect to BOTChain — works with any game engine.
+            </p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {[{ label: "Unity WebGL", color: C.green, icon: "🎮" }, { label: "Godot HTML5", color: C.cyan, icon: "🔵" }, { label: "Phaser.js", color: C.purple, icon: "⚡" }, { label: "Plain JS", color: C.gold, icon: "🌐" }].map(e => (
+                <div key={e.label} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", background: e.color + "11", border: `1px solid ${e.color}33`, borderRadius: 20, fontSize: 11, color: e.color, fontFamily: C.ui, fontWeight: 600 }}>
+                  <span>{e.icon}</span>{e.label}
                 </div>
               ))}
             </div>
-
-            <Section>
-              <SectionTitle sub="The SDK bridges Unity and Initia blockchain via browser postMessage. No wallet code inside Unity needed.">
-                How it works
-              </SectionTitle>
-              <div style={{ background: "#050408", borderRadius: 10, padding: 24, border: `1px solid ${C.border}` }}>
-                {[
-                  { color: C.purple, label: "Unity Game (iframe)",   desc: "ArcadeManager.Instance.SubmitScore() called by your game script" },
-                  { isArrow: true },
-                  { color: C.cyan,   label: "ArcadeBridge.jslib",    desc: "DllImport wires C# → arcade_gameOver() JS function in jslib" },
-                  { isArrow: true },
-                  { color: C.blue,   label: "React Platform",         desc: "Receives postMessage event, triggers blockchain tx" },
-                  { isArrow: true },
-                  { color: C.dim,    label: "InterwovenKit",           desc: "Signs via Ghost Wallet (auto-sign, no popup)" },
-                  { isArrow: true },
-                  { color: C.green,  label: "Initia Blockchain",       desc: "Score saved + ARCADE tokens minted on-chain ✅" },
-                ].map((item, i) => (
-                  <FlowRow key={i} {...item} />
-                ))}
-              </div>
-            </Section>
-
-            <Section>
-              <SectionTitle sub="Minimum C# to submit scores. Use ArcadeManager.Instance from your game scripts.">
-                Minimal integration
-              </SectionTitle>
-              <CodeBlock id="minimal" copied={copied} onCopy={copy} code={`// In your GameController / PlayerController / wherever game ends:
-
-void OnObstacleHit()
-{
-    // Update score during gameplay
-    ArcadeManager.Instance.UpdateScore(score);
-}
-
-void OnGameOver()
-{
-    // Submit final score on-chain (called once)
-    ArcadeManager.Instance.SubmitScore();
-}
-
-// ArcadeManager handles the rest automatically via DllImport → ArcadeBridge.jslib`} />
-            </Section>
           </div>
-        )}
 
-        {/* ════ UNITY SETUP ════ */}
-        {activeTab === "unity" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-
-            {/* Step 1 */}
-            <Section>
-              <SectionTitle sub="Open File → Build Settings, select WebGL, click Switch Platform. Then open Player Settings:">
-                Step 1 — Configure WebGL Build Settings
-              </SectionTitle>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {[
-                  ["Resolution and Presentation",                "Enable Resizable Window"],
-                  ["Publishing Settings → Compression Format",   "Disabled"],
-                  ["Publishing Settings → Allow downloads HTTP", "Always allowed"],
-                  ["Other Settings → Color Space",               "Linear (recommended)"],
-                ].map(([setting, value]) => (
-                  <div key={setting} style={{
-                    display: "flex", justifyContent: "space-between", alignItems: "center",
-                    padding: "12px 16px", background: "#050408",
-                    borderRadius: 8, border: `1px solid ${C.border}`, gap: 16,
-                  }}>
-                    <span style={{ fontSize: 12, color: C.muted, fontFamily: C.mono }}>{setting}</span>
-                    <span style={{
-                      fontSize: 11, color: C.green, fontFamily: C.ui, fontWeight: 700,
-                      background: "rgba(0,255,136,0.08)", padding: "3px 10px",
-                      borderRadius: 4, border: "1px solid rgba(0,255,136,0.2)", flexShrink: 0,
-                    }}>{value}</span>
-                  </div>
-                ))}
-              </div>
-            </Section>
-
-            {/* Step 1.5 — WebGL Template */}
-            <Section style={{ border: `1px solid rgba(255,184,0,0.25)` }}>
-              <SectionTitle sub="Use the InitiaArcade custom WebGL template — includes themed loading screen, arcade-sdk.js, and proper canvas sizing out of the box.">
-                Step 1.5 — Install InitiaArcade WebGL Template
-              </SectionTitle>
-
-              {/* Download card */}
-              <div style={{
-                background: C.surface2,
-                border: `1px solid rgba(255,184,0,0.2)`,
-                borderRadius: 14, padding: "20px 26px",
-                display: "flex", alignItems: "center",
-                justifyContent: "space-between", gap: 20, marginBottom: 16,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                  <div style={{
-                    width: 44, height: 44, borderRadius: 10, flexShrink: 0,
-                    background: "rgba(255,184,0,0.08)", border: "1px solid rgba(255,184,0,0.2)",
-                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20,
-                  }}>🎨</div>
+          {/* Download cards */}
+          <H2 id="downloads">SDK Files</H2>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 32 }}>
+            {[
+              { file: "arcade-sdk.js", icon: "⚡", color: C.green, badge: "v2.0.0", tag: "All Engines", desc: "Core SDK — works with any web-based game engine", href: "/arcade-sdk.js" },
+              { file: "arcade-sdk-unity.js", icon: "🎮", color: C.cyan, badge: "Unity", tag: "WebGL Build/", desc: "Unity-specific SDK with jslib bridge support", href: "/arcade-sdk-unity.js" },
+              { file: "ArcadeBridge.jslib", icon: "🔌", color: C.purple, badge: "Unity Plugin", tag: "Assets/Plugins/WebGL/", desc: "Bridges C# → JavaScript calls in Unity", href: "/ArcadeBridge.jslib" },
+            ].map(f => (
+              <div key={f.file} style={{ background: C.surface, border: `1px solid ${f.color}33`, borderRadius: 14, padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 10, background: f.color + "11", border: `1px solid ${f.color}33`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>{f.icon}</div>
                   <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: C.gold, fontFamily: C.mono }}>InitiaArcade WebGL Template</span>
-                      <Badge color={C.gold}>Unity Template</Badge>
-                      <Badge color={C.purple}>Assets/WebGLTemplates/</Badge>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: f.color, fontFamily: C.mono }}>{f.file}</span>
+                      <Badge color={f.color}>{f.badge}</Badge>
+                      <Badge color={C.gold}>→ {f.tag}</Badge>
                     </div>
-                    <div style={{ fontSize: 11, color: C.dim, fontFamily: C.ui }}>
-                      Place in <code style={{ color: C.muted, fontFamily: C.mono }}>Assets/WebGLTemplates/InitiaArcade/</code> · Custom loading screen + SDK ready
-                    </div>
+                    <div style={{ fontSize: 11, color: C.dim, fontFamily: C.ui }}>{f.desc}</div>
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
-                  <a href="/WebGLTemplates.zip" download style={{
-                    padding: "9px 20px",
-                    background: `linear-gradient(135deg,${C.gold},#cc8800)`,
-                    borderRadius: 8, color: "#0a0600",
-                    fontSize: 12, fontWeight: 700, textDecoration: "none",
-                    fontFamily: C.ui, letterSpacing: "0.5px",
-                  }}>↓ Download Template</a>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                  <a href={f.href} download style={{ padding: "8px 18px", background: `linear-gradient(135deg,${f.color},${f.color}99)`, borderRadius: 8, color: "#040c08", fontSize: 12, fontWeight: 700, textDecoration: "none", fontFamily: C.ui }}>↓ Download</a>
+                  <a href={f.href} target="_blank" rel="noreferrer" style={{ padding: "8px 18px", background: "transparent", border: `1px solid ${f.color}44`, borderRadius: 8, color: f.color, fontSize: 12, fontWeight: 600, textDecoration: "none", fontFamily: C.ui }}>View</a>
                 </div>
               </div>
+            ))}
+          </div>
 
-              {/* File structure */}
-              <CodeBlock id="templatepath" copied={copied} onCopy={copy} code={`YourUnityProject/
-└── Assets/
-    └── WebGLTemplates/
-        └── InitiaArcade/          ← Extract downloaded zip here
-            ├── index.html         ← Custom themed loading screen
-            ├── arcade-sdk.js      ← SDK (already included)
-            └── thumbnail.png      ← Template preview icon`} />
+          {/* Engine cards */}
+          <H2 id="engines" sub="Choose your game engine to get started">Supported Engines</H2>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)", gap: 12 }}>
+            {[
+              { id: "unity", icon: "🎮", name: "Unity", desc: "WebGL export with jslib bridge", color: C.green },
+              { id: "godot", icon: "🔵", name: "Godot", desc: "HTML5 export with JS singleton", color: C.cyan },
+              { id: "phaser", icon: "⚡", name: "Phaser.js", desc: "Direct SDK integration", color: C.purple },
+              { id: "vanilla", icon: "🌐", name: "Plain JS", desc: "Any HTML5 game", color: C.gold },
+            ].map(e => (
+              <div key={e.id} onClick={() => setActiveSection(e.id)} style={{ background: C.surface, border: `1px solid ${e.color}22`, borderRadius: 12, padding: "18px 16px", cursor: "pointer", transition: "all 0.2s" }}
+                onMouseEnter={el => { el.currentTarget.style.borderColor = e.color + "55"; el.currentTarget.style.background = e.color + "08"; }}
+                onMouseLeave={el => { el.currentTarget.style.borderColor = e.color + "22"; el.currentTarget.style.background = C.surface; }}>
+                <div style={{ fontSize: 28, marginBottom: 10 }}>{e.icon}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, fontFamily: C.ui, marginBottom: 4 }}>{e.name}</div>
+                <div style={{ fontSize: 11, color: C.muted, fontFamily: C.ui, lineHeight: 1.5 }}>{e.desc}</div>
+                <div style={{ marginTop: 10, fontSize: 11, color: e.color, fontFamily: C.ui, fontWeight: 600 }}>View guide →</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
 
-              <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-                <InfoBox color={C.gold} icon="🎨">
-                  <strong>How to select in Unity:</strong>{" "}
-                  Edit → Project Settings → Player → Resolution and Presentation → WebGL Template → select <code style={{ fontFamily: C.mono }}>InitiaArcade</code>
-                </InfoBox>
+      case "quickstart": return (
+        <div>
+          <H2 id="qs" sub="From zero to a fully integrated blockchain game in under 10 minutes.">Quick Start</H2>
+          <InfoBox color={C.green} icon="✅">Works with any web-based game engine — Unity, Godot, Phaser.js, or plain HTML/JS.</InfoBox>
 
-                {/* Width Height settings */}
-                <div style={{
-                  padding: "20px 22px",
-                  background: C.purpleDim,
-                  border: `1px solid ${C.borderHi}`,
-                  borderRadius: 10,
-                }}>
-                  <div style={{
-                    fontSize: 13, fontWeight: 700, color: C.text,
-                    fontFamily: C.ui, marginBottom: 14, letterSpacing: "0.3px",
-                    display: "flex", alignItems: "center", gap: 8,
-                  }}>
-                    📐 Set Canvas Width & Height
-                  </div>
-                  <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.75, marginBottom: 14, fontFamily: C.ui }}>
-                    Set your game resolution under Player Settings → Resolution and Presentation.
-                    The template automatically uses{" "}
-                    <code style={{ background: "#050408", padding: "1px 5px", borderRadius: 3, fontSize: 11 }}>{`{{{ WIDTH }}}`}</code> and{" "}
-                    <code style={{ background: "#050408", padding: "1px 5px", borderRadius: 3, fontSize: 11 }}>{`{{{ HEIGHT }}}`}</code> values from your Unity settings.
-                  </p>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {[
-                      ["Portrait game  (mobile-style)", "Default Canvas Width", "1080", "Default Canvas Height", "1920"],
-                      ["Landscape game (desktop-style)", "Default Canvas Width", "1920", "Default Canvas Height", "1080"],
-                      ["Square game", "Default Canvas Width", "1080", "Default Canvas Height", "1080"],
-                    ].map(([label, wLabel, w, hLabel, h]) => (
-                      <div key={label} style={{
-                        padding: "12px 16px",
-                        background: "#050408",
-                        borderRadius: 8, border: `1px solid ${C.border}`,
-                      }}>
-                        <div style={{ fontSize: 10, color: C.dim, fontFamily: C.ui, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>{label}</div>
-                        <div style={{ display: "flex", gap: 20 }}>
-                          <div>
-                            <div style={{ fontSize: 9, color: C.dim, fontFamily: C.mono, marginBottom: 3 }}>{wLabel}</div>
-                            <div style={{ fontSize: 14, fontWeight: 700, color: C.purple, fontFamily: C.mono }}>{w}</div>
-                          </div>
-                          <div style={{ width: 1, background: C.border }} />
-                          <div>
-                            <div style={{ fontSize: 9, color: C.dim, fontFamily: C.mono, marginBottom: 3 }}>{hLabel}</div>
-                            <div style={{ fontSize: 14, fontWeight: 700, color: C.cyan, fontFamily: C.mono }}>{h}</div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ marginTop: 12 }}>
-                    <InfoBox color={C.blue} icon="ℹ">
-                      <code style={{ fontFamily: C.mono }}>Scale to Fit: true</code> — the template automatically resizes to fit the browser window while maintaining the correct aspect ratio. Portrait games will display full screen on mobile.
-                    </InfoBox>
-                  </div>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 28 }}>
+            {[
+              { n: "01", title: "Build your game", desc: "Export as WebGL/HTML5 from your engine", color: C.purple },
+              { n: "02", title: "Add arcade-sdk.js", desc: "Place SDK in same folder as index.html", color: C.cyan },
+              { n: "03", title: "Add 3 lines of code", desc: "Init, updateScore, gameOver — that's it", color: C.green },
+              { n: "04", title: "Deploy & Submit", desc: "Deploy to Vercel, submit your URL on ArcadeX", color: C.gold },
+            ].map(s => (
+              <div key={s.n} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+                <div style={{ fontSize: 32, fontWeight: 700, color: s.color + "33", fontFamily: C.display, lineHeight: 1, marginBottom: 8 }}>{s.n}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, fontFamily: C.ui, marginBottom: 6 }}>{s.title}</div>
+                <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, fontFamily: C.ui }}>{s.desc}</div>
+              </div>
+            ))}
+          </div>
+
+          <H3>Minimal integration (any engine)</H3>
+          <CodeBlock id="qs-minimal" copied={copied} onCopy={copy} lang="html" code={`<!-- 1. Add script tag to your index.html -->
+<script src="arcade-sdk.js"></script>
+
+<!-- 2. Initialize with your Game ID -->
+<script>
+  ArcadeSDK.init("YOUR_GAME_ID");
+</script>
+
+<!-- 3. Call these in your game code -->
+<script>
+  // Update score during gameplay
+  ArcadeSDK.updateScore(1500);
+
+  // Submit final score on game over (triggers blockchain tx)
+  ArcadeSDK.gameOver(9999);
+</script>`} />
+
+          <InfoBox color={C.gold} icon="💡">Get your Game ID from the Creator Dashboard after submitting your game for review. Leave it empty on first deploy.</InfoBox>
+        </div>
+      );
+
+      case "how-it-works": return (
+        <div>
+          <H2 id="hiw" sub="How ArcadeX SDK communicates between your game and the blockchain">How It Works</H2>
+          <div style={{ background: "#050408", borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, marginBottom: 24 }}>
+            {[
+              { color: C.purple, label: "Your Game", desc: "Calls ArcadeSDK.gameOver(score) when player finishes" },
+              { isArrow: true },
+              { color: C.cyan, label: "arcade-sdk.js", desc: "Sends postMessage event to parent window" },
+              { isArrow: true },
+              { color: C.blue, label: "ArcadeX Platform", desc: "Receives event, triggers blockchain transaction" },
+              { isArrow: true },
+              { color: C.green, label: "BOTChain", desc: "Score saved + ARCADE tokens minted on-chain ✅" },
+            ].map((item, i) => item.isArrow ? (
+              <div key={i} style={{ fontSize: 18, color: C.border, padding: "4px 0 4px 20px" }}>↓</div>
+            ) : (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", background: C.surface2, borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 4 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: item.color, flexShrink: 0, boxShadow: `0 0 8px ${item.color}88` }} />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: item.color, fontFamily: C.ui }}>{item.label}</div>
+                  <div style={{ fontSize: 11, color: C.dim, marginTop: 2, fontFamily: C.ui }}>{item.desc}</div>
                 </div>
               </div>
-            </Section>
-            <Section>
-              <SectionTitle sub="ArcadeBridge.jslib is the Unity WebGL plugin that exposes arcade_* functions to C# via DllImport. Place it in Assets/Plugins/WebGL/.">
-                Step 2 — Place ArcadeBridge.jslib in Assets/Plugins/WebGL/
-              </SectionTitle>
-              <CodeBlock id="jslibpath" copied={copied} onCopy={copy} code={`YourUnityProject/
-└── Assets/
-    └── Plugins/
-        └── WebGL/
-            └── ArcadeBridge.jslib   ✅ Here — inside the WebGL subfolder`} />
-              <div style={{ marginTop: 12 }}>
-                <InfoBox color={C.cyan} icon="🔌">
-                  Unity automatically includes all <code style={{ fontFamily: C.mono }}>.jslib</code> files from{" "}
-                  <code style={{ fontFamily: C.mono }}>Assets/Plugins/WebGL/</code> in the WebGL build.
-                  This is the correct and standard location — it wires up{" "}
-                  <code style={{ fontFamily: C.mono }}>DllImport("__Internal")</code> calls in C# to the
-                  corresponding JavaScript functions in the jslib at runtime.
-                </InfoBox>
-              </div>
-            </Section>
+            ))}
+          </div>
 
-            {/* Step 3 — ArcadeManager C# */}
-            <Section>
-              <SectionTitle sub="Create ArcadeManager.cs and attach it to an empty GameObject in your scene. Use ArcadeManager.Instance to call it from anywhere.">
-                Step 3 — Attach ArcadeManager.cs to an Empty GameObject
-              </SectionTitle>
-              <InfoBox color={C.gold} icon="⚠">
-                <strong>Leave <code style={{ fontFamily: C.mono }}>gameId</code> as <code style={{ fontFamily: C.mono }}>"YOUR_GAME_ID"</code> on first deploy.</strong>{" "}
-                Submit your game URL first to receive a Game ID from admin. Come back, paste it in the Inspector or in code, rebuild, and redeploy.
-              </InfoBox>
-              <div style={{ marginTop: 14 }}>
-                <CodeBlock id="csharp" copied={copied} onCopy={copy} code={`using UnityEngine;
+          <H3>Token Split</H3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
+            {[{ label: "Player gets", value: "80%", color: C.green, desc: "ARCADE tokens for playing" }, { label: "Creator gets", value: "20%", color: C.purple, desc: "ARCADE tokens from each play" }].map(s => (
+              <div key={s.label} style={{ background: C.surface, border: `1px solid ${s.color}33`, borderRadius: 12, padding: "20px 24px" }}>
+                <div style={{ fontSize: 32, fontWeight: 700, color: s.color, fontFamily: C.display, marginBottom: 6 }}>{s.value}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, fontFamily: C.ui, marginBottom: 4 }}>{s.label}</div>
+                <div style={{ fontSize: 11, color: C.muted, fontFamily: C.ui }}>{s.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+
+      case "unity": return (
+        <div>
+          <H2 id="unity" sub="Unity WebGL integration with ArcadeX SDK">Unity WebGL Setup</H2>
+          <div style={{ display: "flex", gap: 8, marginBottom: 24, flexWrap: "wrap" }}>
+            <Badge color={C.green}>Unity 2021+</Badge><Badge color={C.cyan}>WebGL Build</Badge><Badge color={C.gold}>ArcadeBridge.jslib</Badge>
+          </div>
+
+          <H3>Step 1 — Download files</H3>
+          <p style={{ fontSize: 13, color: C.muted, fontFamily: C.ui, marginBottom: 12 }}>Download both files from the Overview page:</p>
+          <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, marginBottom: 20 }}>
+            {[["arcade-sdk-unity.js", "Place in WebGLBuild/ folder (same as index.html)"], ["ArcadeBridge.jslib", "Place in Assets/Plugins/WebGL/"]].map(([f, d]) => (
+              <div key={f} style={{ display: "flex", gap: 12, padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
+                <code style={{ color: C.green, fontFamily: C.mono, fontSize: 12, minWidth: 200 }}>{f}</code>
+                <span style={{ fontSize: 12, color: C.muted, fontFamily: C.ui }}>{d}</span>
+              </div>
+            ))}
+          </div>
+
+          <H3>Step 2 — Configure Unity Build Settings</H3>
+          <InfoBox color={C.blue} icon="ℹ">File → Build Settings → WebGL → Switch Platform. Then Player Settings → Publishing Settings → Enable "Decompression Fallback".</InfoBox>
+
+          <H3>Step 3 — ArcadeManager.cs</H3>
+          <CodeBlock id="arcade-manager" copied={copied} onCopy={copy} lang="csharp" code={`using UnityEngine;
 using System.Runtime.InteropServices;
 
 public class ArcadeManager : MonoBehaviour
 {
     public static ArcadeManager Instance;
+    public string gameId = "YOUR_GAME_ID"; // Update after approval
 
-    [Header("InitiaArcade Settings")]
-    [SerializeField] string gameId = "YOUR_GAME_ID";
-    // ⚠ Fill in after you receive your Game ID — then rebuild & redeploy
+    // Import JS functions from ArcadeBridge.jslib
+    [DllImport("__Internal")] private static extern void arcade_init(string gameId);
+    [DllImport("__Internal")] private static extern void arcade_updateScore(int score);
+    [DllImport("__Internal")] private static extern void arcade_gameOver(int finalScore);
 
-    private int currentScore;
-    private bool isSubmitted = false;
-
-    // ── DllImport wires these to ArcadeBridge.jslib at runtime ──
-    [DllImport("__Internal")]
-    private static extern void arcade_init(string gameId);
-
-    [DllImport("__Internal")]
-    private static extern void arcade_gameOver(int score);
-
-    [DllImport("__Internal")]
-    private static extern void arcade_updateScore(int score);
-
-    // ── Singleton so any script can call ArcadeManager.Instance ──
     void Awake()
     {
-        if (Instance == null)
-        {
-            Instance = this;
-            DontDestroyOnLoad(gameObject);
-        }
-        else
-        {
-            Destroy(gameObject);
-        }
+        if (Instance == null) { Instance = this; DontDestroyOnLoad(gameObject); }
+        else { Destroy(gameObject); return; }
     }
 
     void Start()
     {
-#if UNITY_WEBGL && !UNITY_EDITOR
+        #if !UNITY_EDITOR
         arcade_init(gameId);
-#else
-        Debug.Log("[ArcadeManager] arcade_init: " + gameId);
-#endif
+        #endif
     }
 
-    // 🔥 Call this whenever the player's score changes
     public void UpdateScore(int score)
     {
-        currentScore = score;
-#if UNITY_WEBGL && !UNITY_EDITOR
-        arcade_updateScore(currentScore);
-#else
-        Debug.Log("[ArcadeManager] Score Updated: " + currentScore);
-#endif
+        #if !UNITY_EDITOR
+        arcade_updateScore(score);
+        #endif
     }
 
-    // 🔥 Call this when the game ends (once only)
     public void SubmitScore()
     {
-        if (isSubmitted) return;
-        isSubmitted = true;
-#if UNITY_WEBGL && !UNITY_EDITOR
-        arcade_gameOver(currentScore);
-#else
-        Debug.Log("[ArcadeManager] Game Over Score: " + currentScore);
-#endif
+        #if !UNITY_EDITOR
+        arcade_gameOver(score);
+        #endif
     }
 }`} />
-              </div>
-              <div style={{ marginTop: 14 }}>
-                <InfoBox color={C.blue} icon="ℹ">
-                  <strong>How to use from other scripts:</strong>{" "}
-                  <code style={{ fontFamily: C.mono }}>ArcadeManager.Instance.UpdateScore(score)</code> and{" "}
-                  <code style={{ fontFamily: C.mono }}>ArcadeManager.Instance.SubmitScore()</code> — call these from
-                  your GameController, PlayerController, or wherever your game logic lives.
-                  The <code style={{ fontFamily: C.mono }}>#if UNITY_WEBGL</code> guards prevent crashes in the Editor.
-                </InfoBox>
-              </div>
-            </Section>
 
-            {/* Step 4 — Build + copy sdk */}
-            <Section style={{ border: `1px solid rgba(0,255,136,0.25)` }}>
-              <SectionTitle sub="Export WebGL from Unity. Then copy arcade-sdk.js into the root of the output — same folder as index.html.">
-                Step 4 — Build WebGL + Place arcade-sdk.js next to index.html
-              </SectionTitle>
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <InfoBox color={C.green} icon="📦">
-                  <strong>arcade-sdk.js goes in the root of your WebGL output — same level as <code style={{ fontFamily: C.mono }}>index.html</code>.</strong>{" "}
-                  The WebGL template's <code style={{ fontFamily: C.mono }}>index.html</code> loads it via{" "}
-                  <code style={{ fontFamily: C.mono }}>&lt;script src="arcade-sdk.js"&gt;</code>.
-                  Do NOT put it inside the <code style={{ fontFamily: C.mono }}>Build/</code> subfolder.
-                </InfoBox>
-
-                <CodeBlock id="buildfolder" copied={copied} onCopy={copy} code={`WebGLBuild/                         ← Your Unity export output folder (repo root)
-├── arcade-sdk.js                   ✅ Place arcade-sdk.js HERE (next to index.html)
-├── index.html                      ✅ WebGL template (already present)
-├── Build/
-│   ├── YourGame.data
-│   ├── YourGame.framework.js
-│   ├── YourGame.loader.js
-│   └── YourGame.wasm
-└── TemplateData/                   ✅ WebGL template assets (already present)`} />
-
-                <InfoBox color={C.red} icon="❌">
-                  <strong>Without <code style={{ fontFamily: C.mono }}>arcade-sdk.js</code> in the root, all SDK calls will silently fail.</strong>{" "}
-                  The <code style={{ fontFamily: C.mono }}>index.html</code> template references it as{" "}
-                  <code style={{ fontFamily: C.mono }}>src="arcade-sdk.js"</code> — if missing,{" "}
-                  <code style={{ fontFamily: C.mono }}>arcade_init</code> and{" "}
-                  <code style={{ fontFamily: C.mono }}>arcade_gameOver</code> are never registered.
-                </InfoBox>
-              </div>
-            </Section>
-
-            {/* Step 5 — Vercel */}
-            <Section>
-              <SectionTitle sub="Push your WebGL output to GitHub. Vercel picks it up automatically and gives you a public URL.">
-                Step 5 — Deploy to Vercel
-              </SectionTitle>
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <CodeBlock id="vercel" copied={copied} onCopy={copy} code={`# 1. Push your WebGL build output folder to a GitHub repo
-git init
-git add .
-git commit -m "Initial WebGL build"
-git remote add origin https://github.com/USERNAME/your-game.git
-git push -u origin main
-
-# 2. Go to vercel.com → New Project → Import your GitHub repo
-
-# 3. Vercel settings:
-#    Framework Preset : Other
-#    Root Directory   : ./      (root of your repo)
-#    Build Command    :         (leave empty — static files)
-#    Output Directory : ./
-
-# 4. Click Deploy
-#    → Your game is live at: https://your-game.vercel.app
-
-# 5. Submit this URL on InitiaArcade at /publish`} />
-                <InfoBox color={C.blue} icon="ℹ">
-                  Vercel auto-deploys on every <code style={{ fontFamily: C.mono }}>git push</code>.
-                  When you update your Game ID later, just push again — no manual redeploy needed.
-                </InfoBox>
-              </div>
-            </Section>
-
-            {/* Step 6 — Update Game ID */}
-            <Section style={{
-              background: "linear-gradient(135deg,rgba(123,47,255,0.07),rgba(0,212,255,0.03))",
-              border: `1px solid ${C.borderHi}`,
-            }}>
-              <SectionTitle sub="After admin approval you'll receive a Game ID. Update your script and push — done.">
-                Step 6 — Update Game ID after approval
-              </SectionTitle>
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                  <div>
-                    <div style={{
-                      fontSize: 11, fontWeight: 700, color: C.red,
-                      fontFamily: C.ui, letterSpacing: "0.5px",
-                      textTransform: "uppercase", marginBottom: 8,
-                    }}>Before — first deploy</div>
-                    <CodeBlock id="before" copied={copied} onCopy={copy} code={`[SerializeField] string gameId = "YOUR_GAME_ID";
-// submit to platform first — Game ID pending`} />
-                  </div>
-                  <div>
-                    <div style={{
-                      fontSize: 11, fontWeight: 700, color: C.green,
-                      fontFamily: C.ui, letterSpacing: "0.5px",
-                      textTransform: "uppercase", marginBottom: 8,
-                    }}>After approval ✅</div>
-                    <CodeBlock id="after" copied={copied} onCopy={copy} code={`[SerializeField] string gameId = "abc123xyz";
-// actual Game ID from admin → rebuild → redeploy`} />
-                  </div>
-                </div>
-                <CodeBlock id="redeploy" copied={copied} onCopy={copy} code={`# After pasting Game ID in Inspector:
-# 1. Rebuild Unity → File → Build → WebGL
-# 2. Place arcade-sdk.js next to index.html (root) again
-# 3. Push to GitHub
-
-git add .
-git commit -m "Add Game ID: abc123xyz"
-git push
-
-# Vercel auto-redeploys in ~30 seconds ✅
-# Your game is now fully linked on-chain`} />
-              </div>
-            </Section>
-
-            {/* Checklist */}
-            <Section style={{ border: `1px solid ${C.borderHi}` }}>
-              <SectionTitle sub="Verify everything before submitting your game URL.">
-                ✅ Pre-Submit Checklist
-              </SectionTitle>
-              <CodeBlock id="checklist" copied={copied} onCopy={copy} code={`Unity Source Project:
-  ✅ Assets/WebGLTemplates/InitiaArcade/   ← WebGL template installed
-  ✅ Player Settings → WebGL Template → InitiaArcade selected
-  ✅ Width/Height set (e.g. 1080×1920 portrait)
-  ✅ Assets/Plugins/WebGL/ArcadeBridge.jslib     ← jslib plugin in WebGL subfolder
-  ✅ ArcadeManager.cs attached to empty GameObject (Singleton — DontDestroyOnLoad)
-  ✅ gameId = "YOUR_GAME_ID" (fill in Inspector after approval)
-
-WebGL Build Output (repo root — pushed to GitHub):
-  ✅ arcade-sdk.js                               ← placed next to index.html
-  ✅ index.html                                  ← WebGL template present
-  ✅ Build/YourGame.wasm
-  ✅ Build/YourGame.framework.js
-  ✅ TemplateData/                               ← WebGL template assets present
-
-Vercel:
-  ✅ Repo connected, framework: Other
-  ✅ Public URL works and game loads
-
-After Admin Approval:
-  ⬜ Paste Game ID into gameId field in Inspector (or in code)
-  ⬜ Rebuild WebGL → place arcade-sdk.js next to index.html again
-  ⬜ git push → Vercel auto-redeploys ✅`} />
-            </Section>
-          </div>
-        )}
-
-        {/* ════ API REFERENCE ════ */}
-        {activeTab === "events" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Section>
-              <SectionTitle sub={
-                <>
-                  All methods callable from C# via{" "}
-                  <code style={{ background:"#050408",padding:"2px 6px",borderRadius:4,fontSize:11,color:C.muted }}>Application.ExternalCall()</code>
-                  {" "}or JS via{" "}
-                  <code style={{ background:"#050408",padding:"2px 6px",borderRadius:4,fontSize:11,color:C.muted }}>window.ArcadeSDK</code>
-                </>
-              }>
-                API Reference
-              </SectionTitle>
-
-              {[
-                {
-                  signature: "arcade_init(gameId: string)",
-                  color: C.green,
-                  desc: "Initializes the SDK. Pass empty string on first deploy — update to real Game ID after admin approval.",
-                  params: [["gameId","string","Your Game ID from the platform. Pass '' (empty) on first deploy."]],
-                },
-                {
-                  signature: "arcade_updateScore(score: number)",
-                  color: C.blue,
-                  desc: "Sends real-time score to the platform UI. Does NOT trigger a blockchain transaction. Call frequently during gameplay.",
-                  params: [["score","number","The player's current score"]],
-                },
-                {
-                  signature: "arcade_gameOver(finalScore: number)",
-                  color: C.purple,
-                  desc: "Ends the session and submits final score on-chain. Auto-sign = no popup. 80% tokens to player, 20% to creator.",
-                  params: [["finalScore","number","The player's final score for this session"]],
-                },
-                {
-                  signature: "arcade_earnTokens(amount: number)",
-                  color: C.gold,
-                  desc: "Awards ARCADE tokens to the player for in-game achievements like collecting items or reaching milestones.",
-                  params: [["amount","number","Number of ARCADE tokens to award"]],
-                },
-                {
-                  signature: "arcade_buyItem(itemId: string, price: number)",
-                  color: C.red,
-                  desc: "Deducts ARCADE tokens from the player's wallet and registers the purchase on-chain. For in-game shops.",
-                  params: [["itemId","string","Unique item identifier"],["price","number","Cost in ARCADE tokens"]],
-                },
-                {
-                  signature: "arcade_unlockAchievement(achievementId: string)",
-                  color: C.orange,
-                  desc: "Unlocks an achievement badge — minted as an NFT stored in the player's Initia wallet.",
-                  params: [["achievementId","string","e.g. 'first_kill', 'level_10'"]],
-                },
-                {
-                  signature: "arcade_levelComplete(level: number, score: number)",
-                  color: C.cyan,
-                  desc: "Records level completion on-chain. Use for multi-level games to track per-level performance.",
-                  params: [["level","number","Level number completed"],["score","number","Score achieved on this level"]],
-                },
-              ].map((api, i) => (
-                <div key={i} style={{
-                  marginBottom: 14, padding: 22,
-                  background: "#050408", borderRadius: 10,
-                  border: `1px solid ${C.border}`,
-                }}>
-                  <div style={{ marginBottom: 10 }}>
-                    <code style={{
-                      background: api.color + "15", color: api.color,
-                      padding: "5px 14px", borderRadius: 6,
-                      fontSize: 12, fontWeight: 600,
-                      fontFamily: C.mono, border: `1px solid ${api.color}30`,
-                    }}>{api.signature}</code>
-                  </div>
-                  <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.75, marginBottom: 14, fontFamily: C.ui }}>{api.desc}</p>
-                  <div style={{
-                    fontSize: 10, color: C.dim, textTransform: "uppercase",
-                    letterSpacing: "0.8px", marginBottom: 8, fontFamily: C.ui, fontWeight: 700,
-                  }}>Parameters</div>
-                  {api.params.map(([name, type, pdesc]) => (
-                    <div key={name} style={{
-                      display: "flex", gap: 14,
-                      padding: "9px 14px", background: C.surface,
-                      borderRadius: 6, border: `1px solid ${C.border}`,
-                      alignItems: "flex-start", marginBottom: 6,
-                    }}>
-                      <code style={{ color: api.color, fontSize: 11, minWidth: 130, flexShrink: 0, fontFamily: C.mono }}>{name}</code>
-                      <code style={{ color: C.dim, fontSize: 11, minWidth: 60, flexShrink: 0, fontFamily: C.mono }}>{type}</code>
-                      <span style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, fontFamily: C.ui }}>{pdesc}</span>
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </Section>
-          </div>
-        )}
-
-        {/* ════ EXAMPLES ════ */}
-        {activeTab === "examples" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-
-            <Section>
-              <SectionTitle sub="Real-time score, coin rewards, game over — complete runner integration.">
-                Endless Runner
-              </SectionTitle>
-              <CodeBlock id="runner" copied={copied} onCopy={copy} code={`using UnityEngine;
-
-public class RunnerGame : MonoBehaviour
+          <H3>Step 4 — Use in your game</H3>
+          <CodeBlock id="unity-use" copied={copied} onCopy={copy} lang="csharp" code={`public class GameController : MonoBehaviour
 {
     private int score = 0;
-    private bool isGameOver = false;
 
     void Update()
     {
-        if (isGameOver) return;
-        score += Mathf.RoundToInt(Time.deltaTime * 10);
+        // Update score in real time
+        score += 1;
         if (score % 50 == 0)
             ArcadeManager.Instance.UpdateScore(score);
     }
 
-    public void OnCoinCollected()
+    public void OnGameOver()
     {
-        // optional: ArcadeManager handles token rewards via arcade_earnTokens
-        // if your ArcadeBridge.jslib exposes it, add DllImport there too
-    }
-
-    public void OnObstacleHit()
-    {
-        isGameOver = true;
-        ArcadeManager.Instance.SubmitScore(); // submits on-chain
-    }
-}`} />
-            </Section>
-
-            <Section>
-              <SectionTitle sub="Wave-based tower defense with per-wave score updates and bonus token drops.">
-                Tower Defense
-              </SectionTitle>
-              <CodeBlock id="tower" copied={copied} onCopy={copy} code={`using UnityEngine;
-
-public class TowerDefenseManager : MonoBehaviour
-{
-    private int score = 0;
-
-    public void OnEnemyKilled(int reward)
-    {
-        score += reward;
-        ArcadeManager.Instance.UpdateScore(score);
-    }
-
-    public void OnWaveComplete(int waveNumber)
-    {
-        // level complete + bonus — add DllImport for these in ArcadeManager if needed
-        Debug.Log("Wave " + waveNumber + " complete, score: " + score);
-    }
-
-    public void OnBaseDestroyed()
-    {
+        // Submit final score on-chain
         ArcadeManager.Instance.SubmitScore();
     }
 }`} />
-            </Section>
+        </div>
+      );
 
-            <Section>
-              <SectionTitle sub="ARCADE token shop — every purchase is registered on-chain.">
-                In-Game Shop
-              </SectionTitle>
-              <CodeBlock id="shop" copied={copied} onCopy={copy} code={`using UnityEngine;
+      case "godot": return (
+        <div>
+          <H2 id="godot" sub="Godot HTML5 export integration with ArcadeX SDK">Godot HTML5 Setup</H2>
+          <div style={{ display: "flex", gap: 8, marginBottom: 24, flexWrap: "wrap" }}>
+            <Badge color={C.cyan}>Godot 3.x / 4.x</Badge><Badge color={C.green}>HTML5 Export</Badge>
+          </div>
+          <InfoBox color={C.blue} icon="ℹ">Godot uses JavaScript singleton to call browser JS. Works in both Godot 3.x and 4.x.</InfoBox>
 
-[System.Serializable]
-public class ShopItem
-{
-    public string id;
-    public string displayName;
-    public int price;
+          <H3>Step 1 — Add SDK to index.html</H3>
+          <p style={{ fontSize: 13, color: C.muted, fontFamily: C.ui, marginBottom: 12 }}>After Godot exports, add arcade-sdk.js to your HTML template:</p>
+          <CodeBlock id="godot-html" copied={copied} onCopy={copy} lang="html" code={`<!-- In your Godot export index.html, add before </head> -->
+<script src="arcade-sdk.js"></script>`} />
+
+          <H3>Step 2 — GDScript integration</H3>
+          <CodeBlock id="godot-script" copied={copied} onCopy={copy} lang="gdscript" code={`# ArcadeSDK.gd — autoload singleton
+extends Node
+
+var game_id = "YOUR_GAME_ID"
+
+func _ready():
+    if OS.has_feature("JavaScript"):
+        JavaScript.eval("ArcadeSDK.init('" + game_id + "')")
+
+func update_score(score: int):
+    if OS.has_feature("JavaScript"):
+        JavaScript.eval("ArcadeSDK.updateScore(" + str(score) + ")")
+
+func game_over(final_score: int):
+    if OS.has_feature("JavaScript"):
+        JavaScript.eval("ArcadeSDK.gameOver(" + str(final_score) + ")")`} />
+
+          <H3>Step 3 — Use in your game</H3>
+          <CodeBlock id="godot-use" copied={copied} onCopy={copy} lang="gdscript" code={`# In your game script
+extends Node
+
+var score = 0
+
+func _on_enemy_killed():
+    score += 10
+    ArcadeSDK.update_score(score)
+
+func _on_player_died():
+    ArcadeSDK.game_over(score)`} />
+
+          <InfoBox color={C.gold} icon="💡">For Godot 4.x replace JavaScript.eval() with JavaScriptBridge.eval()</InfoBox>
+        </div>
+      );
+
+      case "phaser": return (
+        <div>
+          <H2 id="phaser" sub="Phaser.js integration with ArcadeX SDK">Phaser.js Setup</H2>
+          <div style={{ display: "flex", gap: 8, marginBottom: 24, flexWrap: "wrap" }}>
+            <Badge color={C.purple}>Phaser 3</Badge><Badge color={C.green}>Direct Integration</Badge>
+          </div>
+
+          <H3>Step 1 — Add SDK</H3>
+          <CodeBlock id="phaser-html" copied={copied} onCopy={copy} lang="html" code={`<!DOCTYPE html>
+<html>
+<head>
+  <script src="arcade-sdk.js"></script>
+  <script src="phaser.min.js"></script>
+</head>
+<body>
+  <script src="game.js"></script>
+</body>
+</html>`} />
+
+          <H3>Step 2 — Initialize in your game</H3>
+          <CodeBlock id="phaser-init" copied={copied} onCopy={copy} lang="js" code={`// game.js
+const config = {
+  type: Phaser.AUTO,
+  width: 800,
+  height: 600,
+  scene: { preload, create, update }
+};
+
+const game = new Phaser.Game(config);
+let score = 0;
+
+function create() {
+  // Initialize ArcadeX SDK
+  ArcadeSDK.init("YOUR_GAME_ID");
 }
 
-public class GameShop : MonoBehaviour
-{
-    public ShopItem[] items = new ShopItem[]
-    {
-        new ShopItem { id = "sword_001",   displayName = "Iron Sword",    price = 100 },
-        new ShopItem { id = "shield_001",  displayName = "Wooden Shield", price = 150 },
-        new ShopItem { id = "potion_001",  displayName = "Health Potion", price = 50  },
-        new ShopItem { id = "speed_boost", displayName = "Speed Boost",   price = 75  },
-    };
+function update() {
+  score += 1;
+  if (score % 100 === 0) {
+    // Update score in real time
+    ArcadeSDK.updateScore(score);
+  }
+}
 
-    public void PurchaseItem(int itemIndex)
-    {
-        if (itemIndex < 0 || itemIndex >= items.Length) return;
-        ShopItem item = items[itemIndex];
-        Application.ExternalCall("arcade_buyItem", item.id, item.price);
-    }
+function onGameOver() {
+  // Submit final score on-chain
+  ArcadeSDK.gameOver(score);
 }`} />
-            </Section>
 
-            {/* CTA */}
-            <div style={{
-              background: "linear-gradient(135deg,rgba(123,47,255,0.12),rgba(0,212,255,0.06))",
-              border: `1px solid ${C.borderHi}`,
-              borderRadius: 14,
-              padding: "28px 32px",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 24,
-            }}>
-              <div>
-                <div style={{
-                  fontSize: 17, fontWeight: 700,
-                  fontFamily: C.display,
-                  background: `linear-gradient(90deg,${C.purple},${C.cyan})`,
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                  marginBottom: 8, letterSpacing: "0.3px",
-                }}>Ready to publish?</div>
-                <div style={{ fontSize: 13, color: C.muted, fontFamily: C.ui }}>
-                  Deploy to Vercel, submit your URL, and start earning ARCADE tokens from every play.
+          <H3>Scene-based integration</H3>
+          <CodeBlock id="phaser-scene" copied={copied} onCopy={copy} lang="js" code={`class GameScene extends Phaser.Scene {
+  constructor() { super("GameScene"); }
+
+  create() {
+    ArcadeSDK.init("YOUR_GAME_ID");
+    this.score = 0;
+
+    // Listen for score events
+    this.events.on("addScore", (points) => {
+      this.score += points;
+      ArcadeSDK.updateScore(this.score);
+    });
+  }
+
+  onPlayerDeath() {
+    ArcadeSDK.gameOver(this.score);
+    this.scene.start("GameOverScene");
+  }
+}`} />
+        </div>
+      );
+
+      case "vanilla": return (
+        <div>
+          <H2 id="vanilla" sub="Plain HTML/JavaScript integration — works with any web game">Plain HTML/JS Setup</H2>
+          <div style={{ display: "flex", gap: 8, marginBottom: 24, flexWrap: "wrap" }}>
+            <Badge color={C.gold}>No Framework</Badge><Badge color={C.green}>Any HTML5 Game</Badge><Badge color={C.cyan}>Canvas / WebGL</Badge>
+          </div>
+          <InfoBox color={C.green} icon="✅">Simplest integration — just add one script tag and call 3 functions!</InfoBox>
+
+          <H3>Complete example</H3>
+          <CodeBlock id="vanilla-full" copied={copied} onCopy={copy} lang="html" code={`<!DOCTYPE html>
+<html>
+<head>
+  <title>My Game</title>
+  <!-- 1. Add ArcadeX SDK -->
+  <script src="arcade-sdk.js"></script>
+</head>
+<body>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+  <script>
+    // 2. Initialize with your Game ID
+    ArcadeSDK.init("YOUR_GAME_ID");
+
+    let score = 0;
+    let gameRunning = true;
+
+    // Your game loop
+    function gameLoop() {
+      if (!gameRunning) return;
+
+      // Your game logic here
+      score += 1;
+
+      // 3. Update score in real time
+      if (score % 100 === 0) {
+        ArcadeSDK.updateScore(score);
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    // 4. Submit score on game over
+    function onGameOver() {
+      gameRunning = false;
+      ArcadeSDK.gameOver(score); // Triggers blockchain tx!
+    }
+
+    gameLoop();
+  </script>
+</body>
+</html>`} />
+
+          <H3>Listen for player info</H3>
+          <CodeBlock id="vanilla-player" copied={copied} onCopy={copy} lang="js" code={`// Get connected wallet info
+window.addEventListener("message", (event) => {
+  if (event.data.type === "PLAYER_INFO") {
+    const { address, balance } = event.data.player;
+    console.log("Player wallet:", address);
+    console.log("ARCADE balance:", balance);
+
+    // Show in your game UI
+    document.getElementById("wallet").textContent = address.slice(0,8) + "...";
+  }
+});
+
+// Request player info
+ArcadeSDK.getPlayerInfo();`} />
+        </div>
+      );
+
+      case "api": return (
+        <div>
+          <H2 id="api" sub="Complete API reference for ArcadeX SDK">API Reference</H2>
+          {[
+            { fn: "ArcadeSDK.init(gameId)", color: C.green, desc: "Initialize the SDK. Call this once when your game loads.", params: [["gameId", "string", "Your Game ID from Creator Dashboard. Pass '' on first deploy."]] },
+            { fn: "ArcadeSDK.updateScore(score)", color: C.cyan, desc: "Send real-time score to ArcadeX UI. Does NOT trigger blockchain tx. Call frequently.", params: [["score", "number", "Current player score"]] },
+            { fn: "ArcadeSDK.gameOver(finalScore)", color: C.purple, desc: "Submit final score on-chain. Triggers blockchain tx. 80% tokens to player, 20% to creator.", params: [["finalScore", "number", "Player's final score"]] },
+            { fn: "ArcadeSDK.getPlayerInfo()", color: C.gold, desc: "Request connected player's wallet info. Returns via PLAYER_INFO postMessage event.", params: [] },
+          ].map((api, i) => (
+            <div key={i} style={{ marginBottom: 16, padding: 20, background: "#050408", borderRadius: 10, border: `1px solid ${C.border}` }}>
+              <code style={{ background: api.color + "15", color: api.color, padding: "5px 14px", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: C.mono, border: `1px solid ${api.color}30`, display: "inline-block", marginBottom: 12 }}>{api.fn}</code>
+              <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.75, marginBottom: 12, fontFamily: C.ui }}>{api.desc}</p>
+              {api.params.length > 0 && (
+                <>
+                  <div style={{ fontSize: 10, color: C.dim, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8, fontFamily: C.ui, fontWeight: 700 }}>Parameters</div>
+                  {api.params.map(([name, type, desc]) => (
+                    <div key={name} style={{ display: "flex", gap: 14, padding: "8px 12px", background: C.surface, borderRadius: 6, border: `1px solid ${C.border}`, alignItems: "flex-start", marginBottom: 4 }}>
+                      <code style={{ color: api.color, fontSize: 11, minWidth: 120, flexShrink: 0, fontFamily: C.mono }}>{name}</code>
+                      <code style={{ color: C.dim, fontSize: 11, minWidth: 60, flexShrink: 0, fontFamily: C.mono }}>{type}</code>
+                      <span style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, fontFamily: C.ui }}>{desc}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      );
+
+      case "events": return (
+        <div>
+          <H2 id="events" sub="postMessage events sent from ArcadeX platform to your game">Events</H2>
+          <InfoBox color={C.blue} icon="ℹ">Your game receives these events via window.postMessage. Listen with window.addEventListener("message", handler).</InfoBox>
+          <CodeBlock id="events-listen" copied={copied} onCopy={copy} lang="js" code={`window.addEventListener("message", (event) => {
+  const { type, data } = event.data;
+
+  switch(type) {
+    case "PLAYER_INFO":
+      // Player connected their wallet
+      console.log("Address:", data.address);
+      console.log("ARCADE Balance:", data.balance);
+      break;
+
+    case "TRANSACTION_SUCCESS":
+      // Score submitted on-chain successfully
+      console.log("TX Hash:", data.txHash);
+      console.log("Tokens earned:", data.tokensEarned);
+      break;
+
+    case "TRANSACTION_FAILED":
+      // Blockchain tx failed
+      console.error("Failed:", data.error);
+      break;
+  }
+});`} />
+
+          <H3>Event Reference</H3>
+          {[
+            { event: "PLAYER_INFO", color: C.cyan, desc: "Sent when player info is requested. Contains wallet address and ARCADE balance.", fields: [["type", '"PLAYER_INFO"'], ["data.address", "string — EVM wallet address"], ["data.balance", "string — ARCADE token balance"]] },
+            { event: "TRANSACTION_SUCCESS", color: C.green, desc: "Sent when score is successfully submitted on-chain.", fields: [["type", '"TRANSACTION_SUCCESS"'], ["data.txHash", "string — blockchain tx hash"], ["data.tokensEarned", "number — ARCADE tokens earned"]] },
+            { event: "TRANSACTION_FAILED", color: C.red, desc: "Sent when blockchain transaction fails.", fields: [["type", '"TRANSACTION_FAILED"'], ["data.error", "string — error message"]] },
+          ].map((e, i) => (
+            <div key={i} style={{ marginBottom: 14, padding: 18, background: "#050408", borderRadius: 10, border: `1px solid ${C.border}` }}>
+              <code style={{ background: e.color + "15", color: e.color, padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: C.mono, border: `1px solid ${e.color}30`, display: "inline-block", marginBottom: 10 }}>{e.event}</code>
+              <p style={{ fontSize: 12, color: C.muted, marginBottom: 10, fontFamily: C.ui }}>{e.desc}</p>
+              {e.fields.map(([f, d]) => (
+                <div key={f} style={{ display: "flex", gap: 14, padding: "6px 10px", background: C.surface, borderRadius: 5, border: `1px solid ${C.border}`, marginBottom: 4 }}>
+                  <code style={{ color: e.color, fontSize: 11, minWidth: 180, flexShrink: 0, fontFamily: C.mono }}>{f}</code>
+                  <span style={{ fontSize: 11, color: C.muted, fontFamily: C.ui }}>{d}</span>
                 </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      );
+
+      case "faq": return (
+        <div>
+          <H2 id="faq" sub="Common questions about ArcadeX SDK integration">FAQ</H2>
+          {[
+            { q: "What Game ID do I use on first deploy?", a: "Leave it empty or use '' (empty string). After admin approves your game, you'll get a Game ID. Update it in your code and redeploy — Vercel auto-redeploys in ~30s." },
+            { q: "Does the player need to connect a wallet?", a: "Yes, players need to connect a MetaMask or compatible wallet on BOTChain Testnet to earn ARCADE tokens. The Connect Wallet button is in the ArcadeX navbar." },
+            { q: "My game is in an iframe, will postMessage work?", a: "Yes! ArcadeX embeds your game in an iframe. The SDK uses window.parent.postMessage to communicate with the platform." },
+            { q: "Can I test locally without deploying?", a: "Yes, use the 'Simulate Game Over' button on the gameplay page, or use the Debug panel (🐛 button) to test score submission." },
+            { q: "What happens if the transaction fails?", a: "Your game receives a TRANSACTION_FAILED event. The score is NOT saved on-chain. You can show the player an error or retry." },
+            { q: "How do I get my Game ID?", a: "Submit your game at /publish on ArcadeX. After admin approval (usually within 24 hours), your Game ID appears in your Creator Dashboard." },
+          ].map((item, i) => {
+            const [open, setOpen] = useState(false);
+            return (
+              <div key={i} style={{ marginBottom: 8, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                <button onClick={() => setOpen(o => !o)} style={{ width: "100%", padding: "14px 18px", background: open ? "rgba(123,47,255,0.08)" : "transparent", border: "none", color: C.text, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: C.ui, textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  {item.q}
+                  <span style={{ color: C.purple, fontSize: 16 }}>{open ? "−" : "+"}</span>
+                </button>
+                {open && <div style={{ padding: "0 18px 16px", fontSize: 12, color: C.muted, lineHeight: 1.75, fontFamily: C.ui }}>{item.a}</div>}
               </div>
-              <Link to="/publish" style={{
-                padding: "12px 28px",
-                background: `linear-gradient(135deg,${C.purple},#5a1fd4)`,
-                borderRadius: 10, color: "#fff",
-                fontSize: 13, fontWeight: 700,
-                textDecoration: "none",
-                fontFamily: C.ui, letterSpacing: "0.5px",
-                flexShrink: 0,
-                boxShadow: "0 4px 16px rgba(123,47,255,0.3)",
-              }}>
-                Publish Your Game →
-              </Link>
+            );
+          })}
+        </div>
+      );
+
+      default: return null;
+    }
+  };
+
+  return (
+    <div style={{ minHeight: "calc(100vh - 54px)", background: C.bg, position: "relative" }}>
+      <style>{`
+        ::-webkit-scrollbar { width: 4px; } 
+        ::-webkit-scrollbar-track { background: transparent; } 
+        ::-webkit-scrollbar-thumb { background: rgba(123,47,255,0.3); border-radius: 2px; }
+        .sdk-nav-item:hover { color: #c4a0ff !important; background: rgba(123,47,255,0.06) !important; }
+      `}</style>
+
+      {/* Grid BG */}
+      <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none" }}>
+        <div style={{ position: "absolute", inset: 0, background: `radial-gradient(ellipse 80% 50% at 50% -10%, rgba(123,47,255,0.1) 0%, transparent 65%), #08070f` }} />
+        <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.025 }}>
+          <defs><pattern id="sdkgrid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#7B2FFF" strokeWidth="0.5" /></pattern></defs>
+          <rect width="100%" height="100%" fill="url(#sdkgrid)" />
+        </svg>
+      </div>
+
+      <div style={{ position: "relative", zIndex: 1, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "240px 1fr 200px", minHeight: "calc(100vh - 54px)" }}>
+
+        {/* LEFT SIDEBAR */}
+        {!isMobile && (
+          <div style={{ borderRight: `1px solid ${C.border}`, padding: "28px 0", position: "sticky", top: 54, height: "calc(100vh - 54px)", overflowY: "auto" }}>
+            {NAV.map(section => (
+              <div key={section.label} style={{ marginBottom: 24 }}>
+                <div style={{ fontSize: 10, color: C.dim, textTransform: "uppercase", letterSpacing: "1.5px", fontWeight: 700, fontFamily: C.ui, padding: "0 20px", marginBottom: 6 }}>{section.label}</div>
+                {section.items.map(item => (
+                  <button key={item.id} className="sdk-nav-item" onClick={() => setActiveSection(item.id)} style={{ width: "100%", padding: "8px 20px", background: activeSection === item.id ? "rgba(123,47,255,0.12)" : "transparent", border: "none", borderLeft: activeSection === item.id ? `2px solid ${C.purple}` : "2px solid transparent", color: activeSection === item.id ? "#c4a0ff" : C.dim, fontSize: 13, cursor: "pointer", fontFamily: C.ui, fontWeight: activeSection === item.id ? 600 : 400, textAlign: "left", transition: "all 0.15s" }}>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+            <div style={{ margin: "20px 16px 0", padding: 14, background: "rgba(123,47,255,0.06)", border: `1px solid ${C.border}`, borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: C.purple, fontWeight: 700, fontFamily: C.ui, marginBottom: 4 }}>✦ AI Assistant</div>
+              <div style={{ fontSize: 10, color: C.dim, fontFamily: C.ui, lineHeight: 1.6 }}>Click the ✦ button (bottom right) to ask integration questions</div>
+            </div>
+          </div>
+        )}
+
+        {/* MAIN CONTENT */}
+        <div style={{ padding: isMobile ? "20px 16px" : "36px 48px", maxWidth: 760, overflowX: "hidden" }}>
+          {/* Mobile nav */}
+          {isMobile && (
+            <div style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 24, paddingBottom: 8 }}>
+              {NAV.flatMap(s => s.items).map(item => (
+                <button key={item.id} onClick={() => setActiveSection(item.id)} style={{ padding: "6px 14px", background: activeSection === item.id ? "rgba(123,47,255,0.2)" : "transparent", border: `1px solid ${activeSection === item.id ? C.purple : C.border}`, borderRadius: 20, color: activeSection === item.id ? "#c4a0ff" : C.dim, fontSize: 11, cursor: "pointer", fontFamily: C.ui, fontWeight: 600, flexShrink: 0, transition: "all 0.15s" }}>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {renderContent()}
+
+          {/* Bottom nav */}
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 48, paddingTop: 24, borderTop: `1px solid ${C.border}` }}>
+            <Link to="/publish" style={{ padding: "10px 20px", background: "rgba(123,47,255,0.08)", border: `1px solid ${C.border}`, borderRadius: 8, color: C.purple, fontSize: 12, fontWeight: 700, textDecoration: "none", fontFamily: C.ui }}>
+              ← Creator Dashboard
+            </Link>
+            <Link to="/games" style={{ padding: "10px 20px", background: `linear-gradient(135deg,${C.purple},#5a1fd4)`, border: "none", borderRadius: 8, color: "#fff", fontSize: 12, fontWeight: 700, textDecoration: "none", fontFamily: C.ui }}>
+              Play Games →
+            </Link>
+          </div>
+        </div>
+
+        {/* RIGHT SIDEBAR — On this page */}
+        {!isMobile && (
+          <div style={{ borderLeft: `1px solid ${C.border}`, padding: "28px 20px", position: "sticky", top: 54, height: "calc(100vh - 54px)", overflowY: "auto" }}>
+            <div style={{ fontSize: 10, color: C.dim, textTransform: "uppercase", letterSpacing: "1.5px", fontWeight: 700, fontFamily: C.ui, marginBottom: 12 }}>On this page</div>
+            {(activeSection === "overview" ? ["downloads", "engines"] :
+              activeSection === "quickstart" ? ["qs", "qs-minimal"] :
+              activeSection === "unity" ? ["unity"] :
+              activeSection === "godot" ? ["godot"] :
+              activeSection === "phaser" ? ["phaser"] :
+              activeSection === "vanilla" ? ["vanilla"] :
+              activeSection === "api" ? ["api"] :
+              activeSection === "events" ? ["events"] :
+              ["faq"]).map(anchor => (
+              <a key={anchor} href={`#${anchor}`} style={{ display: "block", padding: "5px 0 5px 12px", borderLeft: `1px solid ${C.border}`, color: C.dim, fontSize: 12, textDecoration: "none", fontFamily: C.ui, marginBottom: 2, transition: "color 0.15s" }}
+                onMouseEnter={e => e.target.style.color = "#c4a0ff"}
+                onMouseLeave={e => e.target.style.color = C.dim}>
+                {anchor.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+              </a>
+            ))}
+
+            <div style={{ marginTop: 28, padding: 14, background: "rgba(0,255,136,0.05)", border: "1px solid rgba(0,255,136,0.15)", borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: C.green, fontWeight: 700, fontFamily: C.ui, marginBottom: 6 }}>SDK Version</div>
+              <div style={{ fontSize: 12, color: C.muted, fontFamily: C.mono }}>v2.0.0</div>
+              <div style={{ fontSize: 10, color: C.dim, fontFamily: C.ui, marginTop: 4 }}>BOTChain EVM</div>
             </div>
           </div>
         )}
       </div>
+
+      <AIAssistant />
     </div>
   );
 }

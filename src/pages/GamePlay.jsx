@@ -1,12 +1,13 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useAccount, usePublicClient } from "wagmi";
 import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
 import { wagmiAdapter } from "../Providers";
 import { useGames } from "../hooks/useGames";
 import { saveScore } from "../lib/gameService";
 import { db } from "../lib/firebase";
-import { doc, updateDoc, increment, collection, addDoc, getDocs, query, orderBy, serverTimestamp } from "firebase/firestore";
+import { doc, updateDoc, increment, collection, addDoc, getDocs, query, orderBy, serverTimestamp, setDoc } from "firebase/firestore";
 
 const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
 
@@ -42,6 +43,7 @@ function timeAgo(date) {
 export default function GamePlay() {
   const { gameId } = useParams();
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const navigate = useNavigate();
   const { games } = useGames();
   const game = games.find(g => g.id === Number(gameId));
@@ -75,6 +77,12 @@ export default function GamePlay() {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [games]);
+
+  useEffect(() => {
+    const handleKey = (e) => { if (e.key === "Escape") setIsFullscreen(false); };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
   useEffect(() => { if (game) setLikeCount(game.likes || 0); }, [game]);
   useEffect(() => {
     const key = `liked_game_${gameId}_${address || 'anon'}`;
@@ -89,6 +97,25 @@ export default function GamePlay() {
       .catch(() => { })
       .finally(() => setCommentsLoading(false));
   }, [gameId]);
+
+  // Track plays + unique players
+  useEffect(() => {
+    if (!game || !address || gameLoading) return;
+    const trackPlay = async () => {
+      try {
+        // Increment total plays
+        await updateDoc(doc(db, "games", String(game.gameId || game.id)), {
+          plays: increment(1)
+        });
+        // Track unique player
+        await setDoc(doc(db, "games", String(game.gameId || game.id), "players", address.toLowerCase()), {
+          address: address.toLowerCase(),
+          lastPlayed: serverTimestamp()
+        }, { merge: true });
+      } catch (e) { console.warn("Track play failed:", e); }
+    };
+    trackPlay();
+  }, [game?.id, address, gameLoading]);
 
   const handleLike = async () => {
     if (!address) return;
@@ -151,6 +178,7 @@ export default function GamePlay() {
     submittingRef.current = true;
     setSubmitting(true);
     setSubmitError("");
+        
 
     try {
       const rewardRate = game.rewardRate || 50;
@@ -161,8 +189,8 @@ export default function GamePlay() {
   address: PLATFORM_ADDRESS,
   abi: PLATFORM_ABI,
   functionName: "recordPlayAndEarn",
-  args: [BigInt(game.id), BigInt(finalScore)],
-  gas: BigInt(300000), // manually gas set karo
+  args: [BigInt(game.gameId || game.id), BigInt(finalScore)],
+  gas: BigInt(500000),// manually gas set karo
 });
 await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 

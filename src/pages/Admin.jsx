@@ -1,6 +1,10 @@
 import { useState, useEffect } from "react";
-import { useAccount, useWalletClient } from "wagmi";
+import { useAccount } from "wagmi";
+import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
+import { wagmiAdapter } from "../Providers";
 import { getAllGames, approveGameInFirebase, rejectGameInFirebase } from "../lib/gameService";
+import { db } from "../lib/firebase";
+import { collection, getDocs } from "firebase/firestore";
 
 const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
 const ADMIN_ADDRESS = import.meta.env.VITE_ADMIN_ADDRESS;
@@ -67,20 +71,39 @@ function GamePreviewModal({ game, onClose, onApprove, onReject, loading }) {
 
 export default function Admin() {
   const { address, isConnected } = useAccount();
-  const { data: walletClient } = useWalletClient();
+
   const [games, setGames] = useState([]);
   const [loading, setLoading] = useState(false);
   const [gamesLoading, setGamesLoading] = useState(false);
   const [selectedGame, setSelectedGame] = useState(null);
   const [log, setLog] = useState("");
   const [activeTab, setActiveTab] = useState("pending");
+  const [gameStats, setGameStats] = useState({});
 
   const isAdmin = address?.toLowerCase() === ADMIN_ADDRESS?.toLowerCase();
 
   const fetchGames = async () => {
     setGamesLoading(true);
-    try { setGames(await getAllGames()); } catch (e) { console.error(e); }
+    try {
+      const allGames = await getAllGames();
+      setGames(allGames);
+      fetchGameStats(allGames);
+    } catch (e) { console.error(e); }
     finally { setGamesLoading(false); }
+  };
+
+  const fetchGameStats = async (gamesList) => {
+    const stats = {};
+    await Promise.all(gamesList.map(async (game) => {
+      try {
+        const playersSnap = await getDocs(collection(db, "games", String(game.gameId || game.id), "players"));
+        stats[game.gameId || game.id] = {
+          uniquePlayers: playersSnap.size,
+          plays: game.plays || 0,
+        };
+      } catch { stats[game.gameId || game.id] = { uniquePlayers: 0, plays: 0 }; }
+    }));
+    setGameStats(stats);
   };
 
   useEffect(() => { if (isAdmin) fetchGames(); }, [isAdmin]);
@@ -88,12 +111,14 @@ export default function Admin() {
   const approveGame = async (game) => {
     setLoading(true);
     try {
-      await walletClient.writeContract({
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: PLATFORM_ADDRESS,
         abi: PLATFORM_ABI,
         functionName: "approveGame",
         args: [BigInt(game.gameId)],
+        gas: BigInt(200000),
       });
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       await approveGameInFirebase(game.gameId);
       setLog(`✓ Game #${game.gameId} "${game.name}" approved!`);
       setSelectedGame(null);
@@ -162,7 +187,12 @@ export default function Admin() {
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 24 }}>
-          {[{ label: "Total Games", value: games.length, color: "#a67fff" }, { label: "Pending", value: pendingGames.length, color: "#FFB800" }, { label: "Live", value: approvedGames.length, color: "#00FF88" }, { label: "Rejected", value: rejectedGames.length, color: "#ff4444" }].map(s => (
+          {[
+            { label: "Total Games", value: games.length, color: "#a67fff" },
+            { label: "Pending", value: pendingGames.length, color: "#FFB800" },
+            { label: "Live", value: approvedGames.length, color: "#00FF88" },
+            { label: "Total Plays", value: Object.values(gameStats).reduce((s, g) => s + (g.plays || 0), 0), color: "#00d4ff" },
+          ].map(s => (
             <div key={s.label} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: "16px 18px", position: "relative", overflow: "hidden" }}>
               <div style={{ fontSize: 9, color: "#5533aa", textTransform: "uppercase", letterSpacing: "1.2px", fontFamily: P.raj, fontWeight: 700, marginBottom: 6 }}>{s.label}</div>
               <div style={{ fontFamily: P.orb, fontWeight: 700, fontSize: 28, color: s.color, letterSpacing: "-1px", lineHeight: 1 }}>{s.value}</div>
@@ -198,6 +228,14 @@ export default function Admin() {
                   <div style={{ textAlign: "center", flexShrink: 0 }}>
                     <div style={{ fontFamily: P.orb, fontSize: 12, color: "#a67fff", fontWeight: 700 }}>{game.rewardRate}</div>
                     <div style={{ fontSize: 8, color: "#5533aa", fontFamily: P.raj }}>ARCADE/play</div>
+                  </div>
+                  <div style={{ textAlign: "center", flexShrink: 0, minWidth: 60 }}>
+                    <div style={{ fontFamily: P.orb, fontSize: 12, color: "#00d4ff", fontWeight: 700 }}>{gameStats[game.gameId || game.id]?.plays || game.plays || 0}</div>
+                    <div style={{ fontSize: 8, color: "#5533aa", fontFamily: P.raj }}>Plays</div>
+                  </div>
+                  <div style={{ textAlign: "center", flexShrink: 0, minWidth: 60 }}>
+                    <div style={{ fontFamily: P.orb, fontSize: 12, color: "#00FF88", fontWeight: 700 }}>{gameStats[game.gameId || game.id]?.uniquePlayers || 0}</div>
+                    <div style={{ fontSize: 8, color: "#5533aa", fontFamily: P.raj }}>Players</div>
                   </div>
                   {activeTab === "pending" && (
                     <div style={{ display: "flex", gap: 7, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
