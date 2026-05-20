@@ -273,7 +273,7 @@ export default function Home() {
                     opacity: isExit || isEnter ? undefined : 0.7,
                   }}>
                     {getThumb(games[lIdx])
-                      ? <img src={getThumb(games[lIdx])} alt={games[lIdx]?.name} style={{ width: "100%", height: S.imgH, objectFit: "cover", display: "block" }} />
+                      ? <img src={getThumb(games[lIdx])} alt={games[lIdx]?.name} style={{ width: "100%", height: S.imgH, objectFit: "contain", objectPosition: "center", display: "block", background: "#06040f" }} />
                       : <FallbackDiv height={S.imgH} size={28} />}
                     <div style={{ padding: "7px 9px" }}>
                       <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#b899ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{games[lIdx]?.name}</div>
@@ -299,7 +299,7 @@ export default function Home() {
                     {/* Icon badge */}
                     <div style={{ position: "absolute", top: 10, right: 10, zIndex: 7, width: 28, height: 28, borderRadius: "50%", background: "rgba(123,47,255,0.4)", border: "1px solid rgba(180,150,255,0.5)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🎮</div>
                     {getThumb(games[ci])
-                      ? <img src={getThumb(games[ci])} alt={games[ci]?.name} style={{ width: "100%", height: C.imgH, objectFit: "cover", display: "block" }} />
+                      ? <img src={getThumb(games[ci])} alt={games[ci]?.name} style={{ width: "100%", height: C.imgH, objectFit: "contain", objectPosition: "center", display: "block", background: "#06040f" }} />
                       : <FallbackDiv height={C.imgH} size={44} />}
                     <div style={{ padding: "14px 16px 16px", display: "flex", flexDirection: "column", gap: 10, flex: 1 }}>
                       {/* Name + genre row */}
@@ -335,7 +335,7 @@ export default function Home() {
                     opacity: isExit || isEnter ? undefined : 0.7,
                   }}>
                     {getThumb(games[rIdx])
-                      ? <img src={getThumb(games[rIdx])} alt={games[rIdx]?.name} style={{ width: "100%", height: S.imgH, objectFit: "cover", display: "block" }} />
+                      ? <img src={getThumb(games[rIdx])} alt={games[rIdx]?.name} style={{ width: "100%", height: S.imgH, objectFit: "contain", objectPosition: "center", display: "block", background: "#06040f" }} />
                       : <FallbackDiv height={S.imgH} size={28} />}
                     <div style={{ padding: "7px 9px" }}>
                       <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#b899ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{games[rIdx]?.name}</div>
