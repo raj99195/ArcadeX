@@ -122,11 +122,10 @@ function LeaderboardModal({ tournament, onClose, navigate }) {
   const medals = ["🥇", "🥈", "🥉"];
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.96)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
-      <div style={{ background: "#08070f", border: "1px solid rgba(123,47,255,0.25)", borderRadius: 20, width: "100%", maxWidth: 720, maxHeight: "92vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 32px 80px rgba(0,0,0,0.9), 0 0 60px rgba(123,47,255,0.15)", position: "relative" }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "#08070f", display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
         {/* Top gradient bar */}
-        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg,#7B2FFF,#FFB700,#00d4ff)", borderRadius: "20px 20px 0 0" }} />
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg,#7B2FFF,#FFB700,#00d4ff)", borderRadius: 0 }} />
 
         {/* Header */}
         <div style={{ padding: "20px 28px 16px", borderBottom: "1px solid rgba(123,47,255,0.12)", background: "rgba(123,47,255,0.05)", flexShrink: 0 }}>
@@ -250,7 +249,6 @@ function LeaderboardModal({ tournament, onClose, navigate }) {
             🎮 Play Now & Submit Your Score
           </button>
         </div>
-      </div>
     </div>
   );
 }
