@@ -221,7 +221,7 @@ export default function Home() {
             const isEnter = carouselAnim === "enter";
 
             // ── SIZE CONTROLS ── change these to resize everything
-            const C = { w: 330, h: 410, imgH: 200 };   // center card
+            const C = { w: 330, h: 410, imgH: 290 };   // center card
             const S = { w: 175, h: 238, imgH: 148 };   // side cards (left/right)
             const P = { w: 110, h: 152 };               // peek cards (far left/right)
             const sideLeft = "8%";                      // left card position from left
@@ -301,10 +301,24 @@ export default function Home() {
                     {getThumb(games[ci])
                       ? <img src={getThumb(games[ci])} alt={games[ci]?.name} style={{ width: "100%", height: C.imgH, objectFit: "cover", display: "block" }} />
                       : <FallbackDiv height={C.imgH} size={44} />}
-                    <div style={{ padding: "10px 12px" }}>
-                      <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 15, color: "#e0d0ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 3 }}>{games[ci]?.name}</div>
-                      <div style={{ fontSize: 11, color: "rgba(180,150,255,0.5)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 7 }}>{games[ci]?.category || games[ci]?.genre || "Arcade"}</div>
-                      {games[ci]?.rewardRate && <span style={{ fontSize: 12, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 5, padding: "4px 10px" }}>+{games[ci].rewardRate} ARCADE</span>}
+                    <div style={{ padding: "14px 16px 16px", display: "flex", flexDirection: "column", gap: 10, flex: 1 }}>
+                      {/* Name + genre row */}
+                      <div>
+                        <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 18, color: "#e0d0ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 4 }}>{games[ci]?.name}</div>
+                        <div style={{ fontSize: 11, color: "rgba(180,150,255,0.5)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "1px" }}>{games[ci]?.category || games[ci]?.genre || "Arcade"}</div>
+                      </div>
+                      {/* Divider */}
+                      <div style={{ height: 1, background: "rgba(123,47,255,0.18)", borderRadius: 1 }} />
+                      {/* Reward + play row */}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        {games[ci]?.rewardRate
+                          ? <span style={{ fontSize: 14, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 6, padding: "5px 12px" }}>+{games[ci].rewardRate} ARCADE</span>
+                          : <span />}
+                        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "rgba(180,150,255,0.45)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00FF88", display: "inline-block" }} />
+                          Play Now
+                        </div>
+                      </div>
                     </div>
                     <div style={{ position: "absolute", inset: 0, pointerEvents: "none", background: "linear-gradient(180deg,transparent 55%,rgba(123,47,255,0.14) 100%)", borderRadius: 14 }} />
                   </div>
