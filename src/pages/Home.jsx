@@ -220,6 +220,15 @@ export default function Home() {
             const isExit = carouselAnim === "exit";
             const isEnter = carouselAnim === "enter";
 
+            // ── SIZE CONTROLS ── change these to resize everything
+            const C = { w: 230, h: 310, imgH: 200 };   // center card
+            const S = { w: 175, h: 238, imgH: 148 };   // side cards (left/right)
+            const P = { w: 110, h: 152 };               // peek cards (far left/right)
+            const sideLeft = "8%";                      // left card position from left
+            const sideRight = "8%";                     // right card position from right
+            const peekLeft = "1%";                      // far left peek position
+            const peekRight = "1%";                     // far right peek position
+
             const ThumbImg = ({ game, height, fallbackSize = 30 }) => {
               const src = getThumb(game);
               return src
@@ -241,8 +250,8 @@ export default function Home() {
 
                   {/* Far left peek */}
                   <div style={{
-                    position: "absolute", left: "1%",
-                    width: 88, height: 122, borderRadius: 9, overflow: "hidden",
+                    position: "absolute", left: peekLeft,
+                    width: P.w, height: P.h, borderRadius: 9, overflow: "hidden",
                     border: "1px solid rgba(123,47,255,0.1)",
                     transform: "perspective(600px) rotateY(40deg) scale(0.75)",
                     zIndex: 1, background: "#0a0616",
@@ -254,8 +263,8 @@ export default function Home() {
 
                   {/* Left card */}
                   <div style={{
-                    position: "absolute", left: "12%",
-                    width: 138, height: 184, borderRadius: 12, overflow: "hidden",
+                    position: "absolute", left: sideLeft,
+                    width: S.w, height: S.h, borderRadius: 12, overflow: "hidden",
                     border: "1px solid rgba(123,47,255,0.25)",
                     transform: "perspective(700px) rotateY(25deg) scale(0.87)",
                     zIndex: 2, background: "#0a0616",
@@ -264,8 +273,8 @@ export default function Home() {
                     opacity: isExit || isEnter ? undefined : 0.7,
                   }}>
                     {getThumb(games[lIdx])
-                      ? <img src={getThumb(games[lIdx])} alt={games[lIdx]?.name} style={{ width: "100%", height: 115, objectFit: "cover", display: "block" }} />
-                      : <FallbackDiv height={115} size={28} />}
+                      ? <img src={getThumb(games[lIdx])} alt={games[lIdx]?.name} style={{ width: "100%", height: S.imgH, objectFit: "cover", display: "block" }} />
+                      : <FallbackDiv height={S.imgH} size={28} />}
                     <div style={{ padding: "7px 9px" }}>
                       <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#b899ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{games[lIdx]?.name}</div>
                       <div style={{ fontSize: 8, color: "rgba(180,150,255,0.4)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", marginBottom: 4 }}>{games[lIdx]?.category || games[lIdx]?.genre || "Arcade"}</div>
@@ -276,7 +285,7 @@ export default function Home() {
                   {/* CENTER — Active */}
                   <div style={{
                     position: "absolute",
-                    width: 182, height: 244, borderRadius: 14, overflow: "hidden",
+                    width: C.w, height: C.h, borderRadius: 14, overflow: "hidden",
                     border: "2px solid rgba(123,47,255,0.9)",
                     zIndex: 4, background: "#0d0a1e", cursor: "pointer",
                     animation: isExit
@@ -290,20 +299,20 @@ export default function Home() {
                     {/* Icon badge */}
                     <div style={{ position: "absolute", top: 10, right: 10, zIndex: 7, width: 28, height: 28, borderRadius: "50%", background: "rgba(123,47,255,0.4)", border: "1px solid rgba(180,150,255,0.5)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🎮</div>
                     {getThumb(games[ci])
-                      ? <img src={getThumb(games[ci])} alt={games[ci]?.name} style={{ width: "100%", height: 162, objectFit: "cover", display: "block" }} />
-                      : <FallbackDiv height={162} size={44} />}
+                      ? <img src={getThumb(games[ci])} alt={games[ci]?.name} style={{ width: "100%", height: C.imgH, objectFit: "cover", display: "block" }} />
+                      : <FallbackDiv height={C.imgH} size={44} />}
                     <div style={{ padding: "10px 12px" }}>
-                      <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 14, color: "#e0d0ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 3 }}>{games[ci]?.name}</div>
-                      <div style={{ fontSize: 10, color: "rgba(180,150,255,0.5)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>{games[ci]?.category || games[ci]?.genre || "Arcade"}</div>
-                      {games[ci]?.rewardRate && <span style={{ fontSize: 11, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 5, padding: "3px 8px" }}>+{games[ci].rewardRate} ARCADE</span>}
+                      <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 15, color: "#e0d0ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 3 }}>{games[ci]?.name}</div>
+                      <div style={{ fontSize: 11, color: "rgba(180,150,255,0.5)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 7 }}>{games[ci]?.category || games[ci]?.genre || "Arcade"}</div>
+                      {games[ci]?.rewardRate && <span style={{ fontSize: 12, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 5, padding: "4px 10px" }}>+{games[ci].rewardRate} ARCADE</span>}
                     </div>
                     <div style={{ position: "absolute", inset: 0, pointerEvents: "none", background: "linear-gradient(180deg,transparent 55%,rgba(123,47,255,0.14) 100%)", borderRadius: 14 }} />
                   </div>
 
                   {/* Right card */}
                   <div style={{
-                    position: "absolute", right: "12%",
-                    width: 138, height: 184, borderRadius: 12, overflow: "hidden",
+                    position: "absolute", right: sideRight,
+                    width: S.w, height: S.h, borderRadius: 12, overflow: "hidden",
                     border: "1px solid rgba(123,47,255,0.25)",
                     transform: "perspective(700px) rotateY(-25deg) scale(0.87)",
                     zIndex: 2, background: "#0a0616",
@@ -312,8 +321,8 @@ export default function Home() {
                     opacity: isExit || isEnter ? undefined : 0.7,
                   }}>
                     {getThumb(games[rIdx])
-                      ? <img src={getThumb(games[rIdx])} alt={games[rIdx]?.name} style={{ width: "100%", height: 115, objectFit: "cover", display: "block" }} />
-                      : <FallbackDiv height={115} size={28} />}
+                      ? <img src={getThumb(games[rIdx])} alt={games[rIdx]?.name} style={{ width: "100%", height: S.imgH, objectFit: "cover", display: "block" }} />
+                      : <FallbackDiv height={S.imgH} size={28} />}
                     <div style={{ padding: "7px 9px" }}>
                       <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#b899ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{games[rIdx]?.name}</div>
                       <div style={{ fontSize: 8, color: "rgba(180,150,255,0.4)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", marginBottom: 4 }}>{games[rIdx]?.category || games[rIdx]?.genre || "Arcade"}</div>
@@ -323,8 +332,8 @@ export default function Home() {
 
                   {/* Far right peek */}
                   <div style={{
-                    position: "absolute", right: "1%",
-                    width: 88, height: 122, borderRadius: 9, overflow: "hidden",
+                    position: "absolute", right: peekRight,
+                    width: P.w, height: P.h, borderRadius: 9, overflow: "hidden",
                     border: "1px solid rgba(123,47,255,0.1)",
                     transform: "perspective(600px) rotateY(-40deg) scale(0.75)",
                     zIndex: 1, background: "#0a0616",
