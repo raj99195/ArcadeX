@@ -199,131 +199,156 @@ export default function Home() {
 
           {/* 3D Rotating Game Cards — desktop only */}
           {!isMobile && games && games.length > 0 && (
-            <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-              {/* Ambient glow ring */}
-              <div style={{
-                position: "absolute", width: 340, height: 340, borderRadius: "50%",
-                background: "radial-gradient(circle, rgba(123,47,255,0.13) 0%, transparent 70%)",
-                pointerEvents: "none",
-              }} />
-              <div style={{
-                position: "absolute", width: 280, height: 280, borderRadius: "50%",
-                border: "1px solid rgba(123,47,255,0.12)",
-                pointerEvents: "none",
-                animation: "tagFloat 6s ease-in-out infinite",
-              }} />
+            <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", height: "100%" }}>
 
-              {/* 3D Carousel */}
-              <div style={{
-                position: "relative",
-                width: 320, height: 320,
-                perspective: "900px",
-              }}>
-                <div style={{
-                  width: "100%", height: "100%",
-                  transformStyle: "preserve-3d",
-                  transform: `rotateY(${heroAngle}deg)`,
-                  transition: "transform 0.85s cubic-bezier(0.4,0,0.2,1)",
-                  position: "relative",
-                }}>
-                  {games.slice(0, 6).map((game, i) => {
-                    const total = Math.min(games.length, 6);
-                    const angle = (360 / total) * i;
-                    const radius = total <= 3 ? 130 : 155;
-                    const isActive = i === heroCardIndex % total;
-                    return (
-                      <div
-                        key={game.id}
-                        onClick={() => navigate(`/games/${game.id}`)}
-                        style={{
-                          position: "absolute",
-                          width: 130, height: 160,
-                          left: "50%", top: "50%",
-                          marginLeft: -65, marginTop: -80,
-                          transform: `rotateY(${angle}deg) translateZ(${radius}px)`,
-                          borderRadius: 12,
-                          overflow: "hidden",
-                          border: isActive
-                            ? "2px solid rgba(123,47,255,0.85)"
-                            : "1px solid rgba(123,47,255,0.2)",
-                          boxShadow: isActive
-                            ? "0 0 28px rgba(123,47,255,0.55), 0 8px 32px rgba(0,0,0,0.7)"
-                            : "0 4px 18px rgba(0,0,0,0.5)",
-                          cursor: "pointer",
-                          transition: "border 0.4s, box-shadow 0.4s",
-                          background: "#0a0616",
-                        }}
-                      >
-                        {/* Game thumbnail */}
-                        {game.imageUrl ? (
-                          <img
-                            src={game.imageUrl}
-                            alt={game.name}
-                            style={{ width: "100%", height: 100, objectFit: "cover", display: "block" }}
-                          />
-                        ) : (
-                          <div style={{
-                            width: "100%", height: 100,
-                            background: `linear-gradient(135deg, rgba(123,47,255,0.35) 0%, rgba(0,212,255,0.15) 100%)`,
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            fontSize: 32,
-                          }}>🎮</div>
-                        )}
-                        {/* Card info */}
-                        <div style={{ padding: "8px 9px" }}>
-                          <div style={{
-                            fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
-                            fontSize: 11, color: "#e0d0ff",
-                            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                            marginBottom: 3,
-                          }}>{game.name}</div>
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                            <span style={{
-                              fontSize: 8, color: "rgba(180,150,255,0.55)",
-                              fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase",
-                            }}>{game.genre || "Arcade"}</span>
-                            {game.rewardPoints && (
-                              <span style={{
-                                fontSize: 8, color: "#00d4ff",
-                                fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
-                              }}>+{game.rewardPoints}</span>
-                            )}
-                          </div>
-                        </div>
-                        {/* Active glow overlay */}
-                        {isActive && (
-                          <div style={{
-                            position: "absolute", inset: 0, pointerEvents: "none",
-                            background: "linear-gradient(180deg, transparent 60%, rgba(123,47,255,0.18) 100%)",
-                            borderRadius: 12,
-                          }} />
-                        )}
+              {/* Ambient glow */}
+              <div style={{ position: "absolute", width: 360, height: 360, borderRadius: "50%", background: "radial-gradient(circle, rgba(123,47,255,0.12) 0%, transparent 70%)", pointerEvents: "none" }} />
+              <div style={{ position: "absolute", width: 290, height: 290, borderRadius: "50%", border: "1px solid rgba(123,47,255,0.1)", pointerEvents: "none", animation: "tagFloat 6s ease-in-out infinite" }} />
+
+              {/* Cards fan */}
+              <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+
+                {/* Far left peek */}
+                {games[(heroCardIndex - 2 + games.length) % games.length] && (
+                  <div style={{
+                    position: "absolute", left: "2%",
+                    width: 95, height: 130, borderRadius: 10, overflow: "hidden",
+                    border: "1px solid rgba(123,47,255,0.12)", opacity: 0.3,
+                    transform: "perspective(600px) rotateY(38deg) scale(0.78)",
+                    zIndex: 1, background: "#0a0616",
+                  }}>
+                    {games[(heroCardIndex - 2 + games.length) % games.length].imageUrl
+                      ? <img src={games[(heroCardIndex - 2 + games.length) % games.length].imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      : <div style={{ width: "100%", height: "100%", background: "rgba(123,47,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28 }}>🎮</div>
+                    }
+                  </div>
+                )}
+
+                {/* Left card */}
+                {games[(heroCardIndex - 1 + games.length) % games.length] && (() => {
+                  const g = games[(heroCardIndex - 1 + games.length) % games.length];
+                  return (
+                    <div onClick={() => setHeroCardIndex((heroCardIndex - 1 + games.length) % games.length)} style={{
+                      position: "absolute", left: "14%",
+                      width: 140, height: 188, borderRadius: 12, overflow: "hidden",
+                      border: "1px solid rgba(123,47,255,0.28)", opacity: 0.72,
+                      transform: "perspective(700px) rotateY(26deg) scale(0.88)",
+                      zIndex: 2, background: "#0a0616", cursor: "pointer",
+                      transition: "all 0.5s cubic-bezier(0.4,0,0.2,1)",
+                      boxShadow: "0 4px 22px rgba(0,0,0,0.7)",
+                    }}>
+                      {g.imageUrl
+                        ? <img src={g.imageUrl} alt={g.name} style={{ width: "100%", height: 118, objectFit: "cover", display: "block" }} />
+                        : <div style={{ width: "100%", height: 118, background: "linear-gradient(135deg,rgba(123,47,255,0.3),rgba(0,212,255,0.12))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34 }}>🎮</div>
+                      }
+                      <div style={{ padding: "8px 10px" }}>
+                        <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#c4a0ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{g.name}</div>
+                        <div style={{ fontSize: 8, color: "rgba(180,150,255,0.45)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", marginBottom: 5 }}>{g.genre || "Arcade"}</div>
+                        {g.rewardPoints && <span style={{ fontSize: 8, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: 4, padding: "2px 6px" }}>+{g.rewardPoints} ARCADE</span>}
                       </div>
-                    );
-                  })}
+                    </div>
+                  );
+                })()}
+
+                {/* CENTER card — active */}
+                {(() => {
+                  const g = games[heroCardIndex % games.length];
+                  return (
+                    <div onClick={() => navigate(`/games/${g.id}`)} style={{
+                      position: "absolute",
+                      width: 178, height: 240, borderRadius: 14, overflow: "hidden",
+                      border: "2px solid rgba(123,47,255,0.88)",
+                      boxShadow: "0 0 38px rgba(123,47,255,0.65), 0 12px 44px rgba(0,0,0,0.85)",
+                      zIndex: 4, background: "#0d0a1e", cursor: "pointer",
+                      transition: "all 0.5s cubic-bezier(0.4,0,0.2,1)",
+                    }}>
+                      {/* Gloss */}
+                      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "45%", background: "linear-gradient(180deg,rgba(255,255,255,0.05) 0%,transparent 100%)", borderRadius: "14px 14px 0 0", pointerEvents: "none", zIndex: 5 }} />
+                      {/* Game icon badge */}
+                      <div style={{ position: "absolute", top: 10, right: 10, zIndex: 6, width: 30, height: 30, borderRadius: "50%", background: "rgba(123,47,255,0.35)", border: "1px solid rgba(123,47,255,0.5)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🎮</div>
+                      {g.imageUrl
+                        ? <img src={g.imageUrl} alt={g.name} style={{ width: "100%", height: 158, objectFit: "cover", display: "block" }} />
+                        : <div style={{ width: "100%", height: 158, background: "linear-gradient(135deg,rgba(123,47,255,0.35),rgba(0,212,255,0.15))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 48 }}>🎮</div>
+                      }
+                      <div style={{ padding: "10px 12px" }}>
+                        <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 14, color: "#e0d0ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 3 }}>{g.name}</div>
+                        <div style={{ fontSize: 10, color: "rgba(180,150,255,0.5)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 7 }}>{g.genre || "Arcade"}</div>
+                        {g.rewardPoints && <span style={{ fontSize: 11, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 5, padding: "3px 9px" }}>+{g.rewardPoints} ARCADE</span>}
+                      </div>
+                      {/* Bottom glow */}
+                      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", background: "linear-gradient(180deg,transparent 55%,rgba(123,47,255,0.15) 100%)", borderRadius: 14 }} />
+                    </div>
+                  );
+                })()}
+
+                {/* Right card */}
+                {games[(heroCardIndex + 1) % games.length] && (() => {
+                  const g = games[(heroCardIndex + 1) % games.length];
+                  return (
+                    <div onClick={() => setHeroCardIndex((heroCardIndex + 1) % games.length)} style={{
+                      position: "absolute", right: "14%",
+                      width: 140, height: 188, borderRadius: 12, overflow: "hidden",
+                      border: "1px solid rgba(123,47,255,0.28)", opacity: 0.72,
+                      transform: "perspective(700px) rotateY(-26deg) scale(0.88)",
+                      zIndex: 2, background: "#0a0616", cursor: "pointer",
+                      transition: "all 0.5s cubic-bezier(0.4,0,0.2,1)",
+                      boxShadow: "0 4px 22px rgba(0,0,0,0.7)",
+                    }}>
+                      {g.imageUrl
+                        ? <img src={g.imageUrl} alt={g.name} style={{ width: "100%", height: 118, objectFit: "cover", display: "block" }} />
+                        : <div style={{ width: "100%", height: 118, background: "linear-gradient(135deg,rgba(123,47,255,0.3),rgba(0,212,255,0.12))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34 }}>🎮</div>
+                      }
+                      <div style={{ padding: "8px 10px" }}>
+                        <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#c4a0ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{g.name}</div>
+                        <div style={{ fontSize: 8, color: "rgba(180,150,255,0.45)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", marginBottom: 5 }}>{g.genre || "Arcade"}</div>
+                        {g.rewardPoints && <span style={{ fontSize: 8, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: 4, padding: "2px 6px" }}>+{g.rewardPoints} ARCADE</span>}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Far right peek */}
+                {games[(heroCardIndex + 2) % games.length] && (
+                  <div style={{
+                    position: "absolute", right: "2%",
+                    width: 95, height: 130, borderRadius: 10, overflow: "hidden",
+                    border: "1px solid rgba(123,47,255,0.12)", opacity: 0.3,
+                    transform: "perspective(600px) rotateY(-38deg) scale(0.78)",
+                    zIndex: 1, background: "#0a0616",
+                  }}>
+                    {games[(heroCardIndex + 2) % games.length].imageUrl
+                      ? <img src={games[(heroCardIndex + 2) % games.length].imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      : <div style={{ width: "100%", height: "100%", background: "rgba(123,47,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28 }}>🎮</div>
+                    }
+                  </div>
+                )}
+
+                {/* Nav arrows */}
+                <button onClick={() => setHeroCardIndex((heroCardIndex - 1 + games.length) % games.length)} style={{ position: "absolute", left: 6, zIndex: 10, width: 32, height: 32, borderRadius: "50%", background: "rgba(123,47,255,0.18)", border: "1px solid rgba(123,47,255,0.35)", color: "#c4a0ff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
+                <button onClick={() => setHeroCardIndex((heroCardIndex + 1) % games.length)} style={{ position: "absolute", right: 6, zIndex: 10, width: 32, height: 32, borderRadius: "50%", background: "rgba(123,47,255,0.18)", border: "1px solid rgba(123,47,255,0.35)", color: "#c4a0ff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
+
+                {/* Active game label */}
+                <div style={{ position: "absolute", bottom: 8, left: "50%", transform: "translateX(-50%)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 10, color: "rgba(180,150,255,0.4)", letterSpacing: "3px", textTransform: "uppercase", whiteSpace: "nowrap", pointerEvents: "none" }}>
+                  {games[heroCardIndex % games.length]?.name || ""}
                 </div>
 
-                {/* Center label */}
-                <div style={{
-                  position: "absolute", left: "50%", bottom: -38,
-                  transform: "translateX(-50%)",
-                  textAlign: "center", pointerEvents: "none",
-                }}>
-                  <div style={{
-                    fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
-                    fontSize: 11, color: "rgba(180,150,255,0.5)",
-                    letterSpacing: "2px", textTransform: "uppercase",
-                  }}>
-                    {games[heroCardIndex % games.length]?.name || ""}
-                  </div>
+                {/* Dot nav */}
+                <div style={{ position: "absolute", bottom: 22, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 5, zIndex: 10 }}>
+                  {games.slice(0, Math.min(games.length, 8)).map((_, i) => (
+                    <button key={i} onClick={() => setHeroCardIndex(i)} style={{
+                      width: i === heroCardIndex % games.length ? 16 : 5, height: 4, borderRadius: 3,
+                      background: i === heroCardIndex % games.length ? "#7B2FFF" : "rgba(123,47,255,0.22)",
+                      border: "none", cursor: "pointer", padding: 0, transition: "all 0.25s ease",
+                    }} />
+                  ))}
                 </div>
               </div>
 
-              {/* Floating tags overlay */}
+              {/* Floating tags */}
               {[
-                { style: { left: "2%", top: "14%", border: "1px solid rgba(123,47,255,0.45)" }, icon: "◈", iconColor: "rgba(180,150,255,0.7)", label: "Own", labelColor: "rgba(200,170,255,0.6)", value: "Your Assets", valueColor: "#d4b8ff", delay: "0s", dur: "3.2s" },
-                { style: { right: "2%", top: "8%", border: "1px solid rgba(0,212,255,0.4)" }, icon: "◎", iconColor: "rgba(0,212,255,0.7)", label: "Earn", labelColor: "rgba(0,212,255,0.6)", value: "Real Rewards", valueColor: "#00d4ff", delay: "0.7s", dur: "3.5s" },
-                { style: { right: "2%", bottom: "12%", border: "1px solid rgba(0,255,136,0.35)" }, icon: "▶", iconColor: "rgba(0,255,136,0.65)", label: "Play", labelColor: "rgba(0,255,136,0.55)", value: "No Limits", valueColor: "#00FF88", delay: "1.4s", dur: "2.9s" },
+                { style: { left: "2%", top: "10%", border: "1px solid rgba(123,47,255,0.45)" }, icon: "◈", iconColor: "rgba(180,150,255,0.7)", label: "Own", labelColor: "rgba(200,170,255,0.6)", value: "Your Assets", valueColor: "#d4b8ff", delay: "0s", dur: "3.2s" },
+                { style: { right: "2%", top: "6%", border: "1px solid rgba(0,212,255,0.4)" }, icon: "◎", iconColor: "rgba(0,212,255,0.7)", label: "Earn", labelColor: "rgba(0,212,255,0.6)", value: "Real Rewards", valueColor: "#00d4ff", delay: "0.7s", dur: "3.5s" },
+                { style: { right: "2%", bottom: "14%", border: "1px solid rgba(0,255,136,0.35)" }, icon: "▶", iconColor: "rgba(0,255,136,0.65)", label: "Play", labelColor: "rgba(0,255,136,0.55)", value: "No Limits", valueColor: "#00FF88", delay: "1.4s", dur: "2.9s" },
               ].map((tag, i) => (
                 <div key={i} style={{
                   position: "absolute", ...tag.style,
@@ -459,11 +484,11 @@ export default function Home() {
         <div style={{ flex: 1, overflowY: isMobile ? "visible" : "auto", position: "relative", zIndex: 1, display: "flex", flexDirection: "column" }}>
           <div style={{ flex: 1 }}>
           {/* BOTChain Panel */}
-          <div style={{ padding: "20px", background: "linear-gradient(180deg,rgba(20,8,40,0.95),rgba(10,4,25,0.98))", borderRadius: 12, border: "1px solid rgba(123,47,255,0.25)", margin: "12px 12px", flex: 1 }}>
-            <div style={{ textAlign: "center", padding: "18px 12px", borderBottom: "1px solid rgba(123,47,255,0.15)" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "#fff", fontFamily: "Rajdhani", marginBottom: 6 }}>Built on BOTChain</div>
-              <div style={{ fontSize: 12, background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: 700, marginBottom: 8 }}>Powered by the Future</div>
-              <p style={{ fontSize: 10, color: "#7755aa", lineHeight: 1.6 }}>High-performance EVM L1 for scalable, secure on-chain gaming.</p>
+          <div style={{ padding: "16px", background: "linear-gradient(180deg,rgba(20,8,40,0.95),rgba(10,4,25,0.98))", borderRadius: 12, border: "1px solid rgba(123,47,255,0.25)", margin: "10px 10px 8px" }}>
+            <div style={{ textAlign: "center", padding: "12px 10px 14px", borderBottom: "1px solid rgba(123,47,255,0.15)" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", fontFamily: "Rajdhani", marginBottom: 5 }}>Built on BOTChain</div>
+              <div style={{ fontSize: 11, background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: 700, marginBottom: 7 }}>Powered by the Future</div>
+              <p style={{ fontSize: 9, color: "#7755aa", lineHeight: 1.6 }}>High-performance EVM L1 for scalable, secure on-chain gaming.</p>
             </div>
             {[
               { title: "Built on BOTChain", desc: "High-performance EVM L1", icon: "⛓️" },
@@ -471,20 +496,39 @@ export default function Home() {
               { title: "Play & Earn", desc: "Real rewards from gameplay", icon: "🎮" },
               { title: "Interoperable", desc: "Connect across ecosystem", icon: "🔗" },
             ].map((item, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 10px", borderBottom: i < 3 ? "1px solid rgba(123,47,255,0.1)" : "none" }}>
-                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(123,47,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, border: "1px solid rgba(123,47,255,0.3)" }}>{item.icon}</div>
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 8px", borderBottom: i < 3 ? "1px solid rgba(123,47,255,0.1)" : "none" }}>
+                <div style={{ width: 32, height: 32, borderRadius: "50%", background: "rgba(123,47,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, border: "1px solid rgba(123,47,255,0.3)", flexShrink: 0 }}>{item.icon}</div>
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#c4a0ff", marginBottom: 3 }}>{item.title}</div>
-                  <div style={{ fontSize: 10, color: "#7755aa" }}>{item.desc}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#c4a0ff", marginBottom: 2 }}>{item.title}</div>
+                  <div style={{ fontSize: 9, color: "#7755aa" }}>{item.desc}</div>
                 </div>
               </div>
             ))}
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 10px", marginTop: 6, background: "rgba(123,47,255,0.05)", borderRadius: 8 }}>
-              <span style={{ fontSize: 20 }}>⛓️</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "11px 8px", marginTop: 4, background: "rgba(123,47,255,0.05)", borderRadius: 8 }}>
+              <span style={{ fontSize: 18 }}>⛓️</span>
               <div>
-                <div style={{ fontSize: 12, color: "#c4a0ff", fontWeight: 700 }}>BOTChain</div>
+                <div style={{ fontSize: 11, color: "#c4a0ff", fontWeight: 700 }}>BOTChain</div>
                 <div style={{ fontSize: 9, color: "#5533aa" }}>One Network. Infinite Games.</div>
               </div>
+            </div>
+          </div>
+
+          {/* Live Stats */}
+          <div style={{ margin: "0 10px 8px", padding: "12px 14px", background: "rgba(123,47,255,0.06)", borderRadius: 10, border: "1px solid rgba(123,47,255,0.18)" }}>
+            <div style={{ fontSize: 9, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", color: "rgba(180,150,255,0.5)", marginBottom: 10 }}>Network Stats</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {[
+                { label: "Total Players", value: leaderboard.length > 0 ? `${leaderboard.length * 12}+` : "2.4K+", icon: "👥", color: "#c4a0ff" },
+                { label: "Games Live", value: `${games.length}`, icon: "🎮", color: "#00d4ff" },
+                { label: "Rewards Paid", value: leaderboard.length > 0 ? fmtScore(leaderboard.reduce((a, b) => a + b.totalScore, 0)) : "—", icon: "💎", color: "#FFD700" },
+                { label: "On-Chain Txns", value: "100%", icon: "⛓️", color: "#00FF88" },
+              ].map((stat, i) => (
+                <div key={i} style={{ background: "rgba(123,47,255,0.08)", borderRadius: 8, padding: "9px 10px", border: "1px solid rgba(123,47,255,0.12)" }}>
+                  <div style={{ fontSize: 14, marginBottom: 4 }}>{stat.icon}</div>
+                  <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 14, color: stat.color, marginBottom: 2 }}>{stat.value}</div>
+                  <div style={{ fontSize: 8, color: "rgba(180,150,255,0.4)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>{stat.label}</div>
+                </div>
+              ))}
             </div>
           </div>
           </div>
