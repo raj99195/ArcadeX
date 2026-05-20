@@ -673,6 +673,171 @@ export default function Creator() {
           </div>
         )}
 
+        {/* TOURNAMENTS TAB */}
+        {activeTab === "tournaments" && (
+          <div>
+            {/* Header row with Create button */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <div>
+                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 16, color: "#c4a0ff" }}>My Tournaments</div>
+                <div style={{ fontSize: 11, color: "#5533aa", fontFamily: P.raj, marginTop: 2 }}>Create and manage tournaments for your games</div>
+              </div>
+              <Btn onClick={() => setShowCreateTournament(v => !v)} style={{ padding: "10px 20px" }}>
+                {showCreateTournament ? "✕ Cancel" : "🏆 Create Tournament"}
+              </Btn>
+            </div>
+
+            {/* Create Tournament Form */}
+            {showCreateTournament && (
+              <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 12, padding: 24, marginBottom: 24 }}>
+                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 18 }}>Tournament Details</div>
+
+                {myGames.length === 0 ? (
+                  <div style={{ padding: "24px", textAlign: "center" }}>
+                    <div style={{ fontSize: 11, color: "#5533aa", fontFamily: P.raj, marginBottom: 12 }}>You need at least one approved game to create a tournament.</div>
+                    <Btn onClick={() => setActiveTab("submit")} variant="ghost">Submit a Game First →</Btn>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    {/* Select Game */}
+                    <div>
+                      <label style={labelStyle}>Select Game <span style={{ color: "#ff4444" }}>*</span></label>
+                      <select
+                        value={tForm.gameId}
+                        onChange={e => setTForm(f => ({ ...f, gameId: e.target.value }))}
+                        className="cr-input cr-select"
+                        style={inputStyle}
+                      >
+                        <option value="">-- Choose a game --</option>
+                        {myGames.filter(g => g.status === "approved").map(g => (
+                          <option key={g.id} value={g.id}>{g.name} (#{g.gameId})</option>
+                        ))}
+                      </select>
+                      {myGames.filter(g => g.status === "approved").length === 0 && (
+                        <div style={{ fontSize: 10, color: "#FFB800", fontFamily: P.raj, marginTop: 5 }}>⚠ No approved games yet — submit and get approved first.</div>
+                      )}
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 12 }}>
+                      <div>
+                        <label style={labelStyle}>Entry Fee (ARCADE)</label>
+                        <input
+                          type="number" min="0" value={tForm.entryFee}
+                          onChange={e => setTForm(f => ({ ...f, entryFee: e.target.value }))}
+                          className="cr-input" style={inputStyle}
+                        />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>Max Players</label>
+                        <input
+                          type="number" min="2" max="1000" value={tForm.maxPlayers}
+                          onChange={e => setTForm(f => ({ ...f, maxPlayers: e.target.value }))}
+                          className="cr-input" style={inputStyle}
+                        />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>Duration (Hours)</label>
+                        <input
+                          type="number" min="1" max="168" value={tForm.durationInHours}
+                          onChange={e => setTForm(f => ({ ...f, durationInHours: e.target.value }))}
+                          className="cr-input" style={inputStyle}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Info box */}
+                    <div style={{ background: "rgba(123,47,255,0.05)", border: `1px solid ${P.b}`, borderRadius: 8, padding: "12px 14px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      {[
+                        ["Prize Pool", `${Number(tForm.entryFee || 0) * Number(tForm.maxPlayers || 0)} ARCADE`],
+                        ["Starts In", "~1 min after creation"],
+                        ["Max Players", tForm.maxPlayers],
+                        ["Duration", `${tForm.durationInHours}h`],
+                      ].map(([k, v]) => (
+                        <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "5px 0", borderBottom: `1px solid ${P.b}` }}>
+                          <span style={{ color: "#5533aa", fontFamily: P.raj }}>{k}</span>
+                          <span style={{ color: "#c4a0ff", fontFamily: P.raj, fontWeight: 700 }}>{v}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {tMsg && (
+                      <div style={{ padding: 10, background: tMsg.startsWith("Error") ? "rgba(255,68,68,0.07)" : "rgba(0,255,136,0.06)", border: `1px solid ${tMsg.startsWith("Error") ? "rgba(255,68,68,0.2)" : "rgba(0,255,136,0.15)"}`, borderRadius: 7, color: tMsg.startsWith("Error") ? "#ff4444" : "#00FF88", fontSize: 11, fontFamily: P.raj }}>
+                        {tMsg}
+                      </div>
+                    )}
+
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <Btn onClick={() => { setShowCreateTournament(false); setTMsg(""); }} variant="ghost" style={{ flex: 1 }}>Cancel</Btn>
+                      <Btn onClick={handleCreateTournament} disabled={tCreating || !tForm.gameId} style={{ flex: 2 }}>
+                        {tCreating ? "Creating on BOTChain..." : "🚀 Create Tournament"}
+                      </Btn>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tournament list */}
+            {tournamentsLoading ? (
+              <div style={{ padding: 48, textAlign: "center", fontSize: 11, color: "#9977cc", fontFamily: P.raj, textTransform: "uppercase", letterSpacing: "2px" }}>Loading tournaments...</div>
+            ) : myTournaments.length === 0 ? (
+              <div style={{ padding: 56, textAlign: "center" }}>
+                <div style={{ width: 60, height: 60, borderRadius: "50%", background: P.p2, border: `1px solid ${P.pb}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, margin: "0 auto 16px" }}>🏆</div>
+                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 16, color: "#c4a0ff", marginBottom: 6 }}>No tournaments yet</div>
+                <div style={{ fontSize: 12, color: "#9977cc", marginBottom: 20, fontFamily: P.raj }}>Create your first tournament to get started</div>
+                <Btn onClick={() => setShowCreateTournament(true)}>Create First Tournament →</Btn>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {myTournaments.map(t => {
+                  const statusLabel = t.status === 0 ? { label: "⏳ Upcoming", color: "#FFB800", bg: "rgba(255,184,0,0.08)", border: "rgba(255,184,0,0.2)" }
+                    : t.status === 1 ? { label: "🟢 Active", color: "#00FF88", bg: "rgba(0,255,136,0.08)", border: "rgba(0,255,136,0.2)" }
+                    : { label: "✓ Ended", color: "#7755aa", bg: "rgba(123,47,255,0.08)", border: "rgba(123,47,255,0.2)" };
+                  const prizePool = Number(t.prizePool) / 1e18;
+                  const endTime = new Date(Number(t.endTime) * 1000);
+                  return (
+                    <div key={t.id} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: "14px 18px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                      {t.gameThumbnail && (
+                        <img src={t.gameThumbnail} alt="" style={{ width: 50, height: 50, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                          <span style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#d4b8ff" }}>{t.gameName}</span>
+                          <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 3, fontWeight: 700, background: statusLabel.bg, color: statusLabel.color, border: `1px solid ${statusLabel.border}`, fontFamily: P.raj }}>{statusLabel.label}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                          {[
+                            ["Players", `${t.players?.length || 0} / ${Number(t.maxPlayers)}`],
+                            ["Entry Fee", `${Number(t.entryFee) / 1e18} ARCADE`],
+                            ["Prize Pool", `${prizePool.toFixed(0)} ARCADE`],
+                            ["Ends", endTime.toLocaleDateString()],
+                          ].map(([k, v]) => (
+                            <div key={k} style={{ fontSize: 10, color: "#9977cc", fontFamily: P.raj }}>
+                              <span style={{ color: "#5533aa" }}>{k}: </span>
+                              <span style={{ color: "#c4a0ff", fontWeight: 700 }}>{v}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      {t.status === 1 && !t.prizesDistributed && (
+                        <Btn onClick={() => handleEndTournament(t.id)} variant="ghost" style={{ fontSize: 11, padding: "7px 14px", flexShrink: 0 }}>
+                          End & Distribute 🏆
+                        </Btn>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {tMsg && !showCreateTournament && (
+              <div style={{ marginTop: 14, padding: 10, background: tMsg.startsWith("Error") ? "rgba(255,68,68,0.07)" : "rgba(0,255,136,0.06)", border: `1px solid ${tMsg.startsWith("Error") ? "rgba(255,68,68,0.2)" : "rgba(0,255,136,0.15)"}`, borderRadius: 7, color: tMsg.startsWith("Error") ? "#ff4444" : "#00FF88", fontSize: 11, fontFamily: P.raj }}>
+                {tMsg}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* SUBMIT TAB */}
         {activeTab === "submit" && (
           <div>
