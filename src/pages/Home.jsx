@@ -221,7 +221,7 @@ export default function Home() {
             const isEnter = carouselAnim === "enter";
 
             // ── SIZE CONTROLS ── change these to resize everything
-            const C = { w: 230, h: 310, imgH: 200 };   // center card
+            const C = { w: 330, h: 410, imgH: 200 };   // center card
             const S = { w: 175, h: 238, imgH: 148 };   // side cards (left/right)
             const P = { w: 110, h: 152 };               // peek cards (far left/right)
             const sideLeft = "8%";                      // left card position from left
