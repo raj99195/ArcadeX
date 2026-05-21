@@ -123,13 +123,13 @@ function LeaderboardPanel({ tournament, onClose, navigate, publicClient }) {
 
   return (
     <>
-      {/* Backdrop */}
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)" }} />
+      {/* Backdrop - only covers area left of panel */}
+      <div onClick={onClose} style={{ position: "fixed", top: 54, left: 0, right: 420, bottom: 0, zIndex: 1000, background: "rgba(0,0,0,0.3)", backdropFilter: "blur(2px)" }} />
 
       {/* Slide-in panel */}
       <div style={{
-        position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 1001,
-        width: "min(480px, 100vw)",
+        position: "fixed", top: 54, right: 0, bottom: 0, zIndex: 1001,
+        width: 420,
         background: "#0d0a20",
         borderLeft: "1px solid rgba(123,47,255,0.25)",
         display: "flex", flexDirection: "column",
