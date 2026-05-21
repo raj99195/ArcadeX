@@ -61,9 +61,6 @@ const ERC20_APPROVE_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
 ];
 
-const MIN_REWARD_RATE = parseInt(import.meta.env.VITE_MIN_REWARD_RATE || "10");
-const MAX_REWARD_RATE = parseInt(import.meta.env.VITE_MAX_REWARD_RATE || "500");
-
 const DICEBEAR_STYLES = [
   { id: "bottts",      label: "🤖 Robot",    desc: "Web3 vibe"    },
   { id: "pixel-art",   label: "👾 Pixel",    desc: "Arcade style" },
@@ -281,6 +278,7 @@ export default function Creator() {
         functionName: "mintCreatorNFT",
         args: [username, selectedStyle],
         gas: BigInt(500000),
+        chainId: 968,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
@@ -291,6 +289,7 @@ export default function Creator() {
         functionName: "initCreator",
         args: [address],
         gas: BigInt(200000),
+        chainId: 968,
       });
 
       // 3. Save to Firebase
@@ -342,30 +341,59 @@ export default function Creator() {
     setTCreating(true);
     setTMsg("");
     try {
-      const selectedGame = myGames.find(g => String(g.id) === String(tForm.gameId));
-      if (!selectedGame) throw new Error("Game not found");
+      const selGame = myGames.find(g => String(g.id) === String(tForm.gameId));
+      if (!selGame) throw new Error("Game not found");
+
+      // gameId must be on-chain numeric gameId, not Firestore doc id
+      const onChainGameId = selGame.gameId || selGame.id;
+
       const startTime = BigInt(Math.floor(Date.now() / 1000) + 60);
+      const entryFeeWei = BigInt(Math.floor(Number(tForm.entryFee) * 1e18));
+
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
-        address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "createTournament",
-        args: [BigInt(selectedGame.id), selectedGame.name, selectedGame.thumbnailUrl || "", BigInt(Number(tForm.entryFee) * 1e18), BigInt(tForm.maxPlayers), startTime, BigInt(tForm.durationInHours)],
+        address: TOURNAMENT_ADDRESS,
+        abi: TOURNAMENT_ABI,
+        functionName: "createTournament",
+        args: [
+          BigInt(onChainGameId),
+          selGame.name,
+          selGame.thumbnailUrl || "",
+          entryFeeWei,
+          BigInt(tForm.maxPlayers),
+          startTime,
+          BigInt(tForm.durationInHours),
+        ],
         gas: BigInt(500000),
+        chainId: 968, // BOTChain testnet — explicit chainId fix
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       setTMsg("✓ Tournament created successfully!");
       setShowCreateTournament(false);
       setTForm({ gameId: "", entryFee: "100", maxPlayers: "10", durationInHours: "24" });
       await fetchMyTournaments();
-    } catch (err) { setTMsg("Error: " + err.message); }
+    } catch (err) {
+      console.error("Tournament create error:", err);
+      setTMsg("Error: " + (err.shortMessage || err.message));
+    }
     finally { setTCreating(false); }
   };
 
   const handleEndTournament = async (tournamentId) => {
     try {
-      const hash = await writeContract(wagmiAdapter.wagmiConfig, { address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "endTournamentAndDistribute", args: [BigInt(tournamentId)], gas: BigInt(300000) });
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address: TOURNAMENT_ADDRESS,
+        abi: TOURNAMENT_ABI,
+        functionName: "endTournamentAndDistribute",
+        args: [BigInt(tournamentId)],
+        gas: BigInt(300000),
+        chainId: 968,
+      });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       setTMsg("🏆 Prizes distributed!");
       await fetchMyTournaments();
-    } catch (err) { setTMsg("Error: " + err.message); }
+    } catch (err) {
+      setTMsg("Error: " + (err.shortMessage || err.message));
+    }
   };
 
   const uploadToCloudinary = async (file) => {
@@ -404,10 +432,6 @@ export default function Creator() {
 
   const submitGame = async () => {
     if (!form.name || !form.iframeUrl || !form.description) { setError("Fill in all required fields."); return; }
-    const rate = parseInt(form.rewardRate);
-    if (isNaN(rate) || rate < MIN_REWARD_RATE || rate > MAX_REWARD_RATE) {
-      setError(`Reward rate must be between ${MIN_REWARD_RATE} and ${MAX_REWARD_RATE} ARCADE.`); return;
-    }
     if (!validateUrl(form.iframeUrl)) { setError("Enter a valid game URL."); return; }
     if (!form.thumbnailUrl) { setError("Please upload a thumbnail image."); return; }
     setError("");
@@ -438,6 +462,7 @@ export default function Creator() {
         functionName: "registerGame",
         args: [form.name, form.iframeUrl, BigInt(parseInt(form.rewardRate) || MIN_REWARD_RATE)],
         gas: BigInt(500000),
+        chainId: 968,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
@@ -634,12 +659,8 @@ export default function Creator() {
         {/* Profile card — NFT identity */}
         <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 12, padding: "16px 22px", marginBottom: 22, display: "flex", alignItems: "center", gap: 16, position: "relative", overflow: "hidden" }}>
           <div style={{ position: "absolute", top: -30, right: -30, width: 150, height: 150, background: "radial-gradient(circle, rgba(123,47,255,0.12) 0%, transparent 70%)", borderRadius: "50%", pointerEvents: "none" }} />
-          <div style={{ width: 46, height: 46, borderRadius: "50%", overflow: "hidden", border: "2px solid rgba(123,47,255,0.5)", flexShrink: 0, boxShadow: "0 0 16px rgba(123,47,255,0.4)", background: "#0e0c1a" }}>
-            <img
-              src={`https://api.dicebear.com/9.x/${nftProfile?.avatarColor || "bottts"}/svg?seed=${nftProfile?.username || address}`}
-              alt="avatar"
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            />
+          <div style={{ width: 46, height: 46, borderRadius: "50%", background: "#0e0c1a", border: `2px solid ${nftProfile?.avatarColor || "#7B2FFF"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 900, color: nftProfile?.avatarColor || "#7B2FFF", fontFamily: "Arial Black, sans-serif", flexShrink: 0, boxShadow: `0 0 16px ${nftProfile?.avatarColor || "#7B2FFF"}44` }}>
+            {nftProfile?.username?.slice(0, 2).toUpperCase() || "??"}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
@@ -968,10 +989,7 @@ export default function Creator() {
                   </div>
                   <div>
                     <label style={labelStyle}>Reward Rate (ARCADE)</label>
-                    <input name="rewardRate" value={form.rewardRate} onChange={handleChange} type="number" min={MIN_REWARD_RATE} max={MAX_REWARD_RATE} className="cr-input" style={inputStyle} />
-                    <div style={{ fontSize: 10, color: "#5533aa", marginTop: 4, fontFamily: P.raj }}>
-                      Min: <span style={{ color: "#a67fff" }}>{MIN_REWARD_RATE}</span> · Max: <span style={{ color: "#a67fff" }}>{MAX_REWARD_RATE}</span> ARCADE per play
-                    </div>
+                    <input name="rewardRate" value={form.rewardRate} onChange={handleChange} type="number" min="10" max="500" className="cr-input" style={inputStyle} />
                   </div>
                 </div>
                 {error && <div style={{ padding: 10, background: "rgba(255,68,68,0.07)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 7, color: "#ff4444", fontSize: 11, fontFamily: P.raj }}>{error}</div>}
