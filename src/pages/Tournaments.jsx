@@ -88,8 +88,169 @@ function PrizePoolCounter({ prizePool }) {
   return <span>{display.toFixed(0)}</span>;
 }
 
-// Fix 5: Live Leaderboard Modal
-function LeaderboardModal({ tournament, onClose, navigate }) {
+// Slide-in Leaderboard Panel
+function LeaderboardPanel({ tournament, onClose, navigate }) {
+  const [players, setPlayers] = useState([]);
+  const [scores, setScores] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const publicClient = usePublicClient();
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [addrs, scrs] = await publicClient.readContract({
+          address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI,
+          functionName: "getTournamentPlayers", args: [BigInt(tournament.id)]
+        });
+        const combined = addrs.map((a, i) => ({ address: a, score: Number(scrs[i]) })).sort((a, b) => b.score - a.score);
+        setPlayers(combined.map(c => c.address));
+        setScores(combined.map(c => c.score));
+      } catch (err) { console.error(err); }
+      finally { setLoading(false); }
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 10000);
+    return () => clearInterval(interval);
+  }, [tournament.id]);
+
+  const entryFee = Number(tournament.entryFee) / 1e18;
+  const pool = players.length * entryFee * 0.95;
+  const prizes = [pool * 0.6, pool * 0.25, pool * 0.15];
+  const podiumColors = ["#FFB700", "#C0C0C0", "#CD7F32"];
+  const podiumBg = ["rgba(255,183,0,0.1)", "rgba(192,192,192,0.08)", "rgba(205,127,50,0.08)"];
+  const podiumBorder = ["rgba(255,183,0,0.3)", "rgba(192,192,192,0.25)", "rgba(205,127,50,0.25)"];
+  const medals = ["🥇", "🥈", "🥉"];
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }} />
+
+      {/* Slide-in Panel */}
+      <div style={{
+        position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 1001,
+        width: "min(480px, 100vw)",
+        background: "#0d0a20",
+        borderLeft: "1px solid rgba(123,47,255,0.25)",
+        display: "flex", flexDirection: "column",
+        animation: "slideInPanel 0.35s cubic-bezier(0.4,0,0.2,1) forwards",
+        boxShadow: "-20px 0 60px rgba(0,0,0,0.8)",
+      }}>
+        {/* Top accent */}
+        <div style={{ height: 3, background: "linear-gradient(90deg,#7B2FFF,#FFB700,#00d4ff)", flexShrink: 0 }} />
+
+        {/* Header */}
+        <div style={{ padding: "18px 22px 14px", borderBottom: "1px solid rgba(123,47,255,0.12)", background: "rgba(123,47,255,0.05)", flexShrink: 0 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 24 }}>🏆</span>
+              <div>
+                <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 18, color: "#fff", textTransform: "uppercase" }}>Leaderboard</div>
+                <div style={{ fontSize: 11, color: "#7755aa", fontFamily: "'Rajdhani',sans-serif" }}>{tournament.gameName}</div>
+              </div>
+            </div>
+            <button onClick={onClose} style={{ background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 7, color: "#ff6b6b", padding: "6px 14px", cursor: "pointer", fontSize: 12, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>✕ Close</button>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 10px", background: "rgba(0,255,136,0.08)", border: "1px solid rgba(0,255,136,0.2)", borderRadius: 20, fontSize: 10, color: "#00FF88", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "livePulse 1s infinite" }} />
+              LIVE
+            </span>
+            <span style={{ padding: "3px 10px", background: "rgba(255,183,0,0.08)", border: "1px solid rgba(255,183,0,0.2)", borderRadius: 20, fontSize: 10, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
+              💰 {pool.toFixed(0)} ARCADE
+            </span>
+            <span style={{ padding: "3px 10px", background: "rgba(123,47,255,0.08)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 20, fontSize: 10, color: "#a67fff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
+              👥 {players.length} Players
+            </span>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}>
+          {loading ? (
+            <div style={{ padding: 48, textAlign: "center", color: "#5533aa", fontFamily: "'Rajdhani',sans-serif", fontSize: 13 }}>Loading scores...</div>
+          ) : players.length === 0 ? (
+            <div style={{ padding: 48, textAlign: "center" }}>
+              <div style={{ fontSize: 48, marginBottom: 12 }}>👾</div>
+              <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 16, color: "#c4a0ff", marginBottom: 6 }}>No scores yet</div>
+              <div style={{ color: "#5533aa", fontFamily: "'Rajdhani',sans-serif", fontSize: 12 }}>Be the first to play!</div>
+            </div>
+          ) : (
+            <>
+              {/* Podium — top 3 */}
+              {players.length >= 1 && (
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 9, color: "#5533aa", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 12 }}>Top Players</div>
+                  <div style={{ display: "grid", gridTemplateColumns: players.length >= 3 ? "1fr 1.1fr 1fr" : players.length === 2 ? "1fr 1fr" : "1fr", gap: 8, alignItems: "flex-end" }}>
+                    {/* Silver */}
+                    {players.length >= 2 && (
+                      <div style={{ background: podiumBg[1], border: `1px solid ${podiumBorder[1]}`, borderRadius: 12, padding: "14px 10px", textAlign: "center", order: 0 }}>
+                        <div style={{ fontSize: 22, marginBottom: 6 }}>🥈</div>
+                        <div style={{ width: 38, height: 38, borderRadius: "50%", background: `linear-gradient(135deg,${podiumColors[1]},${podiumColors[1]}88)`, margin: "0 auto 6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#08070f", border: `2px solid ${podiumColors[1]}`, fontFamily: "'Rajdhani',sans-serif" }}>{players[1].slice(2, 4).toUpperCase()}</div>
+                        <div style={{ fontFamily: "monospace", fontSize: 9, color: podiumColors[1], marginBottom: 3 }}>{players[1].slice(0, 7)}...</div>
+                        <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: podiumColors[1] }}>{scores[1].toLocaleString()}</div>
+                        {prizes[1] > 0 && <div style={{ fontSize: 9, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, marginTop: 3 }}>+{prizes[1].toFixed(0)}</div>}
+                      </div>
+                    )}
+                    {/* Gold */}
+                    <div style={{ background: podiumBg[0], border: `2px solid ${podiumBorder[0]}`, borderRadius: 12, padding: "18px 10px", textAlign: "center", order: players.length >= 2 ? 1 : 0, boxShadow: "0 0 24px rgba(255,183,0,0.2)" }}>
+                      <div style={{ fontSize: 26, marginBottom: 6 }}>🥇</div>
+                      <div style={{ width: 46, height: 46, borderRadius: "50%", background: "linear-gradient(135deg,#FFB700,#ff8800)", margin: "0 auto 6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#08070f", border: `3px solid ${podiumColors[0]}`, boxShadow: "0 0 16px rgba(255,183,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>{players[0].slice(2, 4).toUpperCase()}</div>
+                      <div style={{ fontFamily: "monospace", fontSize: 9, color: podiumColors[0], marginBottom: 3 }}>{players[0].slice(0, 7)}...</div>
+                      <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 20, color: podiumColors[0] }}>{scores[0].toLocaleString()}</div>
+                      {prizes[0] > 0 && <div style={{ fontSize: 10, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, marginTop: 3 }}>+{prizes[0].toFixed(0)}</div>}
+                    </div>
+                    {/* Bronze */}
+                    {players.length >= 3 && (
+                      <div style={{ background: podiumBg[2], border: `1px solid ${podiumBorder[2]}`, borderRadius: 12, padding: "14px 10px", textAlign: "center", order: 2 }}>
+                        <div style={{ fontSize: 22, marginBottom: 6 }}>🥉</div>
+                        <div style={{ width: 38, height: 38, borderRadius: "50%", background: `linear-gradient(135deg,${podiumColors[2]},${podiumColors[2]}88)`, margin: "0 auto 6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#fff", border: `2px solid ${podiumColors[2]}`, fontFamily: "'Rajdhani',sans-serif" }}>{players[2].slice(2, 4).toUpperCase()}</div>
+                        <div style={{ fontFamily: "monospace", fontSize: 9, color: podiumColors[2], marginBottom: 3 }}>{players[2].slice(0, 7)}...</div>
+                        <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: podiumColors[2] }}>{scores[2].toLocaleString()}</div>
+                        {prizes[2] > 0 && <div style={{ fontSize: 9, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, marginTop: 3 }}>+{prizes[2].toFixed(0)}</div>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* All players list */}
+              {players.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 9, color: "#5533aa", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 8 }}>All Players</div>
+                  {players.map((addr, i) => (
+                    <div key={addr} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: i < 3 ? podiumBg[i] : "rgba(123,47,255,0.04)", borderRadius: 9, border: `1px solid ${i < 3 ? podiumBorder[i] : "rgba(123,47,255,0.08)"}`, marginBottom: 5 }}>
+                      <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 12, color: i < 3 ? podiumColors[i] : "#5533aa", fontWeight: 700, minWidth: 26, textAlign: "center" }}>
+                        {i < 3 ? medals[i] : `#${i + 1}`}
+                      </div>
+                      <div style={{ width: 32, height: 32, borderRadius: "50%", background: i < 3 ? `linear-gradient(135deg,${podiumColors[i]},${podiumColors[i]}88)` : "rgba(123,47,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: i < 3 ? "#08070f" : "#a67fff", fontFamily: "'Rajdhani',sans-serif", flexShrink: 0, border: `1px solid ${i < 3 ? podiumColors[i] : "rgba(123,47,255,0.3)"}` }}>
+                        {addr.slice(2, 4).toUpperCase()}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: "monospace", fontSize: 11, color: i < 3 ? podiumColors[i] : "#9977cc", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{addr.slice(0, 10)}...{addr.slice(-4)}</div>
+                        {i < 3 && prizes[i] > 0 && <div style={{ fontSize: 9, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>🏆 +{prizes[i].toFixed(0)} ARCADE</div>}
+                      </div>
+                      <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: i < 3 ? podiumColors[i] : "#a67fff" }}>
+                        {scores[i].toLocaleString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: "12px 20px", borderTop: "1px solid rgba(123,47,255,0.12)", background: "rgba(123,47,255,0.04)", flexShrink: 0 }}>
+          <button onClick={() => { onClose(); navigate(`/play/${tournament.gameId}`); }} style={{ width: "100%", padding: "12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 9, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1.5px", textTransform: "uppercase" }}>
+            🎮 Play Now & Submit Score
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
   const [players, setPlayers] = useState([]);
   const [scores, setScores] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -362,7 +523,7 @@ function TournamentCard({ tournament, onJoin, onEnd, address, joining, arcadeBal
           )}
         </div>
       </div>
-      {showLeaderboard && <LeaderboardModal tournament={tournament} onClose={() => setShowLeaderboard(false)} navigate={navigate} />}
+      {showLeaderboard && <LeaderboardPanel tournament={tournament} onClose={() => setShowLeaderboard(false)} navigate={navigate} />}
     </>
   );
 }
@@ -465,9 +626,8 @@ export default function Tournaments() {
         @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
         @keyframes trophyBounce { 0%,100%{transform:translateY(0) rotate(-5deg)} 50%{transform:translateY(-8px) rotate(5deg)} }
         @keyframes gradientShift { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
+        @keyframes slideInPanel { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
         .tab-btn:hover { color: #c4a0ff !important; }
-        body::-webkit-scrollbar { display: none; }
-        body { scrollbar-width: none; -ms-overflow-style: none; overflow-y: hidden; }
       `}</style>
 
       <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
