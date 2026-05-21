@@ -123,18 +123,23 @@ function LeaderboardPanel({ tournament, onClose, navigate, publicClient }) {
 
   return (
     <>
-      {/* Backdrop - only covers area left of panel */}
-      <div onClick={onClose} style={{ position: "fixed", top: 54, left: 0, right: 420, bottom: 0, zIndex: 1000, background: "rgba(0,0,0,0.3)", backdropFilter: "blur(2px)" }} />
+      {/* Backdrop */}
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)" }} />
 
-      {/* Slide-in panel */}
+      {/* Centered Modal */}
       <div style={{
-        position: "fixed", top: 54, right: 0, bottom: 0, zIndex: 1001,
-        width: 420,
+        position: "fixed",
+        top: "50%", left: "50%",
+        transform: "translate(-50%, -50%)",
+        zIndex: 1001,
+        width: "min(860px, 92vw)",
+        maxHeight: "85vh",
         background: "#0d0a20",
-        borderLeft: "1px solid rgba(123,47,255,0.25)",
+        border: "1px solid rgba(123,47,255,0.3)",
+        borderRadius: 16,
         display: "flex", flexDirection: "column",
-        animation: "slideInPanel 0.35s cubic-bezier(0.4,0,0.2,1) forwards",
-        boxShadow: "-20px 0 60px rgba(0,0,0,0.8)",
+        boxShadow: "0 24px 80px rgba(0,0,0,0.9), 0 0 60px rgba(123,47,255,0.15)",
+        animation: "slideInPanel 0.3s cubic-bezier(0.4,0,0.2,1) forwards",
       }}>
         {/* Top accent */}
         <div style={{ height: 3, background: "linear-gradient(90deg,#7B2FFF,#FFB700,#00d4ff)", flexShrink: 0 }} />
@@ -446,7 +451,7 @@ export default function Tournaments() {
         @keyframes slideUp      { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
         @keyframes trophyBounce { 0%,100%{transform:translateY(0) rotate(-5deg)} 50%{transform:translateY(-8px) rotate(5deg)} }
         @keyframes gradientShift{ 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
-        @keyframes slideInPanel { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+        @keyframes slideInPanel { from{opacity:0;transform:translate(-50%,-48%)} to{opacity:1;transform:translate(-50%,-50%)} }
         .tab-btn:hover { color: #c4a0ff !important; }
         body::-webkit-scrollbar { display: none; }
         body { scrollbar-width: none; -ms-overflow-style: none; }
