@@ -129,18 +129,24 @@ function LeaderboardPanel({ tournament, onClose, navigate, publicClient }) {
       {/* Centered Modal */}
       <div style={{
         position: "fixed",
-        top: "50%", left: "50%",
-        transform: "translate(-50%, -50%)",
+        top: 0, left: 0, right: 0, bottom: 0,
         zIndex: 1001,
-        width: "min(860px, 92vw)",
-        maxHeight: "85vh",
-        background: "#0d0a20",
-        border: "1px solid rgba(123,47,255,0.3)",
-        borderRadius: 16,
-        display: "flex", flexDirection: "column",
-        boxShadow: "0 24px 80px rgba(0,0,0,0.9), 0 0 60px rgba(123,47,255,0.15)",
-        animation: "slideInPanel 0.3s cubic-bezier(0.4,0,0.2,1) forwards",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        pointerEvents: "none",
       }}>
+        <div style={{
+          width: "min(860px, 92vw)",
+          maxHeight: "85vh",
+          background: "#0d0a20",
+          border: "1px solid rgba(123,47,255,0.3)",
+          borderRadius: 16,
+          display: "flex", flexDirection: "column",
+          boxShadow: "0 24px 80px rgba(0,0,0,0.9), 0 0 60px rgba(123,47,255,0.15)",
+          animation: "modalIn 0.3s cubic-bezier(0.4,0,0.2,1) forwards",
+          pointerEvents: "all",
+        }}>
         {/* Top accent */}
         <div style={{ height: 3, background: "linear-gradient(90deg,#7B2FFF,#FFB700,#00d4ff)", flexShrink: 0 }} />
 
@@ -229,11 +235,12 @@ function LeaderboardPanel({ tournament, onClose, navigate, publicClient }) {
         </div>
 
         {/* Footer */}
-        <div style={{ padding: "12px 20px", borderTop: "1px solid rgba(123,47,255,0.12)", background: "rgba(123,47,255,0.04)", flexShrink: 0 }}>
+        <div style={{ padding: "12px 20px", borderTop: "1px solid rgba(123,47,255,0.12)", background: "rgba(123,47,255,0.04)", flexShrink: 0, borderRadius: "0 0 16px 16px" }}>
           <button onClick={() => { onClose(); navigate(`/play/${tournament.gameId}`); }} style={{ width: "100%", padding: "12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 9, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1.5px", textTransform: "uppercase" }}>
             🎮 Play Now & Submit Score
           </button>
         </div>
+      </div>
       </div>
     </>
   );
@@ -451,7 +458,7 @@ export default function Tournaments() {
         @keyframes slideUp      { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
         @keyframes trophyBounce { 0%,100%{transform:translateY(0) rotate(-5deg)} 50%{transform:translateY(-8px) rotate(5deg)} }
         @keyframes gradientShift{ 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
-        @keyframes slideInPanel { from{opacity:0;transform:translate(-50%,-48%)} to{opacity:1;transform:translate(-50%,-50%)} }
+        @keyframes modalIn { from{opacity:0;transform:scale(0.95)} to{opacity:1;transform:scale(1)} }
         .tab-btn:hover { color: #c4a0ff !important; }
         body::-webkit-scrollbar { display: none; }
         body { scrollbar-width: none; -ms-overflow-style: none; }
