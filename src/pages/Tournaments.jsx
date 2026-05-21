@@ -89,11 +89,7 @@ function PrizePoolCounter({ prizePool }) {
 }
 
 // Slide-in Leaderboard Panel
-function LeaderboardPanel({ tournament, onClose, navigate }) {
-  const [players, setPlayers] = useState([]);
-  const [scores, setScores] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const publicClient = usePublicClient();
+function LeaderboardPanel({ tournament, onClose, navigate, publicClient }) {
 
   useEffect(() => {
     const fetchData = async () => {
@@ -275,7 +271,7 @@ function LeaderboardPanel({ tournament, onClose, navigate }) {
   }, [tournament.id]);
 
 
-function TournamentCard({ tournament, onJoin, onEnd, address, joining, arcadeBalance, navigate }) {
+function TournamentCard({ tournament, onJoin, onEnd, address, joining, arcadeBalance, navigate, publicClient }) {
   const [hovered, setHovered] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
 
@@ -384,7 +380,7 @@ function TournamentCard({ tournament, onJoin, onEnd, address, joining, arcadeBal
           )}
         </div>
       </div>
-      {showLeaderboard && <LeaderboardPanel tournament={tournament} onClose={() => setShowLeaderboard(false)} navigate={navigate} />}
+      {showLeaderboard && <LeaderboardPanel tournament={tournament} onClose={() => setShowLeaderboard(false)} navigate={navigate} publicClient={publicClient} />}
     </>
   );
 }
@@ -562,7 +558,7 @@ export default function Tournaments() {
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(280px, 1fr))", gap: isMobile ? 12 : 16 }}>
             {filtered.map((t, i) => (
               <div key={t.id} style={{ animation: `slideUp 0.4s ${i * 0.05}s ease both` }}>
-                <TournamentCard tournament={t} onJoin={handleJoin} onEnd={handleEnd} address={address} joining={joining && joiningId === t.id} arcadeBalance={arcadeBalance} navigate={navigate} />
+                <TournamentCard tournament={t} onJoin={handleJoin} onEnd={handleEnd} address={address} joining={joining && joiningId === t.id} arcadeBalance={arcadeBalance} navigate={navigate} publicClient={publicClient} />
               </div>
             ))}
           </div>
