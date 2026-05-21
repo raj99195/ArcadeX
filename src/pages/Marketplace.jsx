@@ -1,5 +1,30 @@
 import { useState, useEffect } from "react";
-import { useAccount, usePublicClient, useWalletClient, useBalance } from "wagmi";
+import { useAccount, usePublicClient, useBalance } from "wagmi";
+import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
+import { wagmiAdapter } from "../Providers";
+import { getUnlockedStyles, unlockAvatarStyle, getActiveAvatarStyle, setActiveAvatarStyle } from "../utils/avatarUtils";
+
+// All available DiceBear styles with pricing tiers
+const AVATAR_STYLES = [
+  { id: "bottts",      label: "Bottts",      tier: "Free",      price: 0,   emoji: "🤖", desc: "Web3 robot vibes" },
+  { id: "pixel-art",   label: "Pixel Art",   tier: "Free",      price: 0,   emoji: "👾", desc: "Classic arcade look" },
+  { id: "adventurer",  label: "Adventurer",  tier: "Uncommon",  price: 100, emoji: "🧙", desc: "Gamer cartoon style" },
+  { id: "lorelei",     label: "Lorelei",     tier: "Uncommon",  price: 100, emoji: "🧝", desc: "Anime-inspired" },
+  { id: "notionists",  label: "Notionists",  tier: "Rare",      price: 300, emoji: "✏️", desc: "Minimal line art" },
+  { id: "micah",       label: "Micah",       tier: "Rare",      price: 300, emoji: "🎨", desc: "Modern illustration" },
+  { id: "rings",       label: "Rings",       tier: "Epic",      price: 500, emoji: "💫", desc: "Abstract geometric" },
+  { id: "shapes",      label: "Shapes",      tier: "Epic",      price: 500, emoji: "🔷", desc: "Bold abstract art" },
+  { id: "thumbs",      label: "Thumbs",      tier: "Legendary", price: 800, emoji: "👍", desc: "Ultra rare character" },
+  { id: "croodles",    label: "Croodles",    tier: "Legendary", price: 800, emoji: "✨", desc: "Hand-drawn exclusive" },
+];
+
+const TIER_COLOR = {
+  Free:      "#5533aa",
+  Uncommon:  "#00FF88",
+  Rare:      "#00d4ff",
+  Epic:      "#a67fff",
+  Legendary: "#FFB700",
+};
 
 const MARKETPLACE_ADDRESS = import.meta.env.VITE_MARKETPLACE_ADDRESS;
 const ARCADE_TOKEN_ADDRESS = import.meta.env.VITE_ARCADE_TOKEN_ADDRESS;
@@ -16,9 +41,10 @@ const MARKETPLACE_ABI = [
 ];
 
 const ERC20_ABI = [
-  { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
-  { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
-  { name: "allowance", type: "function", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+  { name: "approve",   type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
+  { name: "balanceOf", type: "function", stateMutability: "view",       inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+  { name: "allowance", type: "function", stateMutability: "view",       inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+  { name: "transfer",  type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
 ];
 
 const ITEM_TYPE = ["Badge", "Frame", "Power-Up", "Skin"];
@@ -31,7 +57,7 @@ const P = {
   raj: "'Rajdhani',sans-serif", orb: "'Orbitron',sans-serif",
 };
 
-function ItemCard({ item, owned, onBuyArcade, onBuyBot, buying, buyingId }) {
+function ItemCard({ item, owned, onBuyArcade, onBuyBot, buying, buyingId, arcadeBalance, botBalance }) {
   const [hovered, setHovered] = useState(false);
   const isBuying = buying && buyingId === Number(item.id);
   const arcadePrice = Number(item.arcadePrice) / 1e18;
@@ -42,6 +68,8 @@ function ItemCard({ item, owned, onBuyArcade, onBuyBot, buying, buyingId }) {
   const soldOut = total > 0 && sold >= total;
   const typeIdx = Number(item.itemType);
   const color = ITEM_COLOR[typeIdx] || "#a67fff";
+  const insufficientArcade = arcadePrice > 0 && arcadeBalance < arcadePrice;
+  const insufficientBot = botPrice > 0 && Number(botBalance?.formatted || 0) < botPrice;
 
   return (
     <div
@@ -96,31 +124,33 @@ function ItemCard({ item, owned, onBuyArcade, onBuyBot, buying, buyingId }) {
         {!owned && !soldOut && (
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
             {arcadePrice > 0 && (
-              <button onClick={() => onBuyArcade(item)} disabled={isBuying} style={{
+              <button onClick={() => onBuyArcade(item)} disabled={isBuying || insufficientArcade} style={{
                 width: "100%", padding: "10px",
-                background: isBuying ? "rgba(123,47,255,0.2)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)",
-                border: "none", borderRadius: 8,
-                color: isBuying ? "#5533aa" : "#fff",
-                fontSize: 12, fontWeight: 700, cursor: isBuying ? "not-allowed" : "pointer",
+                background: insufficientArcade ? "rgba(255,68,68,0.08)" : isBuying ? "rgba(123,47,255,0.2)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)",
+                border: insufficientArcade ? "1px solid rgba(255,68,68,0.25)" : "none",
+                borderRadius: 8,
+                color: insufficientArcade ? "#ff4444" : isBuying ? "#5533aa" : "#fff",
+                fontSize: 12, fontWeight: 700, cursor: (isBuying || insufficientArcade) ? "not-allowed" : "pointer",
                 fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase",
                 transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
               }}>
                 <span>🎮</span>
-                {isBuying ? "Buying..." : `${arcadePrice.toLocaleString()} ARCADE`}
+                {insufficientArcade ? `Need ${arcadePrice.toLocaleString()} ARCADE` : isBuying ? "Buying..." : `${arcadePrice.toLocaleString()} ARCADE`}
               </button>
             )}
             {botPrice > 0 && (
-              <button onClick={() => onBuyBot(item)} disabled={isBuying} style={{
+              <button onClick={() => onBuyBot(item)} disabled={isBuying || insufficientBot} style={{
                 width: "100%", padding: "10px",
-                background: isBuying ? "rgba(0,212,255,0.1)" : "linear-gradient(135deg,rgba(0,212,255,0.2),rgba(0,212,255,0.1))",
-                border: "1px solid rgba(0,212,255,0.3)", borderRadius: 8,
-                color: isBuying ? "#5533aa" : "#00d4ff",
-                fontSize: 12, fontWeight: 700, cursor: isBuying ? "not-allowed" : "pointer",
+                background: insufficientBot ? "rgba(255,68,68,0.08)" : isBuying ? "rgba(0,212,255,0.1)" : "linear-gradient(135deg,rgba(0,212,255,0.2),rgba(0,212,255,0.1))",
+                border: `1px solid ${insufficientBot ? "rgba(255,68,68,0.25)" : "rgba(0,212,255,0.3)"}`,
+                borderRadius: 8,
+                color: insufficientBot ? "#ff4444" : isBuying ? "#5533aa" : "#00d4ff",
+                fontSize: 12, fontWeight: 700, cursor: (isBuying || insufficientBot) ? "not-allowed" : "pointer",
                 fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase",
                 transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
               }}>
                 <span>⛓️</span>
-                {isBuying ? "Buying..." : `${botPrice} BOT`}
+                {insufficientBot ? `Need ${botPrice} BOT` : isBuying ? "Buying..." : `${botPrice} BOT`}
               </button>
             )}
           </div>
@@ -139,7 +169,6 @@ function ItemCard({ item, owned, onBuyArcade, onBuyBot, buying, buyingId }) {
 export default function Marketplace() {
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
-  const { data: walletClient } = useWalletClient();
   const { data: botBalance } = useBalance({ address });
 
   const [items, setItems] = useState([]);
@@ -150,8 +179,11 @@ export default function Marketplace() {
   const [buying, setBuying] = useState(false);
   const [buyingId, setBuyingId] = useState(null);
   const [msg, setMsg] = useState("");
-  const [activeTab, setActiveTab] = useState("shop");
+  const [activeTab, setActiveTab] = useState("avatar");
   const [activeFilter, setActiveFilter] = useState("all");
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [unlockedStyles, setUnlockedStyles] = useState([]);
+  const [activeStyle, setActiveStyle] = useState("bottts");
 
   // Buy ARCADE state
   const [botAmount, setBotAmount] = useState("0.1");
@@ -182,56 +214,185 @@ export default function Marketplace() {
 
   useEffect(() => { fetchData(); }, [publicClient, address]);
 
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (address) {
+      setUnlockedStyles(getUnlockedStyles(address));
+      setActiveStyle(getActiveAvatarStyle(address));
+    }
+  }, [address]);
+
+  const handleUnlockStyle = async (style) => {
+    if (!address) return;
+    if (style.price === 0) {
+      unlockAvatarStyle(address, style.id);
+      setUnlockedStyles(getUnlockedStyles(address));
+      setMsg(`✅ ${style.label} style unlocked!`);
+      return;
+    }
+    const priceWei = BigInt(style.price) * BigInt(1e18);
+    if (arcadeBalance < style.price) {
+      setMsg(`❌ Need ${style.price} ARCADE. You have ${arcadeBalance.toLocaleString()}.`);
+      return;
+    }
+    setBuying(true);
+    setMsg("⏳ Spending ARCADE to unlock style...");
+    try {
+      // Approve
+      const allowance = await publicClient.readContract({
+        address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI,
+        functionName: "allowance", args: [address, MARKETPLACE_ADDRESS],
+      });
+      if (BigInt(allowance) < priceWei) {
+        const ah = await writeContract(wagmiAdapter.wagmiConfig, {
+          address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI,
+          functionName: "approve", args: [MARKETPLACE_ADDRESS, priceWei],
+          gas: BigInt(100000),
+        });
+        await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash: ah });
+      }
+      // Buy Skin item (type 3) — or just burn ARCADE directly
+      // For now: just deduct from balance via approve+transfer to contract
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI,
+        functionName: "transfer", args: [MARKETPLACE_ADDRESS, priceWei],
+        gas: BigInt(100000),
+      });
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      unlockAvatarStyle(address, style.id);
+      setUnlockedStyles(getUnlockedStyles(address));
+      setMsg(`✅ ${style.label} style unlocked! Now activate it.`);
+      await fetchData();
+    } catch (err) {
+      setMsg(err.message?.includes("user rejected") ? "Cancelled." : "Error: " + (err.shortMessage || err.message));
+    }
+    finally { setBuying(false); }
+  };
+
+  const handleActivateStyle = (styleId) => {
+    if (!address) return;
+    setActiveAvatarStyle(address, styleId);
+    setActiveStyle(styleId);
+    setMsg(`✅ Avatar updated to ${AVATAR_STYLES.find(s => s.id === styleId)?.label}!`);
+  };
+
   const handleBuyArcade = async () => {
-    if (!walletClient || !botAmount) return;
+    if (!address || !botAmount) return;
+    const botAmt = Number(botAmount);
+    // BOT balance check
+    const botBal = Number(botBalance?.formatted || 0);
+    if (botAmt <= 0) { setMsg("Error: Enter a valid BOT amount."); return; }
+    if (botAmt > botBal) { setMsg(`Error: Insufficient BOT balance. You have ${botBal.toFixed(4)} BOT.`); return; }
+
     setSwapping(true);
     setMsg("");
     try {
-      const hash = await walletClient.writeContract({
-  address: MARKETPLACE_ADDRESS,
-  abi: MARKETPLACE_ABI,
-  functionName: "buyArcadeWithBot",
-  value: BigInt(Math.floor(Number(botAmount) * 1e18)),
-  account: address,
-});
-      await publicClient.waitForTransactionReceipt({ hash });
-      setMsg(`✓ Successfully bought ${(Number(botAmount) * arcadePerBot).toLocaleString()} ARCADE!`);
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address: MARKETPLACE_ADDRESS,
+        abi: MARKETPLACE_ABI,
+        functionName: "buyArcadeWithBot",
+        value: BigInt(Math.floor(botAmt * 1e18)),
+        gas: BigInt(300000),
+      });
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      setMsg(`✓ Successfully bought ${(botAmt * arcadePerBot).toLocaleString()} ARCADE!`);
       await fetchData();
-    } catch (err) { setMsg("Error: " + err.message); }
+    } catch (err) {
+      const msg = err.message?.includes("insufficient") ? "Insufficient BOT balance for this transaction."
+        : err.message?.includes("user rejected") ? "Transaction cancelled."
+        : "Error: " + (err.shortMessage || err.message);
+      setMsg(msg);
+    }
     finally { setSwapping(false); }
   };
 
   const handleBuyItemWithArcade = async (item) => {
-    if (!walletClient) return;
+    if (!address) return;
+    const price = Number(item.arcadePrice) / 1e18;
+
+    // ── ARCADE balance check BEFORE transaction ──
+    if (arcadeBalance < price) {
+      setMsg(`❌ Insufficient ARCADE! You need ${price.toLocaleString()} ARCADE but have ${arcadeBalance.toLocaleString()}. Buy more ARCADE first.`);
+      return;
+    }
+
     setBuying(true);
     setBuyingId(Number(item.id));
     setMsg("");
     try {
-      // Approve first
-      const allowance = await publicClient.readContract({ address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI, functionName: "allowance", args: [address, MARKETPLACE_ADDRESS] });
+      // Check allowance
+      const allowance = await publicClient.readContract({
+        address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI,
+        functionName: "allowance", args: [address, MARKETPLACE_ADDRESS],
+      });
+
+      // Approve if needed
       if (BigInt(allowance) < BigInt(item.arcadePrice)) {
-        const approveHash = await walletClient.writeContract({ address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI, functionName: "approve", args: [MARKETPLACE_ADDRESS, item.arcadePrice], account: address });
-        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        setMsg("⏳ Step 1/2: Approving ARCADE spend...");
+        const approveHash = await writeContract(wagmiAdapter.wagmiConfig, {
+          address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI,
+          functionName: "approve",
+          args: [MARKETPLACE_ADDRESS, item.arcadePrice],
+          gas: BigInt(100000),
+        });
+        await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash: approveHash });
       }
-      const hash = await walletClient.writeContract({ address: MARKETPLACE_ADDRESS, abi: MARKETPLACE_ABI, functionName: "buyItemWithArcade", args: [BigInt(item.id)], account: address });
-      await publicClient.waitForTransactionReceipt({ hash });
-      setMsg(`✓ ${item.name} purchased with ARCADE!`);
+
+      setMsg("⏳ Step 2/2: Purchasing item...");
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address: MARKETPLACE_ADDRESS, abi: MARKETPLACE_ABI,
+        functionName: "buyItemWithArcade",
+        args: [BigInt(item.id)],
+        gas: BigInt(300000),
+      });
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      setMsg(`✅ ${item.name} purchased with ARCADE!`);
       await fetchData();
-    } catch (err) { setMsg("Error: " + err.message); }
+    } catch (err) {
+      const errMsg = err.message?.includes("user rejected") ? "Transaction cancelled."
+        : err.message?.includes("insufficient") ? "Insufficient ARCADE balance."
+        : "Error: " + (err.shortMessage || err.message);
+      setMsg(errMsg);
+    }
     finally { setBuying(false); setBuyingId(null); }
   };
 
   const handleBuyItemWithBot = async (item) => {
-    if (!walletClient) return;
+    if (!address) return;
+    const botPrice = Number(item.botPrice) / 1e18;
+    const botBal = Number(botBalance?.formatted || 0);
+
+    // ── BOT balance check BEFORE transaction ──
+    if (botBal < botPrice) {
+      setMsg(`❌ Insufficient BOT! You need ${botPrice} BOT but have ${botBal.toFixed(4)} BOT.`);
+      return;
+    }
+
     setBuying(true);
     setBuyingId(Number(item.id));
     setMsg("");
     try {
-      const hash = await walletClient.writeContract({ address: MARKETPLACE_ADDRESS, abi: MARKETPLACE_ABI, functionName: "buyItemWithBot", args: [BigInt(item.id)], value: BigInt(item.botPrice), account: address });
-      await publicClient.waitForTransactionReceipt({ hash });
-      setMsg(`✓ ${item.name} purchased with BOT!`);
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address: MARKETPLACE_ADDRESS, abi: MARKETPLACE_ABI,
+        functionName: "buyItemWithBot",
+        args: [BigInt(item.id)],
+        value: BigInt(item.botPrice),
+        gas: BigInt(300000),
+      });
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      setMsg(`✅ ${item.name} purchased with BOT!`);
       await fetchData();
-    } catch (err) { setMsg("Error: " + err.message); }
+    } catch (err) {
+      const errMsg = err.message?.includes("user rejected") ? "Transaction cancelled."
+        : err.message?.includes("insufficient") ? "Insufficient BOT balance."
+        : "Error: " + (err.shortMessage || err.message);
+      setMsg(errMsg);
+    }
     finally { setBuying(false); setBuyingId(null); }
   };
 
@@ -270,15 +431,15 @@ export default function Marketplace() {
         <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(123,47,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(123,47,255,0.03) 1px, transparent 1px)", backgroundSize: "50px 50px" }} />
       </div>
 
-      <div style={{ position: "relative", zIndex: 1, padding: "28px 36px" }}>
+      <div style={{ position: "relative", zIndex: 1, padding: isMobile ? "16px" : "28px 36px" }}>
 
         {/* Header */}
-        <div style={{ marginBottom: 28, animation: "slideUp 0.5s ease forwards" }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 12px", border: "1px solid rgba(255,183,0,0.25)", borderRadius: 4, fontSize: 9, color: "rgba(255,183,0,0.7)", letterSpacing: "2px", textTransform: "uppercase", marginBottom: 12, background: "rgba(255,183,0,0.06)", fontFamily: P.raj, fontWeight: 600 }}>
+        <div style={{ marginBottom: 20, animation: "slideUp 0.5s ease forwards" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 12px", border: "1px solid rgba(255,183,0,0.25)", borderRadius: 4, fontSize: 9, color: "rgba(255,183,0,0.7)", letterSpacing: "2px", textTransform: "uppercase", marginBottom: 10, background: "rgba(255,183,0,0.06)", fontFamily: P.raj, fontWeight: 600 }}>
             <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#FFB700", animation: "pulse 1.5s ease-in-out infinite" }} />
             ArcadeX Marketplace
           </div>
-          <h1 style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 44, letterSpacing: "-0.5px", textTransform: "uppercase", lineHeight: 0.95, color: "#fff", margin: "0 0 8px" }}>
+          <h1 style={{ fontFamily: P.raj, fontWeight: 700, fontSize: isMobile ? 28 : 44, letterSpacing: "-0.5px", textTransform: "uppercase", lineHeight: 0.95, color: "#fff", margin: "0 0 8px" }}>
             MARKET<br />
             <span style={{ background: "linear-gradient(90deg,#7B2FFF,#00d4ff,#7B2FFF)", backgroundSize: "200% 100%", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", animation: "gradientShift 3s ease infinite" }}>PLACE</span>
           </h1>
@@ -287,19 +448,19 @@ export default function Marketplace() {
 
         {/* Balance cards */}
         {isConnected && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 24 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(3,1fr)", gap: 10, marginBottom: 20 }}>
             {[
               { label: "ARCADE Balance", value: arcadeBalance.toLocaleString(), color: "#a67fff", icon: "🎮", sub: "Available to spend" },
               { label: "BOT Balance", value: Number(botBalance?.formatted || 0).toFixed(4), color: "#00d4ff", icon: "⛓️", sub: "Native token" },
-              { label: "Items Owned", value: myItems.length, color: "#00FF88", icon: "🏆", sub: "In collection" },
+              { label: "Active Style", value: AVATAR_STYLES.find(s => s.id === activeStyle)?.label || "Bottts", color: "#00FF88", icon: "🎨", sub: "Your avatar style" },
             ].map(s => (
-              <div key={s.label} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 12, padding: "16px 20px", position: "relative", overflow: "hidden" }}>
+              <div key={s.label} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 12, padding: isMobile ? "12px" : "16px 20px", position: "relative", overflow: "hidden" }}>
                 <div style={{ position: "absolute", top: -20, right: -20, width: 80, height: 80, background: `radial-gradient(circle,${s.color}15 0%,transparent 70%)`, borderRadius: "50%", pointerEvents: "none" }} />
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontSize: 18 }}>{s.icon}</span>
-                  <div style={{ fontSize: 9, color: "#5533aa", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" }}>{s.label}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+                  <span style={{ fontSize: isMobile ? 14 : 18 }}>{s.icon}</span>
+                  <div style={{ fontSize: 8, color: "#5533aa", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" }}>{s.label}</div>
                 </div>
-                <div style={{ fontFamily: P.orb, fontWeight: 700, fontSize: 22, color: s.color, letterSpacing: "-0.5px" }}>{s.value}</div>
+                <div style={{ fontFamily: P.orb, fontWeight: 700, fontSize: isMobile ? 16 : 22, color: s.color, letterSpacing: "-0.5px" }}>{s.value}</div>
                 <div style={{ fontSize: 9, color: "#3a2a5a", fontFamily: P.raj, marginTop: 2 }}>{s.sub}</div>
               </div>
             ))}
@@ -307,11 +468,12 @@ export default function Marketplace() {
         )}
 
         {/* Tabs */}
-        <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid rgba(123,47,255,0.15)" }}>
+        <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid rgba(123,47,255,0.15)", flexWrap: "wrap" }}>
           {[
-            { id: "shop", label: "🛒 Shop" },
+            // { id: "shop", label: "🛒 Shop" },          // Coming soon
+            { id: "avatar", label: "🎨 Avatar Styles" },
             { id: "buy-arcade", label: "💱 Buy ARCADE" },
-            { id: "inventory", label: `🎒 My Collection (${myItems.length})` },
+            // { id: "inventory", label: `🎒 My Collection (${myItems.length})` }, // Coming soon
           ].map(t => (
             <button key={t.id} className="tab-btn" onClick={() => setActiveTab(t.id)} style={{ padding: "10px 22px", background: "transparent", border: "none", borderBottom: activeTab === t.id ? "2px solid #7B2FFF" : "2px solid transparent", color: activeTab === t.id ? "#c4a0ff" : "#3a2a5a", fontSize: 12, cursor: "pointer", marginBottom: "-1px", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", transition: "color 0.18s" }}>
               {t.label}
@@ -356,9 +518,96 @@ export default function Marketplace() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 16 }}>
                 {filteredItems.map((item, i) => (
                   <div key={Number(item.id)} style={{ animation: `slideUp 0.4s ${i * 0.05}s ease both` }}>
-                    <ItemCard item={item} owned={userItems.includes(Number(item.id))} onBuyArcade={handleBuyItemWithArcade} onBuyBot={handleBuyItemWithBot} buying={buying} buyingId={buyingId} />
+                    <ItemCard item={item} owned={userItems.includes(Number(item.id))} onBuyArcade={handleBuyItemWithArcade} onBuyBot={handleBuyItemWithBot} buying={buying} buyingId={buyingId} arcadeBalance={arcadeBalance} botBalance={botBalance} />
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* AVATAR STYLES TAB */}
+        {activeTab === "avatar" && (
+          <div>
+            {!isConnected ? (
+              <div style={{ padding: "60px 0", textAlign: "center" }}>
+                <div style={{ fontSize: 48, marginBottom: 16 }}>🎨</div>
+                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 16, color: "#c4a0ff" }}>Connect wallet to customize your avatar</div>
+              </div>
+            ) : (
+              <div>
+                {/* Current avatar preview */}
+                <div style={{ display: "flex", alignItems: "center", gap: 20, padding: "20px 24px", background: "rgba(123,47,255,0.06)", border: "1px solid rgba(123,47,255,0.18)", borderRadius: 12, marginBottom: 24 }}>
+                  <div style={{ width: 80, height: 80, borderRadius: "50%", overflow: "hidden", border: "2px solid rgba(123,47,255,0.6)", boxShadow: "0 0 24px rgba(123,47,255,0.4)", flexShrink: 0, background: "#0e0c1a" }}>
+                    <img src={`https://api.dicebear.com/9.x/${activeStyle}/svg?seed=${address}`} alt="current avatar" style={{ width: "100%", height: "100%" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 18, color: "#fff", marginBottom: 4 }}>Your Avatar</div>
+                    <div style={{ fontSize: 12, color: "#5533aa", fontFamily: P.raj }}>Active style: <span style={{ color: TIER_COLOR[AVATAR_STYLES.find(s => s.id === activeStyle)?.tier] || "#a67fff", fontWeight: 700 }}>{AVATAR_STYLES.find(s => s.id === activeStyle)?.label || activeStyle}</span></div>
+                    <div style={{ fontSize: 11, color: "#3a2a5a", fontFamily: P.raj, marginTop: 4 }}>Unlocked: {unlockedStyles.length} / {AVATAR_STYLES.length} styles</div>
+                  </div>
+                </div>
+
+                {/* Style grid */}
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(180px, 1fr))", gap: isMobile ? 10 : 14 }}>
+                  {AVATAR_STYLES.map(style => {
+                    const isUnlocked = unlockedStyles.includes(style.id);
+                    const isActive = activeStyle === style.id;
+                    const tierColor = TIER_COLOR[style.tier];
+                    return (
+                      <div key={style.id} style={{
+                        background: isActive ? "rgba(123,47,255,0.15)" : "rgba(10,8,20,0.9)",
+                        border: `${isActive ? "2px" : "1px"} solid ${isActive ? "rgba(123,47,255,0.8)" : "rgba(123,47,255,0.15)"}`,
+                        borderRadius: 14, overflow: "hidden",
+                        boxShadow: isActive ? "0 0 20px rgba(123,47,255,0.4)" : "none",
+                        transition: "all 0.2s",
+                      }}>
+                        {/* Avatar preview */}
+                        <div style={{ height: 120, background: "rgba(123,47,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                          <div style={{ width: 80, height: 80, borderRadius: "50%", overflow: "hidden", border: `2px solid ${tierColor}44`, background: "#0e0c1a" }}>
+                            <img src={`https://api.dicebear.com/9.x/${style.id}/svg?seed=${address}`} alt={style.label} style={{ width: "100%", height: "100%" }} />
+                          </div>
+                          {/* Tier badge */}
+                          <div style={{ position: "absolute", top: 8, left: 8, padding: "2px 8px", borderRadius: 4, background: `${tierColor}22`, border: `1px solid ${tierColor}44`, color: tierColor, fontSize: 9, fontFamily: P.raj, fontWeight: 700, letterSpacing: "1px" }}>
+                            {style.tier.toUpperCase()}
+                          </div>
+                          {isActive && (
+                            <div style={{ position: "absolute", top: 8, right: 8, width: 20, height: 20, borderRadius: "50%", background: "#00FF88", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>✓</div>
+                          )}
+                          {!isUnlocked && (
+                            <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>🔒</div>
+                          )}
+                        </div>
+
+                        {/* Info */}
+                        <div style={{ padding: "10px 12px" }}>
+                          <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 13, color: "#e0d0ff", marginBottom: 2 }}>{style.label}</div>
+                          <div style={{ fontSize: 10, color: "#5533aa", fontFamily: P.raj, marginBottom: 10 }}>{style.desc}</div>
+
+                          {isActive ? (
+                            <div style={{ padding: "7px", background: "rgba(0,255,136,0.08)", border: "1px solid rgba(0,255,136,0.2)", borderRadius: 7, textAlign: "center", fontSize: 11, color: "#00FF88", fontFamily: P.raj, fontWeight: 700 }}>✓ Active</div>
+                          ) : isUnlocked ? (
+                            <button onClick={() => handleActivateStyle(style.id)} style={{ width: "100%", padding: "7px", background: "rgba(123,47,255,0.15)", border: "1px solid rgba(123,47,255,0.35)", borderRadius: 7, color: "#c4a0ff", fontSize: 11, cursor: "pointer", fontFamily: P.raj, fontWeight: 700 }}>
+                              Set Active
+                            </button>
+                          ) : (
+                            <button onClick={() => handleUnlockStyle(style)} disabled={buying || arcadeBalance < style.price} style={{
+                              width: "100%", padding: "7px",
+                              background: arcadeBalance < style.price ? "rgba(255,68,68,0.06)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)",
+                              border: arcadeBalance < style.price ? "1px solid rgba(255,68,68,0.2)" : "none",
+                              borderRadius: 7,
+                              color: arcadeBalance < style.price ? "#ff4444" : "#fff",
+                              fontSize: 11, cursor: (buying || arcadeBalance < style.price) ? "not-allowed" : "pointer",
+                              fontFamily: P.raj, fontWeight: 700,
+                            }}>
+                              {style.price === 0 ? "Unlock Free" : arcadeBalance < style.price ? `Need ${style.price} ARCADE` : `🔓 ${style.price} ARCADE`}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

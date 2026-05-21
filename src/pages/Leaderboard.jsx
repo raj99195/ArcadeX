@@ -314,7 +314,7 @@ export default function Leaderboard() {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
             {/* Your Rank */}
-            <div style={{ background: "rgba(6,5,12,0.82)", border: "1px solid rgba(123,47,255,0.12)", borderRadius: 12, padding: 20, marginTop: 55, position: "relative", overflow: "hidden", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)" }}>
+            <div style={{ background: "rgba(6,5,12,0.82)", border: "1px solid rgba(123,47,255,0.12)", borderRadius: 12, padding: 20, marginTop: 35, position: "relative", overflow: "hidden", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)" }}>
               <div style={{ position: "absolute", top: -20, right: -20, width: 100, height: 100, background: "radial-gradient(circle,rgba(123,47,255,0.12) 0%,transparent 70%)", borderRadius: "50%", pointerEvents: "none" }} />
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 65 }}>
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -375,27 +375,7 @@ export default function Leaderboard() {
               })}
             </div>
 
-            {/* How scores work */}
-            <div style={{ background: "rgba(123,47,255,0.07)", border: "1px solid rgba(123,47,255,0.15)", borderRadius: 12, padding: 20, backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <circle cx="7" cy="7" r="6" stroke="#7B2FFF" strokeWidth="1.2" fill="none" />
-                  <path d="M7 4v4M7 9.5v.5" stroke="#7B2FFF" strokeWidth="1.2" strokeLinecap="round" />
-                </svg>
-                <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#c4a0ff", textTransform: "uppercase", letterSpacing: "1px" }}>How Scores Work</span>
-              </div>
-              {[
-                "Play any game on ArcadeX",
-                "Score submits on BOTChain",
-                "Tamper-proof — verified on-chain",
-                "Leaderboard updates instantly"
-              ].map((t, i) => (
-                <div key={i} style={{ display: "flex", gap: 10, fontSize: 11, color: "#7755aa", marginBottom: 10, lineHeight: 1.55 }}>
-                  <span style={{ background: "rgba(123,47,255,0.15)", color: "#a67fff", flexShrink: 0, fontWeight: 700, fontFamily: "'Orbitron',sans-serif", fontSize: 8, width: 18, height: 18, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>0{i + 1}</span>
-                  <span style={{ fontFamily: "'Rajdhani',sans-serif" }}>{t}</span>
-                </div>
-              ))}
-            </div>
+           
           </div>
         </div>
       </div>

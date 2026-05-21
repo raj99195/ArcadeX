@@ -61,7 +61,17 @@ const ERC20_APPROVE_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
 ];
 
-const AVATAR_COLORS = ["#7B2FFF", "#00d4ff", "#00FF88", "#FFB800", "#ff4444", "#ff69b4", "#00bfff", "#ff7f50"];
+const MIN_REWARD_RATE = parseInt(import.meta.env.VITE_MIN_REWARD_RATE || "10");
+const MAX_REWARD_RATE = parseInt(import.meta.env.VITE_MAX_REWARD_RATE || "500");
+
+const DICEBEAR_STYLES = [
+  { id: "bottts",      label: "🤖 Robot",    desc: "Web3 vibe"    },
+  { id: "pixel-art",   label: "👾 Pixel",    desc: "Arcade style" },
+  { id: "adventurer",  label: "🧙 Gamer",    desc: "Cartoon"      },
+  { id: "lorelei",     label: "🧝 Anime",    desc: "Anime-ish"    },
+  { id: "fun-emoji",   label: "😎 Emoji",    desc: "Fun"          },
+  { id: "identicon",   label: "🔷 Identicon",desc: "Minimal"      },
+];
 
 function Btn({ children, onClick, disabled, variant = "primary", style = {} }) {
   const base = { padding: "10px 20px", border: "none", borderRadius: 7, cursor: disabled ? "not-allowed" : "pointer", fontFamily: P.raj, fontWeight: 700, fontSize: 12, letterSpacing: "0.5px", textTransform: "uppercase", transition: "all 0.18s", ...style };
@@ -163,7 +173,7 @@ export default function Creator() {
   // NFT states
   const [nftProfile, setNftProfile] = useState(null);
   const [username, setUsername] = useState("");
-  const [selectedColor, setSelectedColor] = useState("#7B2FFF");
+  const [selectedStyle, setSelectedStyle] = useState("bottts");
   const [usernameAvailable, setUsernameAvailable] = useState(null);
   const [usernameChecking, setUsernameChecking] = useState(false);
   const [mintLoading, setMintLoading] = useState(false);
@@ -269,7 +279,7 @@ export default function Creator() {
         address: CREATOR_NFT_ADDRESS,
         abi: NFT_ABI,
         functionName: "mintCreatorNFT",
-        args: [username, selectedColor],
+        args: [username, selectedStyle],
         gas: BigInt(500000),
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
@@ -394,6 +404,10 @@ export default function Creator() {
 
   const submitGame = async () => {
     if (!form.name || !form.iframeUrl || !form.description) { setError("Fill in all required fields."); return; }
+    const rate = parseInt(form.rewardRate);
+    if (isNaN(rate) || rate < MIN_REWARD_RATE || rate > MAX_REWARD_RATE) {
+      setError(`Reward rate must be between ${MIN_REWARD_RATE} and ${MAX_REWARD_RATE} ARCADE.`); return;
+    }
     if (!validateUrl(form.iframeUrl)) { setError("Enter a valid game URL."); return; }
     if (!form.thumbnailUrl) { setError("Please upload a thumbnail image."); return; }
     setError("");
@@ -422,7 +436,7 @@ export default function Creator() {
         address: PLATFORM_ADDRESS,
         abi: PLATFORM_ABI,
         functionName: "registerGame",
-        args: [form.name, form.iframeUrl, BigInt(parseInt(form.rewardRate) || 50)],
+        args: [form.name, form.iframeUrl, BigInt(parseInt(form.rewardRate) || MIN_REWARD_RATE)],
         gas: BigInt(500000),
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
@@ -493,12 +507,20 @@ export default function Creator() {
             </div>
           </div>
 
-          {/* Avatar preview */}
+          {/* DiceBear Avatar preview */}
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 80, height: 80, borderRadius: "50%", background: "#0e0c1a", border: `2px solid ${selectedColor}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, fontWeight: 900, color: selectedColor, fontFamily: "Arial Black, sans-serif", boxShadow: `0 0 20px ${selectedColor}44` }}>
-              {username ? username.slice(0, 2).toUpperCase() : "??"}
+            <div style={{ width: 90, height: 90, borderRadius: "50%", background: "rgba(123,47,255,0.12)", border: "2px solid rgba(123,47,255,0.5)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 24px rgba(123,47,255,0.35)" }}>
+              {username ? (
+                <img
+                  src={`https://api.dicebear.com/9.x/${selectedStyle}/svg?seed=${username}`}
+                  alt="avatar"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              ) : (
+                <span style={{ fontSize: 32 }}>🎮</span>
+              )}
             </div>
-            <div style={{ fontFamily: "Arial Black, sans-serif", fontSize: 16, fontWeight: 900, color: "#fff" }}>
+            <div style={{ fontFamily: "Arial Black, sans-serif", fontSize: 14, fontWeight: 900, color: "#fff" }}>
               {username || "your.name"}<span style={{ color: "#7B2FFF" }}>.arcade</span>
             </div>
             <div style={{ padding: "4px 14px", background: "rgba(123,47,255,0.15)", border: "1px solid #7B2FFF", borderRadius: 12, fontSize: 9, color: "#a67fff", letterSpacing: 2 }}>✦ CREATOR</div>
@@ -529,12 +551,25 @@ export default function Creator() {
           <div style={{ fontSize: 10, color: "#5533aa", marginTop: 5, fontFamily: P.raj }}>Your username will be: <span style={{ color: "#a67fff" }}>{username || "yourname"}.arcade</span></div>
         </div>
 
-        {/* Color picker */}
+        {/* Avatar Style picker */}
         <div style={{ marginBottom: 20 }}>
-          <label style={labelStyle}>Avatar Color</label>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {AVATAR_COLORS.map(color => (
-              <div key={color} onClick={() => setSelectedColor(color)} style={{ width: 32, height: 32, borderRadius: "50%", background: color, cursor: "pointer", border: selectedColor === color ? `3px solid white` : "3px solid transparent", boxShadow: selectedColor === color ? `0 0 10px ${color}` : "none", transition: "all 0.15s" }} />
+          <label style={labelStyle}>Avatar Style</label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            {DICEBEAR_STYLES.map(style => (
+              <div key={style.id} onClick={() => setSelectedStyle(style.id)} style={{
+                padding: "8px 6px", borderRadius: 8, cursor: "pointer", textAlign: "center",
+                border: selectedStyle === style.id ? "2px solid #7B2FFF" : "1px solid rgba(123,47,255,0.2)",
+                background: selectedStyle === style.id ? "rgba(123,47,255,0.15)" : "rgba(123,47,255,0.05)",
+                transition: "all 0.15s",
+              }}>
+                {username ? (
+                  <img src={`https://api.dicebear.com/9.x/${style.id}/svg?seed=${username || "preview"}`} alt={style.label} style={{ width: 36, height: 36, borderRadius: "50%", marginBottom: 4 }} />
+                ) : (
+                  <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(123,47,255,0.2)", margin: "0 auto 4px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{style.label.split(" ")[0]}</div>
+                )}
+                <div style={{ fontSize: 9, color: selectedStyle === style.id ? "#c4a0ff" : "#5533aa", fontFamily: P.raj, fontWeight: 700 }}>{style.label.split(" ").slice(1).join(" ")}</div>
+                <div style={{ fontSize: 8, color: "#3a2a5a", fontFamily: P.raj }}>{style.desc}</div>
+              </div>
             ))}
           </div>
         </div>
@@ -599,8 +634,12 @@ export default function Creator() {
         {/* Profile card — NFT identity */}
         <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 12, padding: "16px 22px", marginBottom: 22, display: "flex", alignItems: "center", gap: 16, position: "relative", overflow: "hidden" }}>
           <div style={{ position: "absolute", top: -30, right: -30, width: 150, height: 150, background: "radial-gradient(circle, rgba(123,47,255,0.12) 0%, transparent 70%)", borderRadius: "50%", pointerEvents: "none" }} />
-          <div style={{ width: 46, height: 46, borderRadius: "50%", background: "#0e0c1a", border: `2px solid ${nftProfile?.avatarColor || "#7B2FFF"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 900, color: nftProfile?.avatarColor || "#7B2FFF", fontFamily: "Arial Black, sans-serif", flexShrink: 0, boxShadow: `0 0 16px ${nftProfile?.avatarColor || "#7B2FFF"}44` }}>
-            {nftProfile?.username?.slice(0, 2).toUpperCase() || "??"}
+          <div style={{ width: 46, height: 46, borderRadius: "50%", overflow: "hidden", border: "2px solid rgba(123,47,255,0.5)", flexShrink: 0, boxShadow: "0 0 16px rgba(123,47,255,0.4)", background: "#0e0c1a" }}>
+            <img
+              src={`https://api.dicebear.com/9.x/${nftProfile?.avatarColor || "bottts"}/svg?seed=${nftProfile?.username || address}`}
+              alt="avatar"
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
@@ -929,7 +968,10 @@ export default function Creator() {
                   </div>
                   <div>
                     <label style={labelStyle}>Reward Rate (ARCADE)</label>
-                    <input name="rewardRate" value={form.rewardRate} onChange={handleChange} type="number" min="10" max="500" className="cr-input" style={inputStyle} />
+                    <input name="rewardRate" value={form.rewardRate} onChange={handleChange} type="number" min={MIN_REWARD_RATE} max={MAX_REWARD_RATE} className="cr-input" style={inputStyle} />
+                    <div style={{ fontSize: 10, color: "#5533aa", marginTop: 4, fontFamily: P.raj }}>
+                      Min: <span style={{ color: "#a67fff" }}>{MIN_REWARD_RATE}</span> · Max: <span style={{ color: "#a67fff" }}>{MAX_REWARD_RATE}</span> ARCADE per play
+                    </div>
                   </div>
                 </div>
                 {error && <div style={{ padding: 10, background: "rgba(255,68,68,0.07)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 7, color: "#ff4444", fontSize: 11, fontFamily: P.raj }}>{error}</div>}

@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAppKit } from "@reown/appkit/react";
 import { useAccount } from "wagmi";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
+import { getActiveAvatarStyle } from "../utils/avatarUtils";
 
 const LOGO_SIZE = 28;
 
@@ -15,11 +16,26 @@ export default function Navbar() {
   const [ddOpen, setDdOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [avatarStyle, setAvatarStyle] = useState("bottts");
   const ddRef = useRef(null);
   const menuRef = useRef(null);
 
   const shortAddress = (addr) => addr ? addr.slice(0, 5) + "..." + addr.slice(-3) : "";
   const isActive = (path) => location.pathname === path;
+  const avatarUrl = address
+    ? `https://api.dicebear.com/9.x/${avatarStyle}/svg?seed=${address}`
+    : null;
+
+  useEffect(() => {
+    if (address) setAvatarStyle(getActiveAvatarStyle(address));
+  }, [address]);
+
+  // Listen for style changes from Marketplace
+  useEffect(() => {
+    const handler = () => { if (address) setAvatarStyle(getActiveAvatarStyle(address)); };
+    window.addEventListener("avatar_style_changed", handler);
+    return () => window.removeEventListener("avatar_style_changed", handler);
+  }, [address]);
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
@@ -58,10 +74,17 @@ export default function Navbar() {
       backdropFilter: "blur(20px)",
     }}>
 
-      {/* LOGO */}
+      {/* LOGO + Avatar */}
       <div ref={ddRef} style={{ position: "relative", display: "flex", alignItems: "center" }}>
         <div onClick={() => isMobile ? navigate("/") : setDdOpen(p => !p)} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", userSelect: "none" }}>
-          <img src="/IA-logo.png" alt="ArcadeX Logo" style={{ width: 30, height: 30, objectFit: "contain", filter: "drop-shadow(0 0 10px rgba(123,47,255,0.8))" }} />
+          {/* DiceBear Avatar — replaces logo when connected */}
+          {isConnected && avatarUrl ? (
+            <div style={{ width: 30, height: 30, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(123,47,255,0.6)", boxShadow: "0 0 10px rgba(123,47,255,0.5)", flexShrink: 0, background: "#0e0c1a" }}>
+              <img src={avatarUrl} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            </div>
+          ) : (
+            <img src="/IA-logo.png" alt="ArcadeX Logo" style={{ width: 30, height: 30, objectFit: "contain", filter: "drop-shadow(0 0 10px rgba(123,47,255,0.8))" }} />
+          )}
           <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "0.5px" }}>ArcadeX</span>
           {!isMobile && (
             <svg width="9" height="9" viewBox="0 0 9 9" style={{ opacity: 0.3, transform: ddOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>
@@ -119,10 +142,10 @@ export default function Navbar() {
         {/* ARCADE BALANCE — desktop only or connected mobile */}
         {isConnected && balance !== null && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, padding: isMobile ? "0 8px" : "0 12px", height: LOGO_SIZE + 8, borderRadius: (LOGO_SIZE + 8) / 2, background: "rgba(123,47,255,0.08)" }}>
-            <img src="/Arcade-token-logo.png" alt="ARCADE" style={{ width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
-              onError={e => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }}
-            />
-            <div style={{ display: "none", width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: "50%", background: "linear-gradient(135deg,#7B2FFF,#00d4ff)", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 700, color: "#fff", fontFamily: "'Orbitron',sans-serif", flexShrink: 0 }}>A</div>
+            {/* DiceBear avatar — replaces ARCADE token logo */}
+            <div style={{ width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(123,47,255,0.5)", flexShrink: 0, background: "#0e0c1a" }}>
+              <img src={avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${address}`} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            </div>
             <span style={{ color: "#c4a0ff", fontWeight: 700, fontFamily: "'Orbitron',sans-serif", fontSize: isMobile ? 10 : 11, letterSpacing: "0.3px" }}>
               {Number(balance).toLocaleString()}
             </span>

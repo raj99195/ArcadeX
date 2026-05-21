@@ -178,21 +178,97 @@ export default function GamePlay() {
     submittingRef.current = true;
     setSubmitting(true);
     setSubmitError("");
-        
 
     try {
       const rewardRate = game.rewardRate || 50;
       const playerReward = Math.floor(rewardRate * 80 / 100);
+      const creatorReward = Math.floor(rewardRate * 20 / 100);
 
-      // EVM contract call — recordPlayAndEarn (direct, no simulate)
-     const hash = await writeContract(wagmiAdapter.wagmiConfig, {
-  address: PLATFORM_ADDRESS,
-  abi: PLATFORM_ABI,
-  functionName: "recordPlayAndEarn",
-  args: [BigInt(game.gameId || game.id), BigInt(finalScore)],
-  gas: BigInt(500000),// manually gas set karo
-});
-await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      const onChainGameId = game.gameId;
+      if (!onChainGameId) {
+        throw new Error("Game not properly registered on-chain (missing gameId)");
+      }
+
+      // ── DEBUG: fetch game info from contract to verify creator ──
+      try {
+        // Exact struct order from Platform.sol:
+        // struct Game { uint256 gameId; string name; address creator; string iframeUrl; uint256 rewardRate; uint256 totalPlays; bool isActive; }
+        const PLATFORM_READ_ABI = [{
+          name: "games",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ name: "", type: "uint256" }],
+          outputs: [
+            { name: "gameId",     type: "uint256" },
+            { name: "name",       type: "string"  },
+            { name: "creator",    type: "address" },
+            { name: "iframeUrl",  type: "string"  },
+            { name: "rewardRate", type: "uint256" },
+            { name: "totalPlays", type: "uint256" },
+            { name: "isActive",   type: "bool"    },
+          ],
+        }];
+
+        const g = await publicClient.readContract({
+          address: PLATFORM_ADDRESS,
+          abi: PLATFORM_READ_ABI,
+          functionName: "games",
+          args: [BigInt(onChainGameId)],
+        });
+
+        const creatorAddr   = g.creator;
+        const contractRate  = parseInt(g.rewardRate.toString(), 10); // safe — small number like 90
+        const contractPlayerAmt  = Math.floor(contractRate * 80 / 100);
+        const contractCreatorAmt = Math.floor(contractRate * 20 / 100);
+
+        console.log("%c[ArcadeX Debug] 🎮 Game Struct from Contract", "color:#7B2FFF; font-weight:bold; font-size:13px;");
+        console.table({
+          "gameId":      g.gameId.toString(),
+          "name":        g.name,
+          "creator":     creatorAddr,
+          "rewardRate":  contractRate,
+          "totalPlays":  g.totalPlays.toString(),
+          "isActive":    g.isActive,
+        });
+
+        console.log("%c[ArcadeX Debug] 💸 Reward Split", "color:#00FF88; font-weight:bold; font-size:13px;");
+        console.table({
+          "Player Address":        address,
+          "Creator Address":       creatorAddr,
+          "Is Player = Creator?":  address?.toLowerCase() === creatorAddr?.toLowerCase(),
+          "rewardRate (game)":     contractRate,
+          "Player gets (ARCADE)":  contractPlayerAmt,
+          "Creator gets (ARCADE)": contractCreatorAmt,
+          "Score":                 finalScore,
+        });
+
+        if (address?.toLowerCase() === creatorAddr?.toLowerCase())
+          console.warn("%c[ArcadeX Debug] ⚠️ Player IS the creator — both amounts go to same wallet!", "color:#FFB700; font-weight:bold;");
+        if (!creatorAddr || creatorAddr === "0x0000000000000000000000000000000000000000")
+          console.error("%c[ArcadeX Debug] ❌ Creator is ZERO ADDRESS!", "color:#ff4444; font-weight:bold;");
+
+      } catch (debugErr) {
+        console.warn("[ArcadeX Debug] Contract read failed:", debugErr.message);
+        console.log("[ArcadeX Debug] Submitting with frontend data:", {
+          onChainGameId: String(onChainGameId),
+          player: address, playerReward, creatorReward, finalScore,
+        });
+      }
+      // ── END DEBUG ──
+
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address: PLATFORM_ADDRESS,
+        abi: PLATFORM_ABI,
+        functionName: "recordPlayAndEarn",
+        args: [BigInt(onChainGameId), BigInt(finalScore)],
+        gas: BigInt(500000),
+      });
+
+      console.log("%c[ArcadeX Debug] ✅ TX submitted:", "color:#00d4ff; font-weight:bold;", hash);
+
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+
+      console.log("%c[ArcadeX Debug] ✅ TX confirmed on-chain!", "color:#00FF88; font-weight:bold;");
 
       setTokensEarned(playerReward);
       await saveScore({
@@ -208,7 +284,7 @@ await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       iframeRef.current?.contentWindow?.postMessage({ type: "TRANSACTION_SUCCESS", _platform: true, txHash: hash }, "*");
 
     } catch (err) {
-      console.error("TX FAILED:", err.message);
+      console.error("%c[ArcadeX Debug] ❌ TX FAILED:", "color:#ff4444; font-weight:bold;", err.message);
       setSubmitError(err.message || "Transaction failed");
       iframeRef.current?.contentWindow?.postMessage({ type: "TRANSACTION_FAILED", _platform: true, error: err.message }, "*");
     } finally {

@@ -86,9 +86,12 @@ contract CreatorNFT is ERC721, AccessControl {
     }
 
     function _buildSVG(CreatorProfile memory p, uint256 tokenId) internal pure returns (string memory) {
-        string memory initials = _getInitials(p.username);
+        // avatarColor field now stores DiceBear style (e.g. "bottts", "pixel-art")
+        string memory dicebearUrl = string(abi.encodePacked(
+            "https://api.dicebear.com/9.x/", p.avatarColor, "/svg?seed=", p.username
+        ));
         return string(abi.encodePacked(
-            '<svg width="500" height="500" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg">',
+            '<svg width="500" height="500" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">',
             '<defs>',
             '<linearGradient id="pg" x1="0%" y1="0%" x2="100%" y2="0%">',
             '<stop offset="0%" stop-color="#7B2FFF"/>',
@@ -99,19 +102,29 @@ contract CreatorNFT is ERC721, AccessControl {
             '<stop offset="50%" stop-color="#7B2FFF"/>',
             '<stop offset="100%" stop-color="#5a1fd4"/>',
             '</linearGradient>',
+            '<clipPath id="avatarClip">',
+            '<circle cx="250" cy="220" r="90"/>',
+            '</clipPath>',
             '</defs>',
             '<rect width="500" height="500" fill="#08070f"/>',
             '<rect width="500" height="5" fill="url(#pg)"/>',
             '<rect y="495" width="500" height="5" fill="url(#pg)"/>',
             _buildGrid(),
             _buildTopBar(),
-            _buildLogo(),
-            '<circle cx="250" cy="240" r="90" fill="#0e0c1a" stroke="#7B2FFF" stroke-width="2"/>',
-            '<text x="250" y="265" font-family="Arial Black" font-size="52" font-weight="900" fill="url(#pg)" text-anchor="middle">', initials, '</text>',
-            '<text x="250" y="365" font-family="Arial Black" font-size="24" font-weight="900" fill="white" text-anchor="middle">', p.username, '.arcade</text>',
-            '<rect x="175" y="378" width="150" height="24" rx="12" fill="#7B2FFF" fill-opacity="0.2" stroke="#7B2FFF" stroke-width="1"/>',
-            '<text x="250" y="394" font-family="Arial" font-size="11" fill="#a67fff" text-anchor="middle" letter-spacing="2">CREATOR</text>',
+            // Avatar circle background
+            '<circle cx="250" cy="220" r="92" fill="#0e0c1a" stroke="#7B2FFF" stroke-width="2"/>',
+            // DiceBear avatar image clipped to circle
+            '<image href="', dicebearUrl, '" x="160" y="130" width="180" height="180" clip-path="url(#avatarClip)"/>',
+            // Username
+            '<text x="250" y="345" font-family="Arial Black" font-size="24" font-weight="900" fill="white" text-anchor="middle">', p.username, '.arcade</text>',
+            // Creator badge
+            '<rect x="175" y="358" width="150" height="24" rx="12" fill="#7B2FFF" fill-opacity="0.2" stroke="#7B2FFF" stroke-width="1"/>',
+            '<text x="250" y="374" font-family="Arial" font-size="11" fill="#a67fff" text-anchor="middle" letter-spacing="2">CREATOR</text>',
+            // Style label
+            '<text x="250" y="420" font-family="Arial" font-size="10" fill="#5533aa" text-anchor="middle">', p.avatarColor, ' style</text>',
+            // Footer
             '<text x="250" y="470" font-family="monospace" font-size="10" fill="#3a2a5a" text-anchor="middle">#', tokenId.toString(), ' . BOTChain . ArcadeX</text>',
+            _buildLogo(),
             '</svg>'
         ));
     }

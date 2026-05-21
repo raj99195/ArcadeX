@@ -466,6 +466,8 @@ export default function Tournaments() {
         @keyframes trophyBounce { 0%,100%{transform:translateY(0) rotate(-5deg)} 50%{transform:translateY(-8px) rotate(5deg)} }
         @keyframes gradientShift { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
         .tab-btn:hover { color: #c4a0ff !important; }
+        body::-webkit-scrollbar { display: none; }
+        body { scrollbar-width: none; -ms-overflow-style: none; overflow-y: hidden; }
       `}</style>
 
       <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>

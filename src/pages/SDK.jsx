@@ -62,119 +62,209 @@ function FAQItem({ q, a }) {
     </div>
   );
 }
-
-// AI Assistant
-function AIAssistant() {
+function AIQuickLinks() {
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState([
-    { role: "assistant", content: "Hi! I'm the ArcadeX SDK assistant. Ask me anything about integrating your game!" }
-  ]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const bottomRef = useRef(null);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  const docsUrl = import.meta.env.VITE_DOCS_MD_URL;
 
-  const send = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg = input.trim();
-    setInput("");
-    setMessages(prev => [...prev, { role: "user", content: userMsg }]);
-    setLoading(true);
-    try {
-      const allMessages = messages.concat({ role: "user", content: userMsg });
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: "You are the ArcadeX SDK documentation assistant. ArcadeX is a Web3 gaming platform on BOTChain EVM. Help developers integrate their games (Unity, Godot, Phaser.js, Plain HTML/JS) with ArcadeX. Key events: GAME_OVER (submit score on-chain), SCORE_UPDATE (update score UI), GET_PLAYER_INFO (get wallet address). Keep answers concise and include code examples when relevant.",
-          messages: allMessages.map(m => ({ role: m.role, content: m.content }))
-        })
-      });
-      const data = await res.json();
-      const reply = data.content?.[0]?.text || "Sorry, something went wrong.";
-      setMessages(prev => [...prev, { role: "assistant", content: reply }]);
-    } catch {
-      setMessages(prev => [...prev, { role: "assistant", content: "Error connecting. Please try again." }]);
-    }
-    setLoading(false);
-  };
+  const prompt = encodeURIComponent(
+    `Read from ${docsUrl} so I can ask questions about it.`
+  );
+
+  const links = [
+    {
+      name: "Open in ChatGPT",
+      url: `https://chatgpt.com/?hints=search&q=${prompt}`,
+    },
+    {
+      name: "Open in Claude",
+      url: `https://claude.ai/new?q=${prompt}`,
+    },
+    {
+      name: "Open in Perplexity",
+      url: `https://www.perplexity.ai/?q=${prompt}`,
+    },
+  ];
 
   return (
     <>
-      {/* Floating button */}
-      <button onClick={() => setOpen(o => !o)} style={{
-        position: "fixed", bottom: 24, right: 24, zIndex: 1000,
-        width: 52, height: 52, borderRadius: "50%",
-        background: open ? "#ff4444" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)",
-        border: "none", cursor: "pointer",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: 22, boxShadow: "0 8px 24px rgba(123,47,255,0.4)",
-        transition: "all 0.2s",
-      }}>
-        {open ? "✕" : "✦"}
+      {/* Floating Button */}
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          position: "fixed",
+          bottom: 24,
+          right: 24,
+          zIndex: 1000,
+          width: 54,
+          height: 54,
+          borderRadius: "50%",
+          border: "none",
+          cursor: "pointer",
+          background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)",
+          color: "#fff",
+          fontSize: 22,
+          boxShadow: "0 8px 30px rgba(123,47,255,0.45)",
+        }}
+      >
+        ✦
       </button>
 
-      {/* Chat window */}
+      {/* Popup */}
       {open && (
-        <div style={{
-          position: "fixed", bottom: 88, right: 24, zIndex: 999,
-          width: 360, height: 480,
-          background: "#0e0c1a", border: "1px solid rgba(123,47,255,0.3)",
-          borderRadius: 16, overflow: "hidden",
-          display: "flex", flexDirection: "column",
-          boxShadow: "0 24px 60px rgba(0,0,0,0.8)",
-        }}>
-          {/* Header */}
-          <div style={{ padding: "14px 16px", borderBottom: "1px solid rgba(123,47,255,0.15)", background: "rgba(123,47,255,0.08)", display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg,#7B2FFF,#00d4ff)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>✦</div>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: C.ui }}>ArcadeX SDK Assistant</div>
-              <div style={{ fontSize: 10, color: "#5533aa", fontFamily: C.ui }}>Ask anything about integration</div>
+  <div
+    style={{
+      position: "fixed",
+      bottom: 88,
+      right: 24,
+      width: 320,
+      background: "rgba(15,15,20,0.92)",
+      backdropFilter: "blur(24px)",
+      WebkitBackdropFilter: "blur(24px)",
+      border: "1px solid rgba(255,255,255,0.08)",
+      borderRadius: 24,
+      overflow: "hidden",
+      zIndex: 999,
+      boxShadow:
+        "0 20px 80px rgba(0,0,0,0.65), 0 0 0 1px rgba(123,47,255,0.08)",
+    }}
+  >
+    {/* Header */}
+    <div
+      style={{
+        padding: "18px 18px 14px",
+        borderBottom: "1px solid rgba(255,255,255,0.06)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 15,
+          fontWeight: 700,
+          color: "#fff",
+          fontFamily: C.ui,
+          marginBottom: 6,
+        }}
+      >
+        Ask AI About Docs
+      </div>
+
+      <div
+        style={{
+          fontSize: 12,
+          lineHeight: 1.6,
+          color: "rgba(255,255,255,0.45)",
+          fontFamily: C.ui,
+        }}
+      >
+        Read directly from your markdown docs inside AI tools.
+      </div>
+    </div>
+
+    {/* Links */}
+    <div style={{ padding: 10 }}>
+      {[
+        {
+          name: "Open in ChatGPT",
+          icon: "✦",
+          url: `https://chatgpt.com/?hints=search&q=${prompt}`,
+        },
+        {
+          name: "Open in Claude",
+          icon: "✳",
+          url: `https://claude.ai/new?q=${prompt}`,
+        },
+        {
+          name: "Open in Perplexity",
+          icon: "⬢",
+          url: `https://www.perplexity.ai/?q=${prompt}`,
+        },
+      ].map((item) => (
+        <a
+          key={item.name}
+          href={item.url}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+            padding: "14px 14px",
+            borderRadius: 16,
+            textDecoration: "none",
+            transition: "all 0.18s ease",
+            marginBottom: 4,
+            border: "1px solid transparent",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background =
+              "rgba(123,47,255,0.10)";
+            e.currentTarget.style.border =
+              "1px solid rgba(123,47,255,0.18)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.border =
+              "1px solid transparent";
+          }}
+        >
+          {/* Icon */}
+          <div
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: 12,
+              background: "rgba(123,47,255,0.14)",
+              border: "1px solid rgba(123,47,255,0.14)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#caa6ff",
+              fontSize: 15,
+              flexShrink: 0,
+            }}
+          >
+            {item.icon}
+          </div>
+
+          {/* Text */}
+          <div style={{ flex: 1 }}>
+            <div
+              style={{
+                color: "#fff",
+                fontSize: 13,
+                fontWeight: 600,
+                fontFamily: C.ui,
+                marginBottom: 2,
+              }}
+            >
+              {item.name}
             </div>
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00FF88" }} />
-              <span style={{ fontSize: 9, color: "#00FF88", fontFamily: C.ui }}>Online</span>
+
+            <div
+              style={{
+                color: "rgba(255,255,255,0.42)",
+                fontSize: 11,
+                fontFamily: C.ui,
+              }}
+            >
+              Ask questions about this documentation
             </div>
           </div>
 
-          {/* Messages */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-            {messages.map((m, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-                <div style={{
-                  maxWidth: "85%", padding: "8px 12px",
-                  background: m.role === "user" ? "rgba(123,47,255,0.25)" : "rgba(0,0,0,0.4)",
-                  border: `1px solid ${m.role === "user" ? "rgba(123,47,255,0.3)" : "rgba(123,47,255,0.1)"}`,
-                  borderRadius: m.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-                  fontSize: 12, color: "#c4a0ff", fontFamily: C.ui, lineHeight: 1.6,
-                  whiteSpace: "pre-wrap",
-                }}>
-                  {m.content}
-                </div>
-              </div>
-            ))}
-            {loading && (
-              <div style={{ display: "flex", gap: 4, padding: "8px 12px" }}>
-                {[0, 1, 2].map(i => <span key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: "#7B2FFF", animation: `dot 1.2s ${i * 0.2}s ease-in-out infinite` }} />)}
-              </div>
-            )}
-            <div ref={bottomRef} />
+          {/* Arrow */}
+          <div
+            style={{
+              color: "rgba(255,255,255,0.25)",
+              fontSize: 16,
+            }}
+          >
+            ↗
           </div>
-
-          {/* Input */}
-          <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(123,47,255,0.15)", display: "flex", gap: 8 }}>
-            <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()}
-              placeholder="Ask about integration..."
-              style={{ flex: 1, padding: "8px 12px", background: "rgba(123,47,255,0.06)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 20, color: "#d4b8ff", fontSize: 12, fontFamily: C.ui, outline: "none" }}
-            />
-            <button onClick={send} disabled={loading || !input.trim()} style={{ width: 34, height: 34, borderRadius: "50%", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", color: "#fff", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>↑</button>
-          </div>
-        </div>
-      )}
-      <style>{`@keyframes dot { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1.2)} }`}</style>
+        </a>
+      ))}
+    </div>
+  </div>
+)}
     </>
   );
 }
@@ -195,7 +285,6 @@ const NAV = [
   { label: "Reference", items: [
     { id: "api", label: "API Reference" },
     { id: "events", label: "Events" },
-    { id: "faq", label: "FAQ" },
   ]},
 ];
 
@@ -242,9 +331,11 @@ export default function SDK() {
           <H2 id="downloads">SDK Files</H2>
           <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 32 }}>
             {[
-              { file: "arcade-sdk.js", icon: "⚡", color: C.green, badge: "v2.0.0", tag: "All Engines", desc: "Core SDK — works with any web-based game engine", href: "/arcade-sdk.js" },
-              { file: "arcade-sdk-unity.js", icon: "🎮", color: C.cyan, badge: "Unity", tag: "WebGL Build/", desc: "Unity-specific SDK with jslib bridge support", href: "/arcade-sdk-unity.js" },
-              { file: "ArcadeBridge.jslib", icon: "🔌", color: C.purple, badge: "Unity Plugin", tag: "Assets/Plugins/WebGL/", desc: "Bridges C# → JavaScript calls in Unity", href: "/ArcadeBridge.jslib" },
+              { file: "arcade-sdk.js",        icon: "🌐", color: C.gold,   badge: "v2.0.0",      tag: "All / Plain HTML", desc: "Core SDK — works with any web-based game engine", href: "/arcade-sdk.js" },
+              { file: "arcade-sdk-unity.js",   icon: "🎮", color: C.green,  badge: "Unity",       tag: "WebGL Build/",     desc: "Unity WebGL SDK with jslib bridge & SendMessage support", href: "/arcade-sdk-unity.js" },
+              { file: "arcade-sdk-godot.js",   icon: "🔵", color: C.cyan,   badge: "Godot",       tag: "HTML5 Export/",    desc: "Godot 3.x & 4.x HTML5 export integration", href: "/arcade-sdk-godot.js" },
+              { file: "arcade-sdk-phaser.js",  icon: "⚡", color: C.purple, badge: "Phaser 3",    tag: "project/",         desc: "Phaser 3 SDK — global + optional Scene Plugin", href: "/arcade-sdk-phaser.js" },
+              { file: "ArcadeBridge.jslib",    icon: "🔌", color: C.orange, badge: "Unity Plugin", tag: "Assets/Plugins/WebGL/", desc: "Bridges Unity C# DllImport → JavaScript calls", href: "/ArcadeBridge.jslib" },
             ].map(f => (
               <div key={f.file} style={{ background: C.surface, border: `1px solid ${f.color}33`, borderRadius: 14, padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20, flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -462,9 +553,9 @@ public class ArcadeManager : MonoBehaviour
           <InfoBox color={C.blue} icon="ℹ">Godot uses JavaScript singleton to call browser JS. Works in both Godot 3.x and 4.x.</InfoBox>
 
           <H3>Step 1 — Add SDK to index.html</H3>
-          <p style={{ fontSize: 13, color: C.muted, fontFamily: C.ui, marginBottom: 12 }}>After Godot exports, add arcade-sdk.js to your HTML template:</p>
+          <p style={{ fontSize: 13, color: C.muted, fontFamily: C.ui, marginBottom: 12 }}>After Godot exports, add arcade-sdk-godot.js to your HTML template:</p>
           <CodeBlock id="godot-html" copied={copied} onCopy={copy} lang="html" code={`<!-- In your Godot export index.html, add before </head> -->
-<script src="arcade-sdk.js"></script>`} />
+<script src="arcade-sdk-godot.js"></script>`} />
 
           <H3>Step 2 — GDScript integration</H3>
           <CodeBlock id="godot-script" copied={copied} onCopy={copy} lang="gdscript" code={`# ArcadeSDK.gd — autoload singleton
@@ -782,8 +873,8 @@ ArcadeSDK.getPlayerInfo();`} />
               </div>
             ))}
             <div style={{ margin: "20px 16px 0", padding: 14, background: "rgba(123,47,255,0.06)", border: `1px solid ${C.border}`, borderRadius: 10 }}>
-              <div style={{ fontSize: 11, color: C.purple, fontWeight: 700, fontFamily: C.ui, marginBottom: 4 }}>✦ AI Assistant</div>
-              <div style={{ fontSize: 10, color: C.dim, fontFamily: C.ui, lineHeight: 1.6 }}>Click the ✦ button (bottom right) to ask integration questions</div>
+              <div style={{ fontSize: 11, color: C.purple, fontWeight: 700, fontFamily: C.ui, marginBottom: 4 }}>✦ Ask AI</div>
+              <div style={{ fontSize: 10, color: C.dim, fontFamily: C.ui, lineHeight: 1.6 }}>Open docs directly in ChatGPT, Claude, or Perplexity</div>
             </div>
           </div>
         )}
@@ -843,7 +934,7 @@ ArcadeSDK.getPlayerInfo();`} />
         )}
       </div>
 
-      <AIAssistant />
+      <AIQuickLinks />
     </div>
   );
 }

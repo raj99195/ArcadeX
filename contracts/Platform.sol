@@ -90,6 +90,48 @@ contract Platform is AccessControl {
         emit GameApproved(gameId);
     }
 
+    // Admin directly game register + approve kare — specific gameId ke saath
+    // Existing games ko migrate karne ke liye
+    function adminRegisterAndApprove(
+        uint256 specificGameId,
+        address creator,
+        string memory name,
+        string memory iframeUrl,
+        uint256 rewardRate
+    ) external onlyRole(ADMIN_ROLE) {
+        require(games[specificGameId].gameId == 0, "GameId already taken");
+
+        // Creator auto-register if not exists
+        if (creators[creator].creator == address(0)) {
+            creators[creator] = CreatorProfile({
+                creator: creator,
+                totalEarned: 0,
+                gamesPublished: 0,
+                isVerified: false
+            });
+        }
+
+        games[specificGameId] = Game({
+            gameId: specificGameId,
+            name: name,
+            creator: creator,
+            iframeUrl: iframeUrl,
+            rewardRate: rewardRate,
+            totalPlays: 0,
+            isActive: true  // directly active
+        });
+
+        creators[creator].gamesPublished++;
+
+        // nextGameId update karo agar specificGameId >= nextGameId
+        if (specificGameId >= nextGameId) {
+            nextGameId = specificGameId + 1;
+        }
+
+        emit GameRegistered(specificGameId, creator, name);
+        emit GameApproved(specificGameId);
+    }
+
     // Player directly call kare — 80% player, 20% creator
     function recordPlayAndEarn(
         uint256 gameId,
@@ -100,7 +142,10 @@ contract Platform is AccessControl {
         address player = msg.sender;
         address creator = games[gameId].creator;
 
-        uint256 rate = arcadeToken.rewardRate();
+        // Use game's own rewardRate (set at registration), NOT token's global rate
+        // rewardRate stored as plain units (e.g. 90 = 90 ARCADE total)
+        // Convert to 18 decimals for minting
+        uint256 rate = games[gameId].rewardRate * 10 ** 18;
         uint256 playerReward = (rate * 80) / 100;
         uint256 creatorReward = (rate * 20) / 100;
 

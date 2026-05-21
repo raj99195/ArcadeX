@@ -72,10 +72,11 @@ export default function Home() {
   return (
     <div style={{
       minHeight: "calc(100vh - 54px)",
+      maxHeight: isMobile ? "none" : "calc(100vh - 54px)",
       background: "#08070f",
       display: "grid",
       gridTemplateColumns: isMobile ? "1fr" : "1fr 280px",
-      overflow: isMobile ? "auto" : "hidden",
+      overflow: "hidden",
       height: isMobile ? "auto" : "calc(100vh - 54px)",
       position: "relative",
     }}>
@@ -90,6 +91,10 @@ export default function Home() {
         @keyframes sideSlideOut { 0%{opacity:0.72} 100%{opacity:0} }
         @keyframes sideSlideIn  { 0%{opacity:0} 100%{opacity:0.72} }
         @keyframes activeGlow   { 0%,100%{box-shadow:0 0 30px rgba(123,47,255,0.6),0 12px 44px rgba(0,0,0,0.85)} 50%{box-shadow:0 0 50px rgba(123,47,255,0.85),0 12px 60px rgba(0,0,0,0.9)} }
+        .lb-scroll::-webkit-scrollbar { display: none; }
+        .lb-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+        body { overflow: hidden; }
+        @media (max-width: 768px) { body { overflow: auto; } }
       `}</style>
 
       {/* ══════ LEFT ══════ */}
@@ -513,7 +518,7 @@ export default function Home() {
         </div>
 
         {/* BOTChain Panel */}
-        <div style={{ flex: 1, overflowY: isMobile ? "visible" : "auto", position: "relative", zIndex: 1, display: "flex", flexDirection: "column" }}>
+        <div className="lb-scroll" style={{ flex: 1, overflowY: isMobile ? "visible" : "auto", overflowX: "hidden", position: "relative", zIndex: 1, display: "flex", flexDirection: "column", scrollbarWidth: "none", msOverflowStyle: "none" }}>
           <div style={{ flex: 1 }}>
           {/* BOTChain Panel */}
           <div style={{ padding: "16px", background: "linear-gradient(180deg,rgba(20,8,40,0.95),rgba(10,4,25,0.98))", borderRadius: 12, border: "1px solid rgba(123,47,255,0.25)", margin: "10px 10px 8px" }}>
@@ -546,23 +551,38 @@ export default function Home() {
           </div>
 
           {/* Live Stats */}
-          <div style={{ margin: "0 10px 8px", padding: "12px 14px", background: "rgba(123,47,255,0.06)", borderRadius: 10, border: "1px solid rgba(123,47,255,0.18)" }}>
-            <div style={{ fontSize: 9, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", color: "rgba(180,150,255,0.5)", marginBottom: 10 }}>Network Stats</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {[
-                { label: "Top Players", value: leaderboard.length > 0 ? `${leaderboard.length}` : "—", icon: "👥", color: "#c4a0ff" },
-                { label: "Games Live", value: games.length > 0 ? `${games.length}` : "—", icon: "🎮", color: "#00d4ff" },
-                { label: "Top Score", value: leaderboard.length > 0 ? fmtScore(leaderboard[0]?.bestScore) : "—", icon: "🏆", color: "#FFD700" },
-                { label: "On-Chain", value: "100%", icon: "⛓️", color: "#00FF88" },
-              ].map((stat, i) => (
-                <div key={i} style={{ background: "rgba(123,47,255,0.08)", borderRadius: 8, padding: "9px 10px", border: "1px solid rgba(123,47,255,0.12)" }}>
-                  <div style={{ fontSize: 14, marginBottom: 4 }}>{stat.icon}</div>
-                  <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 14, color: stat.color, marginBottom: 2 }}>{stat.value}</div>
-                  <div style={{ fontSize: 8, color: "rgba(180,150,255,0.4)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>{stat.label}</div>
+          {(() => {
+            // ── STATS SIZE CONTROLS ── inhe change karo
+            const ST = {
+              iconSize:   16,
+              valueSize:  15,
+              labelSize:  9,
+              padding:    "16px 12px",  // fixed — screen size se nahi badlega
+              gap:        6,
+              rowGap:     8,
+            };
+            return (
+              <div style={{ margin: "0 10px 8px", padding: "10px 12px", background: "rgba(123,47,255,0.06)", borderRadius: 10, border: "1px solid rgba(123,47,255,0.18)" }}>
+                <div style={{ fontSize: 9, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", color: "rgba(180,150,255,0.5)", marginBottom: ST.gap + 4 }}>Network Stats</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: ST.gap }}>
+                  {[
+                    { label: "Top Players", value: leaderboard.length > 0 ? `${leaderboard.length}` : "—", icon: "👥", color: "#c4a0ff" },
+                    { label: "Games Live",  value: games.length > 0 ? `${games.length}` : "—",             icon: "🎮", color: "#00d4ff" },
+                    { label: "Top Score",   value: leaderboard.length > 0 ? fmtScore(leaderboard[0]?.bestScore) : "—", icon: "🏆", color: "#FFD700" },
+                    { label: "On-Chain",    value: "100%",                                                  icon: "⛓️", color: "#00FF88" },
+                  ].map((stat, i) => (
+                    <div key={i} style={{ background: "rgba(123,47,255,0.08)", borderRadius: 7, padding: ST.padding, border: "1px solid rgba(123,47,255,0.12)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: ST.rowGap }}>
+                        <span style={{ fontSize: ST.iconSize }}>{stat.icon}</span>
+                        <span style={{ fontSize: ST.labelSize, color: "rgba(180,150,255,0.45)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>{stat.label}</span>
+                      </div>
+                      <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: ST.valueSize, color: stat.color }}>{stat.value}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
+              </div>
+            );
+          })()}
           </div>
         </div>
 

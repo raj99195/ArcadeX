@@ -1,205 +1,146 @@
 /**
- * InitiaArcade SDK v1.0.1
+ * ArcadeX SDK v2.0.0
+ * Integrate your game with ArcadeX on BOTChain EVM
+ * https://arcade-x-sand.vercel.app/sdk
  *
- * Connect your Unity WebGL game to the InitiaArcade platform.
- * Include this file in your WebGL build to enable on-chain scoring,
- * token rewards, and blockchain interactions.
- *
- * Documentation: https://initia-arcade.vercel.app/sdk
- * Platform:      https://initia-arcade.vercel.app
+ * Usage:
+ *   ArcadeSDK.init("YOUR_GAME_ID");
+ *   ArcadeSDK.updateScore(1500);
+ *   ArcadeSDK.gameOver(9999);
  */
 
-(function () {
+(function (global) {
   "use strict";
 
-  var _gameId   = null;
-  var _debug    = false;
-  var _ready    = false;
-  var _platform = window.parent;
-
-  function _log() {
-    if (_debug) {
-      var args = Array.prototype.slice.call(arguments);
-      args.unshift("[ArcadeSDK]");
-      console.log.apply(console, args);
-    }
-  }
-
-  function _warn() {
-    var args = Array.prototype.slice.call(arguments);
-    args.unshift("[ArcadeSDK]");
-    console.warn.apply(console, args);
-  }
-
-  function _send(type, data) {
-    if (!_ready && type !== "SDK_READY") {
-      _warn("SDK not initialized. Call ArcadeSDK.init() first.");
-      return;
-    }
-    try {
-      var payload = Object.assign({}, data, {
-        type: type,
-        _sdk: true,
-        gameId: _gameId,
-        sdkVersion: "1.0.1",
-      });
-      _platform.postMessage(payload, "*");
-      _log("Event sent →", type, data);
-    } catch (e) {
-      console.error("[ArcadeSDK] postMessage failed:", e);
-    }
-  }
-
-  window.addEventListener("message", function (event) {
-    if (!event.data || !event.data._platform) return;
-    var type = event.data.type;
-    if (type === "TRANSACTION_SUCCESS") {
-      _log("Transaction confirmed:", event.data.txHash);
-    }
-    if (type === "TRANSACTION_FAILED") {
-      _warn("Transaction failed:", event.data.error);
-    }
-    if (type === "PLAYER_INFO") {
-      _log("Player info received:", event.data.player);
-    }
-  });
-
   var ArcadeSDK = {
+    version: "2.0.0",
+    gameId: "",
+    currentScore: 0,
+    initialized: false,
+    debug: false,
 
-    version: "1.0.1",
-
-    /**
-     * Initialize the SDK. Must be called once when the game loads.
-     * @param {string|number} gameId   - Your game ID from the platform dashboard.
-     * @param {object}        [options]
-     * @param {boolean}       [options.debug=false] - Enable verbose console logging.
-     */
+    // ─── INIT ────────────────────────────────────────────────
     init: function (gameId, options) {
-      _gameId = String(gameId);
-      _debug  = (options && options.debug === true);
-      _ready  = true;
-      _log("SDK initialized — Game ID:", _gameId);
-      _send("SDK_READY", { gameId: _gameId });
+      this.gameId = gameId || "";
+      this.currentScore = 0;
+      this.initialized = true;
+      this.debug = (options && options.debug) || false;
+
+      this._log("ArcadeX SDK v" + this.version + " initialized", {
+        gameId: this.gameId,
+        platform: window !== window.parent ? "iframe (ArcadeX)" : "standalone",
+      });
+
+      // Notify platform SDK is ready
+      this._post({ type: "ARCADE_SDK_READY", gameId: this.gameId });
+
+      // Listen for messages from platform
+      window.addEventListener("message", this._onMessage.bind(this));
+
+      return this;
     },
 
-    /**
-     * Send a real-time score update to the platform UI.
-     * Does NOT trigger a blockchain transaction.
-     * @param {number} score - The player's current score.
-     */
+    // ─── UPDATE SCORE ─────────────────────────────────────────
     updateScore: function (score) {
-      _send("SCORE_UPDATE", { score: Number(score) });
-    },
-
-    /**
-     * Signal game over and submit the final score on-chain.
-     * If auto-sign is enabled, this triggers a silent blockchain transaction.
-     * @param {number} finalScore - The player's final score for this session.
-     */
-    gameOver: function (finalScore) {
-      _log("Game over — submitting score:", finalScore);
-      _send("GAME_OVER", { score: Number(finalScore) });
-    },
-
-    /**
-     * Award ARCADE tokens to the player for in-game achievements.
-     * @param {number} amount - Number of ARCADE tokens to award.
-     */
-    earnTokens: function (amount) {
-      _send("EARN_TOKENS", { amount: Number(amount) });
-      _log("Earn tokens:", amount, "ARCADE");
-    },
-
-    /**
-     * Deduct ARCADE tokens from the player's wallet for an in-game purchase.
-     * @param {string} itemId - Unique identifier for the item.
-     * @param {number} price  - Cost of the item in ARCADE tokens.
-     */
-    buyItem: function (itemId, price) {
-      _send("BUY_ITEM", { itemId: String(itemId), price: Number(price) });
-      _log("Buy item:", itemId, "| Price:", price, "ARCADE");
-    },
-
-    /**
-     * Unlock an on-chain achievement badge for the player.
-     * @param {string} achievementId - Unique identifier for the achievement.
-     */
-    unlockAchievement: function (achievementId) {
-      _send("UNLOCK_ACHIEVEMENT", { achievementId: String(achievementId) });
-      _log("Achievement unlocked:", achievementId);
-    },
-
-    /**
-     * Record level completion on-chain.
-     * @param {number} level - The level number that was completed.
-     * @param {number} score - Score achieved on this level.
-     */
-    levelComplete: function (level, score) {
-      _send("LEVEL_COMPLETE", { level: Number(level), score: Number(score) });
-      _log("Level complete:", level, "| Score:", score);
-    },
-
-    /**
-     * Request the connected player's wallet information from the platform.
-     * @param {function} callback - Called with { address, username, balance }.
-     */
-    getPlayerInfo: function (callback) {
-      if (typeof callback !== "function") {
-        _warn("getPlayerInfo requires a callback function.");
+      if (!this.initialized) {
+        console.warn("[ArcadeSDK] Call init() before updateScore()");
         return;
       }
-      _send("GET_PLAYER_INFO", {});
-      var handler = function (event) {
-        if (event.data && event.data.type === "PLAYER_INFO" && event.data._platform) {
-          callback(event.data.player);
-          window.removeEventListener("message", handler);
-        }
-      };
-      window.addEventListener("message", handler);
-      setTimeout(function () {
-        window.removeEventListener("message", handler);
-      }, 10000);
+      this.currentScore = parseInt(score) || 0;
+      this._post({ type: "SCORE_UPDATE", score: this.currentScore, gameId: this.gameId });
+      this._log("Score updated:", this.currentScore);
     },
 
-    /** @returns {boolean} Whether the SDK has been initialized. */
-    isReady: function () { return _ready; },
-
-    /** @returns {string|null} The current game ID. */
-    getGameId: function () { return _gameId; },
-  };
-
-  // ── Unity C# bridge ─────────────────────────────────────────
-  // Use these with Application.ExternalCall() in your C# scripts.
-  // Example: Application.ExternalCall("arcade_gameOver", finalScore);
-
-  window.arcade_init = function (gameId, debug) {
-    ArcadeSDK.init(gameId, { debug: debug === "true" || debug === true });
-  };
-  window.arcade_updateScore      = function (score)                { ArcadeSDK.updateScore(score); };
-  window.arcade_gameOver         = function (score)                { ArcadeSDK.gameOver(score); };
-  window.arcade_earnTokens       = function (amount)               { ArcadeSDK.earnTokens(amount); };
-  window.arcade_buyItem          = function (itemId, price)        { ArcadeSDK.buyItem(itemId, price); };
-  window.arcade_unlockAchievement= function (achievementId)        { ArcadeSDK.unlockAchievement(achievementId); };
-  window.arcade_levelComplete    = function (level, score)         { ArcadeSDK.levelComplete(level, score); };
-  window.arcade_isReady          = function ()                     { return ArcadeSDK.isReady(); };
-
-  window.arcade_getPlayerInfo = function (callbackName) {
-    ArcadeSDK.getPlayerInfo(function (player) {
-      if (window.gameInstance) {
-        window.gameInstance.SendMessage(
-          "ArcadeManager",
-          callbackName,
-          JSON.stringify(player)
-        );
+    // ─── GAME OVER ────────────────────────────────────────────
+    gameOver: function (finalScore) {
+      if (!this.initialized) {
+        console.warn("[ArcadeSDK] Call init() before gameOver()");
+        return;
       }
-    });
+      var score = finalScore !== undefined ? parseInt(finalScore) : this.currentScore;
+      this.currentScore = score;
+      this._post({ type: "GAME_OVER", score: score, gameId: this.gameId });
+      this._log("Game over submitted:", score);
+    },
+
+    // ─── PAUSE / RESUME ───────────────────────────────────────
+    pause: function () {
+      this._post({ type: "GAME_PAUSED", gameId: this.gameId });
+      this._log("Game paused");
+    },
+
+    resume: function () {
+      this._post({ type: "GAME_RESUMED", gameId: this.gameId });
+      this._log("Game resumed");
+    },
+
+    // ─── GET SCORE ────────────────────────────────────────────
+    getScore: function () {
+      return this.currentScore;
+    },
+
+    // ─── INTERNAL ─────────────────────────────────────────────
+    _post: function (data) {
+      try {
+        var msg = Object.assign({}, data, { _arcadex: true, version: this.version });
+        // Send to parent (ArcadeX platform iframe)
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(msg, "*");
+        }
+        // Also send to current window for standalone testing
+        window.postMessage(msg, "*");
+      } catch (e) {
+        console.error("[ArcadeSDK] postMessage failed:", e);
+      }
+    },
+
+    _onMessage: function (event) {
+      var data = event.data;
+      if (!data || !data._platform) return;
+
+      this._log("Platform message received:", data.type);
+
+      switch (data.type) {
+        case "TRANSACTION_SUCCESS":
+          this._log("✅ Score submitted on-chain!", { txHash: data.txHash });
+          if (typeof this.onSuccess === "function") this.onSuccess(data.txHash);
+          break;
+
+        case "TRANSACTION_FAILED":
+          console.warn("[ArcadeSDK] ❌ Transaction failed:", data.error);
+          if (typeof this.onError === "function") this.onError(data.error);
+          break;
+
+        case "WALLET_CONNECTED":
+          this._log("Wallet connected:", data.address);
+          if (typeof this.onWalletConnected === "function") this.onWalletConnected(data.address);
+          break;
+
+        case "GAME_START":
+          this._log("Game start signal from platform");
+          if (typeof this.onGameStart === "function") this.onGameStart();
+          break;
+
+        default:
+          break;
+      }
+    },
+
+    _log: function () {
+      if (this.debug) {
+        var args = Array.prototype.slice.call(arguments);
+        args.unshift("[ArcadeSDK]");
+        console.log.apply(console, args);
+      }
+    },
   };
 
-  window.ArcadeSDK = ArcadeSDK;
+  // Expose globally
+  global.ArcadeSDK = ArcadeSDK;
 
-  console.log(
-    "%c InitiaArcade SDK v1.0.1 ",
-    "background:#00FF88;color:#000;padding:4px 10px;border-radius:4px;font-weight:bold;"
-  );
+  // CommonJS / ES module support
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = ArcadeSDK;
+  }
 
-})();
+})(typeof window !== "undefined" ? window : this);
