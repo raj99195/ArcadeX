@@ -133,7 +133,11 @@ contract Tournament is AccessControl, ReentrancyGuard {
     /// @notice Submit score — called by platform or player
     function submitTournamentScore(uint256 tournamentId, uint256 score) external {
         TournamentInfo storage t = tournaments[tournamentId];
-        require(t.status == TournamentStatus.Active, "Tournament not active");
+        require(t.id != 0, "Tournament not found");
+        require(
+            t.status != TournamentStatus.Ended && t.status != TournamentStatus.Cancelled,
+            "Tournament finished"
+        );
         require(block.timestamp >= t.startTime && block.timestamp <= t.endTime, "Outside tournament time");
         require(playerScores[tournamentId][msg.sender].submitted, "Not joined");
 

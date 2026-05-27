@@ -9,6 +9,8 @@ import Creator from "./pages/Creator";
 import SDK from "./pages/SDK";
 import Tournaments from "./pages/Tournaments";
 import Marketplace from "./pages/Marketplace";
+import Community from "./pages/Community";
+import CreatorGameDetail from "./pages/CreatorGameDetail";
 
 export default function App() {
   return (
@@ -24,6 +26,8 @@ export default function App() {
         <Route path="/sdk" element={<SDK />} />
         <Route path="/tournaments" element={<Tournaments />} />
         <Route path="/marketplace" element={<Marketplace />} />
+        <Route path="/community" element={<Community />} />
+        <Route path="/publish/game/:gameId" element={<CreatorGameDetail />} />
       </Routes>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useAccount, usePublicClient } from "wagmi";
+import { useNavigate } from "react-router-dom";
 import { saveGame, saveCreator, getGamesByCreator, registerCreator, getCreatorStatus, getGameById } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
@@ -139,6 +140,7 @@ export default function Creator() {
   const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth <= 768 : false);
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
+  const navigate = useNavigate();
   const { balance } = useArcadeBalance();
 
   const [activeTab, setActiveTab] = useState("my-games");
@@ -327,7 +329,7 @@ export default function Creator() {
         )
       );
       const mine = results
-        .map(t => ({ ...t, id: Number(t.id), status: Number(t.status), prizePool: t.prizePool, players: t.players }))
+        .map(t => ({ ...t, id: Number(t.id), status: Number(t.status), startTime: Number(t.startTime), endTime: Number(t.endTime), prizePool: t.prizePool, players: t.players }))
         .filter(t => t.creator?.toLowerCase() === address?.toLowerCase());
       setMyTournaments(mine);
     } catch (err) { console.error(err); }
@@ -659,8 +661,12 @@ export default function Creator() {
         {/* Profile card — NFT identity */}
         <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 12, padding: "16px 22px", marginBottom: 22, display: "flex", alignItems: "center", gap: 16, position: "relative", overflow: "hidden" }}>
           <div style={{ position: "absolute", top: -30, right: -30, width: 150, height: 150, background: "radial-gradient(circle, rgba(123,47,255,0.12) 0%, transparent 70%)", borderRadius: "50%", pointerEvents: "none" }} />
-          <div style={{ width: 46, height: 46, borderRadius: "50%", background: "#0e0c1a", border: `2px solid ${nftProfile?.avatarColor || "#7B2FFF"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 900, color: nftProfile?.avatarColor || "#7B2FFF", fontFamily: "Arial Black, sans-serif", flexShrink: 0, boxShadow: `0 0 16px ${nftProfile?.avatarColor || "#7B2FFF"}44` }}>
-            {nftProfile?.username?.slice(0, 2).toUpperCase() || "??"}
+          <div style={{ width: 46, height: 46, borderRadius: "50%", overflow: "hidden", border: "2px solid rgba(123,47,255,0.5)", flexShrink: 0, boxShadow: "0 0 16px rgba(123,47,255,0.4)", background: "#0e0c1a" }}>
+            <img
+              src={`https://api.dicebear.com/9.x/${nftProfile?.avatarColor || "bottts"}/svg?seed=${nftProfile?.username || address}`}
+              alt="avatar"
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
@@ -705,7 +711,7 @@ export default function Creator() {
                 {myGames.map(game => {
                   const s = statusMap[game.status] || statusMap.pending;
                   return (
-                    <div key={game.id} className="game-card-cr" onClick={() => setSelectedGame(game)} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, overflow: "hidden", cursor: "pointer", transition: "all 0.2s" }}>
+                    <div key={game.id} className="game-card-cr" onClick={() => navigate(`/publish/game/${game.id}`)} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, overflow: "hidden", cursor: "pointer", transition: "all 0.2s" }}>
                       <div style={{ width: "100%", paddingTop: "56.25%", position: "relative", background: "#0a0818", overflow: "hidden" }}>
                         {(game.thumbnailUrl && game.thumbnailUrl !== "")
                           ? <img src={game.thumbnailUrl} alt={game.name} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.style.display = "none"; }} />
@@ -850,8 +856,16 @@ export default function Creator() {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {myTournaments.map(t => {
-                  const statusLabel = t.status === 0 ? { label: "⏳ Upcoming", color: "#FFB800", bg: "rgba(255,184,0,0.08)", border: "rgba(255,184,0,0.2)" }
-                    : t.status === 1 ? { label: "🟢 Active", color: "#00FF88", bg: "rgba(0,255,136,0.08)", border: "rgba(0,255,136,0.2)" }
+                  const now = Date.now() / 1000;
+                  const realStatus = t.status === 2 ? "Ended"
+                    : t.status === 3 ? "Cancelled"
+                    : now >= t.startTime && now <= t.endTime ? "Active"
+                    : now > t.endTime ? "Ended"
+                    : "Upcoming";
+
+                  const statusLabel = realStatus === "Upcoming" ? { label: "⏳ Upcoming", color: "#FFB800", bg: "rgba(255,184,0,0.08)", border: "rgba(255,184,0,0.2)" }
+                    : realStatus === "Active" ? { label: "🟢 Active", color: "#00FF88", bg: "rgba(0,255,136,0.08)", border: "rgba(0,255,136,0.2)" }
+                    : realStatus === "Cancelled" ? { label: "✗ Cancelled", color: "#ff4444", bg: "rgba(255,68,68,0.08)", border: "rgba(255,68,68,0.2)" }
                     : { label: "✓ Ended", color: "#7755aa", bg: "rgba(123,47,255,0.08)", border: "rgba(123,47,255,0.2)" };
                   const prizePool = Number(t.prizePool) / 1e18;
                   const endTime = new Date(Number(t.endTime) * 1000);
@@ -879,10 +893,13 @@ export default function Creator() {
                           ))}
                         </div>
                       </div>
-                      {t.status === 1 && !t.prizesDistributed && (
+                      {(realStatus === "Active" || realStatus === "Ended") && !t.prizesDistributed && (
                         <Btn onClick={() => handleEndTournament(t.id)} variant="ghost" style={{ fontSize: 11, padding: "7px 14px", flexShrink: 0 }}>
                           End & Distribute 🏆
                         </Btn>
+                      )}
+                      {t.prizesDistributed && (
+                        <div style={{ fontSize: 10, color: "#00FF88", fontFamily: P.raj, fontWeight: 700, padding: "7px 14px", flexShrink: 0 }}>✓ Prizes Sent</div>
                       )}
                     </div>
                   );

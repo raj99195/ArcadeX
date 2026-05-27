@@ -62,6 +62,7 @@ export default function Navbar() {
     { label: "Tournaments", path: "/tournaments" },
     { label: "Marketplace", path: "/marketplace" },
     { label: "Creators", path: "/publish" },
+    { label: "Community", path: "/community" }
   ];
 
   return (
@@ -125,7 +126,7 @@ export default function Navbar() {
       {/* Desktop Nav Links */}
       {!isMobile && (
         <div style={{ display: "flex", gap: 4 }}>
-          {[["Home", "/"], ["Games", "/games"], ["Leaderboard", "/leaderboard"], ["Tournaments", "/tournaments"], ["Marketplace", "/marketplace"]].map(([label, path]) => (
+          {[["Home", "/"], ["Games", "/games"], ["Leaderboard", "/leaderboard"], ["Tournaments", "/tournaments"], ["Marketplace", "/marketplace"],["Community", "/Community"]].map(([label, path]) => (
             <Link key={label} to={path} style={{ padding: "6px 14px", borderRadius: 6, color: isActive(path) ? "#a67fff" : "#444", background: isActive(path) ? "rgba(123,47,255,0.08)" : "transparent", fontFamily: "'Rajdhani',sans-serif", fontWeight: 600, fontSize: 13, letterSpacing: "0.3px", textDecoration: "none", transition: "all 0.2s" }}
               onMouseEnter={e => { if (!isActive(path)) { e.target.style.color = "#888"; e.target.style.background = "rgba(123,47,255,0.04)"; } }}
               onMouseLeave={e => { if (!isActive(path)) { e.target.style.color = "#444"; e.target.style.background = "transparent"; } }}

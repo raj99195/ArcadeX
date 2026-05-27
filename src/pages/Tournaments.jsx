@@ -5,6 +5,7 @@ import { wagmiAdapter } from "../Providers";
 import { useNavigate } from "react-router-dom";
 
 const TOURNAMENT_ADDRESS = import.meta.env.VITE_TOURNAMENT_ADDRESS;
+const CHAIN_ID = Number(import.meta.env.VITE_BOTCHAIN_TESTNET_CHAIN_ID || 968);
 const ARCADE_TOKEN_ADDRESS = import.meta.env.VITE_ARCADE_TOKEN_ADDRESS;
 
 const TOURNAMENT_ABI = [
@@ -21,6 +22,8 @@ const ERC20_ABI = [
   { name: "allowance", type: "function", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
 ];
+
+// Scores fetched directly from Tournament.sol via getTournamentPlayers()
 
 const STATUS_COLOR = {
   Upcoming:  { color: "#00d4ff", bg: "rgba(0,212,255,0.08)",  border: "rgba(0,212,255,0.25)"  },
@@ -96,21 +99,34 @@ function LeaderboardPanel({ tournament, onClose, navigate, publicClient }) {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        // getTournamentPlayers returns [addresses[], scores[]] from Tournament.sol
+        // Scores are stored via submitTournamentScore() on-chain
         const [addrs, scrs] = await publicClient.readContract({
           address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI,
           functionName: "getTournamentPlayers", args: [BigInt(tournament.id)],
         });
+
+        if (!addrs || addrs.length === 0) {
+          setPlayers([]); setScores([]);
+          setLoading(false); return;
+        }
+
+        // Combine addresses + scores, sort by score descending
         const combined = addrs
-          .map((a, i) => ({ address: a, score: Number(scrs[i]) }))
+          .map((addr, i) => ({ address: addr, score: Number(scrs[i]) }))
           .sort((a, b) => b.score - a.score);
+
         setPlayers(combined.map(c => c.address));
         setScores(combined.map(c => c.score));
-      } catch (err) { console.error(err); }
+      } catch (err) { console.error("LeaderboardPanel fetch error:", err); }
       finally { setLoading(false); }
     };
     fetchData();
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
+    // Only poll if tournament is active
+    if (tournament.status !== 2) {
+      const interval = setInterval(fetchData, 10000);
+      return () => clearInterval(interval);
+    }
   }, [tournament.id]);
 
   const entryFee = Number(tournament.entryFee) / 1e18;
@@ -163,9 +179,15 @@ function LeaderboardPanel({ tournament, onClose, navigate, publicClient }) {
             <button onClick={onClose} style={{ background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 7, color: "#ff6b6b", padding: "6px 14px", cursor: "pointer", fontSize: 12, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>✕ Close</button>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 10px", background: "rgba(0,255,136,0.08)", border: "1px solid rgba(0,255,136,0.2)", borderRadius: 20, fontSize: 10, color: "#00FF88", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
-              <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "livePulse 1s infinite" }} />LIVE
-            </span>
+            {tournament.status !== 2 ? (
+              <span style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 10px", background: "rgba(0,255,136,0.08)", border: "1px solid rgba(0,255,136,0.2)", borderRadius: 20, fontSize: 10, color: "#00FF88", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "livePulse 1s infinite" }} />LIVE
+              </span>
+            ) : (
+              <span style={{ padding: "3px 10px", background: "rgba(123,47,255,0.08)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 20, fontSize: 10, color: "#7755aa", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
+                🏁 ENDED
+              </span>
+            )}
             <span style={{ padding: "3px 10px", background: "rgba(255,183,0,0.08)", border: "1px solid rgba(255,183,0,0.2)", borderRadius: 20, fontSize: 10, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
               💰 {pool.toFixed(0)} ARCADE
             </span>
@@ -236,9 +258,15 @@ function LeaderboardPanel({ tournament, onClose, navigate, publicClient }) {
 
         {/* Footer */}
         <div style={{ padding: "12px 20px", borderTop: "1px solid rgba(123,47,255,0.12)", background: "rgba(123,47,255,0.04)", flexShrink: 0, borderRadius: "0 0 16px 16px" }}>
-          <button onClick={() => { onClose(); navigate(`/play/${tournament.gameId}`); }} style={{ width: "100%", padding: "12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 9, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1.5px", textTransform: "uppercase" }}>
-            🎮 Play Now & Submit Score
-          </button>
+          {tournament.status !== 2 ? (
+            <button onClick={() => { onClose(); navigate(`/play/${tournament.gameId}?tournamentId=${tournament.id}`); }} style={{ width: "100%", padding: "12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 9, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1.5px", textTransform: "uppercase" }}>
+              🎮 Play Now & Submit Score
+            </button>
+          ) : (
+            <div style={{ padding: "12px", background: "rgba(123,47,255,0.06)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 9, textAlign: "center", fontSize: 12, color: "#5533aa", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "1px" }}>
+              🏁 Tournament Ended — Final Results
+            </div>
+          )}
         </div>
       </div>
       </div>
@@ -321,7 +349,7 @@ function TournamentCard({ tournament, onJoin, onEnd, address, joining, arcadeBal
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 <div style={{ padding: "10px", background: "rgba(0,255,136,0.06)", border: "1px solid rgba(0,255,136,0.15)", borderRadius: 8, color: "#00FF88", fontSize: 11, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textAlign: "center" }}>✓ JOINED</div>
                 {status === "Active" && (
-                  <button onClick={() => navigate(`/play/${tournament.gameId}`)} style={{ width: "100%", padding: "10px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 8, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1px", textTransform: "uppercase" }}>🎮 Play Now</button>
+                  <button onClick={() => navigate(`/play/${tournament.gameId}?tournamentId=${tournament.id}`)} style={{ width: "100%", padding: "10px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 8, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1px", textTransform: "uppercase" }}>🎮 Play Now</button>
                 )}
               </div>
             ) : isFull ? (
@@ -416,10 +444,10 @@ export default function Tournaments() {
     try {
       const allowance = await publicClient.readContract({ address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI, functionName: "allowance", args: [address, TOURNAMENT_ADDRESS] });
       if (BigInt(allowance) < BigInt(tournament.entryFee)) {
-        const ah = await writeContract(wagmiAdapter.wagmiConfig, { address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI, functionName: "approve", args: [TOURNAMENT_ADDRESS, tournament.entryFee], gas: BigInt(100000) });
+        const ah = await writeContract(wagmiAdapter.wagmiConfig, { address: ARCADE_TOKEN_ADDRESS, abi: ERC20_ABI, functionName: "approve", args: [TOURNAMENT_ADDRESS, tournament.entryFee], gas: BigInt(100000), chainId: CHAIN_ID });
         await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash: ah });
       }
-      const hash = await writeContract(wagmiAdapter.wagmiConfig, { address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "joinTournament", args: [BigInt(tournament.id)], gas: BigInt(300000) });
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, { address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "joinTournament", args: [BigInt(tournament.id)], gas: BigInt(300000), chainId: CHAIN_ID });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       setMsg("✓ Joined tournament!");
       await fetchTournaments(); await fetchBalance();
@@ -429,7 +457,7 @@ export default function Tournaments() {
 
   const handleEnd = async (tournament) => {
     try {
-      const hash = await writeContract(wagmiAdapter.wagmiConfig, { address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "endTournamentAndDistribute", args: [BigInt(tournament.id)], gas: BigInt(500000) });
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, { address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "endTournamentAndDistribute", args: [BigInt(tournament.id)], gas: BigInt(500000), chainId: CHAIN_ID });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       setMsg("🏆 Prizes distributed!");
       await fetchTournaments();
