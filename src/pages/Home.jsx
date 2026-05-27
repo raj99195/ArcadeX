@@ -3,7 +3,7 @@ import { useAccount } from "wagmi";
 import { useAppKit } from "@reown/appkit/react";
 import { useGames } from "../hooks/useGames";
 import GameCard from "../components/GameCard";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { getScores } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 
@@ -20,6 +20,8 @@ export default function Home() {
   const [heroCardIndex, setHeroCardIndex] = useState(0);
   const [heroAngle, setHeroAngle] = useState(0);
   const [carouselAnim, setCarouselAnim] = useState("idle"); // "idle" | "exit" | "enter"
+  const carouselRef = useRef(null);
+  const [carouselWidth, setCarouselWidth] = useState(700);
 
   const CARDS_PER_PAGE = isMobile ? 1 : 3;
   const featured = games;
@@ -37,7 +39,11 @@ export default function Home() {
     getScores().then(setScores).catch(() => {});
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) setCarouselWidth(entry.contentRect.width);
+    });
+    if (carouselRef.current) ro.observe(carouselRef.current);
+    return () => { window.removeEventListener("resize", handleResize); ro.disconnect(); };
   }, []);
 
   useEffect(() => {
@@ -225,10 +231,12 @@ export default function Home() {
             const isExit = carouselAnim === "exit";
             const isEnter = carouselAnim === "enter";
 
-            // ── SIZE CONTROLS ── change these to resize everything
-            const C = { w: 330, h: 410, imgH: 290 };   // center card
-            const S = { w: 175, h: 238, imgH: 148 };   // side cards (left/right)
-            const P = { w: 110, h: 152 };               // peek cards (far left/right)
+            // ── SIZE CONTROLS ── responsive based on container width
+            const cw = carouselWidth || 700;
+            const scale = Math.min(1, Math.max(0.6, cw / 780));
+            const C = { w: Math.round(330 * scale), h: Math.round(410 * scale), imgH: Math.round(290 * scale) };
+            const S = { w: Math.round(175 * scale), h: Math.round(238 * scale), imgH: Math.round(148 * scale) };
+            const P = { w: Math.round(110 * scale), h: Math.round(152 * scale) };
             const sideLeft = "8%";                      // left card position from left
             const sideRight = "8%";                     // right card position from right
             const peekLeft = "1%";                      // far left peek position
@@ -246,7 +254,7 @@ export default function Home() {
             );
 
             return (
-              <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", height: "100%" }}>
+              <div ref={carouselRef} style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", height: "100%" }}>
                 {/* Glow rings */}
                 <div style={{ position: "absolute", width: 380, height: 380, borderRadius: "50%", background: "radial-gradient(circle,rgba(123,47,255,0.11) 0%,transparent 70%)", pointerEvents: "none" }} />
                 <div style={{ position: "absolute", width: 300, height: 300, borderRadius: "50%", border: "1px solid rgba(123,47,255,0.09)", pointerEvents: "none", animation: "tagFloat 7s ease-in-out infinite" }} />
@@ -360,11 +368,6 @@ export default function Home() {
                     opacity: isExit || isEnter ? undefined : 0.28,
                   }}>
                     {getThumb(games[frIdx]) ? <img src={getThumb(games[frIdx])} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <FallbackDiv height="100%" size={22} />}
-                  </div>
-
-                  {/* Active name label */}
-                  <div style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 10, color: "rgba(180,150,255,0.4)", letterSpacing: "3px", textTransform: "uppercase", whiteSpace: "nowrap", pointerEvents: "none", zIndex: 10 }}>
-                    {games[ci]?.name || ""}
                   </div>
 
                   {/* Dot nav */}
