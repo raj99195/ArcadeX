@@ -1,14 +1,43 @@
-// api/auth.js — Wallet signature verify karo, JWT do
+// api/auth.js
 import { ethers } from "ethers";
 import jwt from "jsonwebtoken";
+import { cors } from "./_middleware.js";
 
-const JWT_SECRET = process.env.JWT_SECRET;
+import jwt from "jsonwebtoken";
+import admin from "firebase-admin";
+
+function verifyToken(req) {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) return null;
+  try { return jwt.verify(auth.split(" ")[1], process.env.JWT_SECRET); }
+  catch { return null; }
+}
+
+function cors(res) {
+  res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN || "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+}
+
+function getDb() {
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+      }),
+    });
+  }
+  return admin.firestore();
+}
+
+const FV = () => admin.firestore.FieldValue;
+
+
 
 export default async function handler(req, res) {
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN || "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  cors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -18,24 +47,23 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
-    // Message mein timestamp check karo — 5 min se purana nahi hona chahiye
-    const timestampMatch = message.match(/(\d+)$/);
-    if (!timestampMatch) return res.status(400).json({ error: "Invalid message format" });
-    const msgTime = parseInt(timestampMatch[1]);
-    if (Date.now() - msgTime > 5 * 60 * 1000) {
-      return res.status(400).json({ error: "Message expired. Please try again." });
+    // Timestamp check — 5 min se purana nahi hona chahiye
+    const tsMatch = message.match(/(\d+)$/);
+    if (!tsMatch) return res.status(400).json({ error: "Invalid message" });
+    if (Date.now() - parseInt(tsMatch[1]) > 5 * 60 * 1000) {
+      return res.status(400).json({ error: "Message expired" });
     }
 
-    // Signature verify karo
+    // Signature verify
     const recovered = ethers.verifyMessage(message, signature);
     if (recovered.toLowerCase() !== address.toLowerCase()) {
       return res.status(401).json({ error: "Invalid signature" });
     }
 
-    // JWT token banao — 24hr valid
+    // JWT banao — 24hr valid
     const token = jwt.sign(
-      { address: address.toLowerCase(), iat: Date.now() },
-      JWT_SECRET,
+      { address: address.toLowerCase() },
+      process.env.JWT_SECRET,
       { expiresIn: "24h" }
     );
 
