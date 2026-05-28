@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "scripts": {
     "dev": "vite",
+    "server": "node server.js",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -15,9 +16,12 @@
     "@reown/appkit": "^1.8.19",
     "@reown/appkit-adapter-wagmi": "^1.8.19",
     "@tanstack/react-query": "^5.100.10",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "firebase": "^12.12.0",
     "firebase-admin": "^13.10.0",
+    "jsonwebtoken": "^9.0.3",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-is": "^19.2.6",
