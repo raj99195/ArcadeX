@@ -5,6 +5,8 @@ import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
 import { wagmiAdapter } from "../Providers";
 import { useGames } from "../hooks/useGames";
 import { saveScore } from "../lib/gameService";
+import { db } from "../lib/firebase";
+import { doc, updateDoc, increment, collection, addDoc, getDocs, query, orderBy, serverTimestamp, setDoc, getDoc } from "firebase/firestore";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 
 const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
@@ -92,48 +94,59 @@ export default function GamePlay() {
     setLiked(!!localStorage.getItem(`liked_game_${gameId}_${address}`));
   }, [gameId, address]);
 
-  // Fetch game stats via API
+  // Fetch game stats + creator profile
   useEffect(() => {
     if (!game) return;
     const fetchStats = async () => {
       try {
-        const res = await fetch(`/api/games?action=stats&gameId=${game.gameId || game.id}`);
-        const data = await res.json();
-        setTotalPlays(data.plays || 0);
-        setUniquePlayers(data.uniquePlayers || 0);
-        setComments(data.comments || []);
-        setCommentsLoading(false);
+        const gDoc = await getDoc(doc(db, "games", String(game.gameId || game.id)));
+        if (gDoc.exists()) {
+          const data = gDoc.data();
+          setTotalPlays(data.plays || 0);
+        }
+        const playersSnap = await getDocs(collection(db, "games", String(game.gameId || game.id), "players"));
+        setUniquePlayers(playersSnap.size);
       } catch (e) {}
     };
     fetchStats();
   }, [game?.id]);
 
-  // Fetch creator profile via API
+  // Fetch creator profile - doc ID is wallet address
   useEffect(() => {
     if (!game?.creator) return;
     const fetchCreator = async () => {
       try {
-        const res = await fetch(`/api/creators?address=${game.creator}`);
-        const data = await res.json();
-        if (data) setCreatorProfile(data);
+        // creators collection mein doc ID = wallet address
+        const creatorDoc = await getDoc(doc(db, "creators", game.creator.toLowerCase()));
+        if (creatorDoc.exists()) {
+          setCreatorProfile(creatorDoc.data());
+        } else {
+          // Try uppercase address too
+          const creatorDoc2 = await getDoc(doc(db, "creators", game.creator));
+          if (creatorDoc2.exists()) setCreatorProfile(creatorDoc2.data());
+        }
       } catch (e) { console.warn("Creator fetch failed:", e); }
     };
     fetchCreator();
   }, [game?.creator]);
 
-  // Comments fetched with stats above
+  // Fetch comments
+  useEffect(() => {
+    if (!gameId) return;
+    setCommentsLoading(true);
+    getDocs(query(collection(db, "games", String(gameId), "comments"), orderBy("createdAt", "desc")))
+      .then(snap => setComments(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+      .catch(() => {})
+      .finally(() => setCommentsLoading(false));
+  }, [gameId]);
 
-  // Track play via API
+  // Track play
   useEffect(() => {
     if (!game || !address || gameLoading) return;
     const trackPlay = async () => {
       try {
-        const token = localStorage.getItem("arcadex_jwt");
-        await fetch("/api/games?action=play", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-          body: JSON.stringify({ gameId: game.gameId || game.id }),
-        });
+        await updateDoc(doc(db, "games", String(game.gameId || game.id)), { plays: increment(1) });
+        await setDoc(doc(db, "games", String(game.gameId || game.id), "players", address.toLowerCase()), { address: address.toLowerCase(), lastPlayed: serverTimestamp() }, { merge: true });
         setTotalPlays(p => p + 1);
       } catch (e) {}
     };
@@ -167,14 +180,7 @@ export default function GamePlay() {
     localStorage.setItem(key, "1");
     setLiked(true);
     setLikeCount(c => c + 1);
-    try {
-      const token = localStorage.getItem("arcadex_jwt");
-      await fetch("/api/games?action=like", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ gameId }),
-      });
-    } catch (e) {}
+    try { await updateDoc(doc(db, "games", String(gameId)), { likes: increment(1) }); } catch (e) {}
   };
 
   const handleComment = async () => {
@@ -183,12 +189,7 @@ export default function GamePlay() {
     const text = commentText.trim();
     setCommentText("");
     try {
-      const token = localStorage.getItem("arcadex_jwt");
-      await fetch("/api/games?action=comment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ gameId, text }),
-      });
+      await addDoc(collection(db, "games", String(gameId), "comments"), { text, player: address, createdAt: serverTimestamp() });
       setComments(prev => [{ id: Date.now(), text, player: address, createdAt: null }, ...prev]);
     } catch (e) { setCommentText(text); }
     finally { setPostingComment(false); }
@@ -326,6 +327,15 @@ export default function GamePlay() {
 
           {/* ── GAME IFRAME ── */}
           <div style={{ background: C.card, border: `1px solid ${C.border2}`, borderRadius: 14, overflow: "hidden", position: "relative" }}>
+            {/* Wallet not connected overlay */}
+            {!isConnected && (
+              <div style={{ position: "absolute", inset: 0, zIndex: 10, background: "rgba(8,7,15,0.92)", backdropFilter: "blur(8px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, borderRadius: 14 }}>
+                <div style={{ fontSize: 52, filter: "drop-shadow(0 0 20px rgba(123,47,255,0.5))" }}>🔒</div>
+                <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 18, color: "#fff", textTransform: "uppercase", letterSpacing: "1px" }}>Connect Wallet to Play</div>
+                <div style={{ fontSize: 12, color: C.dim, fontFamily: C.raj, textAlign: "center", maxWidth: 280, lineHeight: 1.6 }}>Connect your wallet to play, earn ARCADE tokens and submit your score on-chain.</div>
+                <appkit-button />
+              </div>
+            )}
             {game.iframeUrl && !game.iframeUrl.includes("your-unity-game") ? (
               <>
                 <iframe ref={iframeRef} src={game.iframeUrl}
