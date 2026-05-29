@@ -29,7 +29,6 @@ function getDb() {
   return admin.firestore();
 }
 
-const FV = () => admin.firestore.FieldValue;
 
 
 
@@ -49,7 +48,6 @@ export default async function handler(req, res) {
 
   const { action } = req.query;
   const db = getDb();
-  const FV = FV();
 
   // ── GET stats (public) ──
   if (req.method === "GET" && action === "stats") {

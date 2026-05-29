@@ -32,7 +32,6 @@ function getDb() {
   return admin.firestore();
 }
 
-const FV = () => admin.firestore.FieldValue;
 
 
 
