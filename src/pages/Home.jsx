@@ -3,7 +3,7 @@ import { useAccount } from "wagmi";
 import { useAppKit } from "@reown/appkit/react";
 import { useGames } from "../hooks/useGames";
 import GameCard from "../components/GameCard";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { getScores } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 
@@ -20,8 +20,6 @@ export default function Home() {
   const [heroCardIndex, setHeroCardIndex] = useState(0);
   const [heroAngle, setHeroAngle] = useState(0);
   const [carouselAnim, setCarouselAnim] = useState("idle"); // "idle" | "exit" | "enter"
-  const carouselRef = useRef(null);
-  const [carouselWidth, setCarouselWidth] = useState(700);
 
   const CARDS_PER_PAGE = isMobile ? 1 : 3;
   const featured = games;
@@ -39,11 +37,7 @@ export default function Home() {
     getScores().then(setScores).catch(() => {});
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener("resize", handleResize);
-    const ro = new ResizeObserver(entries => {
-      for (const entry of entries) setCarouselWidth(entry.contentRect.width);
-    });
-    if (carouselRef.current) ro.observe(carouselRef.current);
-    return () => { window.removeEventListener("resize", handleResize); ro.disconnect(); };
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   useEffect(() => {
@@ -231,12 +225,10 @@ export default function Home() {
             const isExit = carouselAnim === "exit";
             const isEnter = carouselAnim === "enter";
 
-            // ── SIZE CONTROLS ── responsive based on container width
-            const cw = carouselWidth || 700;
-            const scale = Math.min(1, Math.max(0.6, cw / 780));
-            const C = { w: Math.round(330 * scale), h: Math.round(410 * scale), imgH: Math.round(290 * scale) };
-            const S = { w: Math.round(175 * scale), h: Math.round(238 * scale), imgH: Math.round(148 * scale) };
-            const P = { w: Math.round(110 * scale), h: Math.round(152 * scale) };
+            // ── SIZE CONTROLS ── change these to resize everything
+            const C = { w: 330, h: 410, imgH: 290 };   // center card
+            const S = { w: 175, h: 238, imgH: 148 };   // side cards (left/right)
+            const P = { w: 110, h: 152 };               // peek cards (far left/right)
             const sideLeft = "8%";                      // left card position from left
             const sideRight = "8%";                     // right card position from right
             const peekLeft = "1%";                      // far left peek position
@@ -254,7 +246,7 @@ export default function Home() {
             );
 
             return (
-              <div ref={carouselRef} style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", height: "100%" }}>
+              <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", height: "100%" }}>
                 {/* Glow rings */}
                 <div style={{ position: "absolute", width: 380, height: 380, borderRadius: "50%", background: "radial-gradient(circle,rgba(123,47,255,0.11) 0%,transparent 70%)", pointerEvents: "none" }} />
                 <div style={{ position: "absolute", width: 300, height: 300, borderRadius: "50%", border: "1px solid rgba(123,47,255,0.09)", pointerEvents: "none", animation: "tagFloat 7s ease-in-out infinite" }} />
@@ -368,6 +360,11 @@ export default function Home() {
                     opacity: isExit || isEnter ? undefined : 0.28,
                   }}>
                     {getThumb(games[frIdx]) ? <img src={getThumb(games[frIdx])} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <FallbackDiv height="100%" size={22} />}
+                  </div>
+
+                  {/* Active name label */}
+                  <div style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 10, color: "rgba(180,150,255,0.4)", letterSpacing: "3px", textTransform: "uppercase", whiteSpace: "nowrap", pointerEvents: "none", zIndex: 10 }}>
+                    {games[ci]?.name || ""}
                   </div>
 
                   {/* Dot nav */}
@@ -520,72 +517,117 @@ export default function Home() {
           </div>
         </div>
 
-        {/* BOTChain Panel */}
+        {/* Creator Spotlight + Stats */}
         <div className="lb-scroll" style={{ flex: 1, overflowY: isMobile ? "visible" : "auto", overflowX: "hidden", position: "relative", zIndex: 1, display: "flex", flexDirection: "column", scrollbarWidth: "none", msOverflowStyle: "none" }}>
           <div style={{ flex: 1 }}>
-          {/* BOTChain Panel */}
-          <div style={{ padding: "16px", background: "linear-gradient(180deg,rgba(20,8,40,0.95),rgba(10,4,25,0.98))", borderRadius: 12, border: "1px solid rgba(123,47,255,0.25)", margin: "10px 10px 8px" }}>
-            <div style={{ textAlign: "center", padding: "12px 10px 14px", borderBottom: "1px solid rgba(123,47,255,0.15)" }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", fontFamily: "Rajdhani", marginBottom: 5 }}>Built on BOTChain</div>
-              <div style={{ fontSize: 11, background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: 700, marginBottom: 7 }}>Powered by the Future</div>
-              <p style={{ fontSize: 9, color: "#7755aa", lineHeight: 1.6 }}>High-performance EVM L1 for scalable, secure on-chain gaming.</p>
-            </div>
-            {[
-              { title: "Built on BOTChain", desc: "High-performance EVM L1", icon: "⛓️" },
-              { title: "True Ownership", desc: "Your assets live on-chain", icon: "⭐" },
-              { title: "Play & Earn", desc: "Real rewards from gameplay", icon: "🎮" },
-              { title: "Interoperable", desc: "Connect across ecosystem", icon: "🔗" },
-            ].map((item, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 8px", borderBottom: i < 3 ? "1px solid rgba(123,47,255,0.1)" : "none" }}>
-                <div style={{ width: 32, height: 32, borderRadius: "50%", background: "rgba(123,47,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, border: "1px solid rgba(123,47,255,0.3)", flexShrink: 0 }}>{item.icon}</div>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#c4a0ff", marginBottom: 2 }}>{item.title}</div>
-                  <div style={{ fontSize: 9, color: "#7755aa" }}>{item.desc}</div>
-                </div>
-              </div>
-            ))}
-            <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "11px 8px", marginTop: 4, background: "rgba(123,47,255,0.05)", borderRadius: 8 }}>
-              <span style={{ fontSize: 18 }}>⛓️</span>
-              <div>
-                <div style={{ fontSize: 11, color: "#c4a0ff", fontWeight: 700 }}>BOTChain</div>
-                <div style={{ fontSize: 9, color: "#5533aa" }}>One Network. Infinite Games.</div>
-              </div>
-            </div>
-          </div>
 
-          {/* Live Stats */}
+          {/* ── CREATOR SPOTLIGHT ── */}
           {(() => {
-            // ── STATS SIZE CONTROLS ── inhe change karo
-            const ST = {
-              iconSize:   16,
-              valueSize:  15,
-              labelSize:  9,
-              padding:    "16px 12px",  // fixed — screen size se nahi badlega
-              gap:        6,
-              rowGap:     8,
-            };
+            // Find top creator by earnings (plays × rewardRate × 0.2)
+            const creatorEarnings = {};
+            const creatorGames = {};
+            games.forEach(g => {
+              const addr = g.creator?.toLowerCase();
+              if (!addr) return;
+              const earned = Math.floor((g.plays || 0) * (g.rewardRate || 50) * 0.2);
+              if (!creatorEarnings[addr]) { creatorEarnings[addr] = 0; creatorGames[addr] = []; }
+              creatorEarnings[addr] += earned;
+              creatorGames[addr].push(g);
+            });
+            const topCreatorAddr = Object.entries(creatorEarnings).sort((a, b) => b[1] - a[1])[0];
+            if (!topCreatorAddr) return null;
+            const [addr, earned] = topCreatorAddr;
+            const topGame = (creatorGames[addr] || []).sort((a, b) => (b.plays || 0) - (a.plays || 0))[0];
+            const shortA = (a) => a ? a.slice(0, 6) + "..." + a.slice(-4) : "?";
             return (
-              <div style={{ margin: "0 10px 8px", padding: "10px 12px", background: "rgba(123,47,255,0.06)", borderRadius: 10, border: "1px solid rgba(123,47,255,0.18)" }}>
-                <div style={{ fontSize: 9, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", color: "rgba(180,150,255,0.5)", marginBottom: ST.gap + 4 }}>Network Stats</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: ST.gap }}>
-                  {[
-                    { label: "Top Players", value: leaderboard.length > 0 ? `${leaderboard.length}` : "—", icon: "👥", color: "#c4a0ff" },
-                    { label: "Games Live",  value: games.length > 0 ? `${games.length}` : "—",             icon: "🎮", color: "#00d4ff" },
-                    { label: "Top Score",   value: leaderboard.length > 0 ? fmtScore(leaderboard[0]?.bestScore) : "—", icon: "🏆", color: "#FFD700" },
-                    { label: "On-Chain",    value: "100%",                                                  icon: "⛓️", color: "#00FF88" },
-                  ].map((stat, i) => (
-                    <div key={i} style={{ background: "rgba(123,47,255,0.08)", borderRadius: 7, padding: ST.padding, border: "1px solid rgba(123,47,255,0.12)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: ST.rowGap }}>
-                        <span style={{ fontSize: ST.iconSize }}>{stat.icon}</span>
-                        <span style={{ fontSize: ST.labelSize, color: "rgba(180,150,255,0.45)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>{stat.label}</span>
+              <div style={{ margin: "10px 10px 8px", position: "relative", overflow: "hidden" }}>
+                {/* Header */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#FFB700", boxShadow: "0 0 6px #FFB700" }} />
+                  <span style={{ fontSize: 9, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", color: "#FFB700" }}>Creator Spotlight</span>
+                  <span style={{ fontSize: 8, padding: "1px 6px", background: "rgba(255,183,0,0.1)", border: "1px solid rgba(255,183,0,0.2)", borderRadius: 3, color: "rgba(255,183,0,0.7)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, marginLeft: "auto" }}>THIS WEEK</span>
+                </div>
+
+                {/* Card */}
+                <div style={{ background: "linear-gradient(135deg, rgba(18,12,36,0.98) 0%, rgba(12,8,28,0.98) 100%)", borderRadius: 14, border: "1px solid rgba(255,183,0,0.2)", overflow: "hidden", position: "relative" }}>
+                  {/* Glow */}
+                  <div style={{ position: "absolute", top: -40, right: -40, width: 120, height: 120, background: "radial-gradient(circle, rgba(255,183,0,0.12) 0%, transparent 70%)", borderRadius: "50%", pointerEvents: "none" }} />
+                  <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, transparent, #FFB700, transparent)" }} />
+
+                  {/* Top game thumbnail banner */}
+                  {topGame?.thumbnailUrl && (
+                    <div style={{ position: "relative", width: "100%", paddingTop: "62%", overflow: "hidden" }}>
+                      <img src={topGame.thumbnailUrl} alt="" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", objectPosition: "center", filter: "brightness(0.45)" }} />
+                      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 0%, rgba(12,8,28,0.95) 100%)" }} />
+                      <div style={{ position: "absolute", bottom: 8, left: 12, right: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: 7, overflow: "hidden", border: "1px solid rgba(255,183,0,0.4)", flexShrink: 0 }}>
+                          <img src={topGame.thumbnailUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#fff", fontFamily: "'Rajdhani',sans-serif", lineHeight: 1 }}>{topGame.name}</div>
+                          <div style={{ fontSize: 8, color: "rgba(255,183,0,0.7)", fontFamily: "'Rajdhani',sans-serif" }}>Top Game · {topGame.plays || 0} plays</div>
+                        </div>
                       </div>
-                      <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: ST.valueSize, color: stat.color }}>{stat.value}</span>
                     </div>
-                  ))}
+                  )}
+
+                  <div style={{ padding: "12px 14px" }}>
+                    {/* Creator info */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                      <div style={{ width: 42, height: 42, borderRadius: "50%", overflow: "hidden", border: "2px solid rgba(255,183,0,0.5)", boxShadow: "0 0 12px rgba(255,183,0,0.2)", flexShrink: 0, background: "#0e0c1a" }}>
+                        <img src={`https://api.dicebear.com/9.x/bottts/svg?seed=${addr}`} alt="" style={{ width: "100%", height: "100%" }} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "'Rajdhani',sans-serif", marginBottom: 2 }}>Top Creator</div>
+                        <div style={{ fontSize: 9, color: "rgba(255,183,0,0.6)", fontFamily: "monospace" }}>{shortA(addr)}</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 8, color: "rgba(255,183,0,0.5)", fontFamily: "'Rajdhani',sans-serif", marginBottom: 1 }}>EARNED</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#FFB700", fontFamily: "'Orbitron',sans-serif" }}>{earned.toLocaleString()}</div>
+                        <div style={{ fontSize: 7, color: "rgba(255,183,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>ARCADE</div>
+                      </div>
+                    </div>
+
+                    {/* Stats row */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                      {[
+                        { label: "Games", value: creatorGames[addr]?.length || 0, color: "#a67fff" },
+                        { label: "Total Plays", value: (creatorGames[addr] || []).reduce((s, g) => s + (g.plays || 0), 0), color: "#00d4ff" },
+                        { label: "ARCADE", value: earned.toLocaleString(), color: "#FFB700" },
+                      ].map(s => (
+                        <div key={s.label} style={{ background: "rgba(0,0,0,0.3)", borderRadius: 8, padding: "7px 6px", textAlign: "center", border: "1px solid rgba(123,47,255,0.1)" }}>
+                          <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13, color: s.color, lineHeight: 1 }}>{s.value}</div>
+                          <div style={{ fontSize: 7, color: "rgba(180,150,255,0.4)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: 2 }}>{s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             );
           })()}
+
+          {/* ── NETWORK STATS ── */}
+          <div style={{ margin: "0 10px 8px", padding: "12px 14px", background: "rgba(123,47,255,0.05)", borderRadius: 12, border: "1px solid rgba(123,47,255,0.15)" }}>
+            <div style={{ fontSize: 9, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", color: "rgba(180,150,255,0.5)", marginBottom: 10 }}>Network Stats</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {[
+                { label: "Top Players", value: leaderboard.length || "—", icon: "👥", color: "#c4a0ff" },
+                { label: "Games Live",  value: games.length || "—",        icon: "🎮", color: "#00d4ff" },
+                { label: "Top Score",   value: leaderboard.length > 0 ? fmtScore(leaderboard[0]?.bestScore) : "—", icon: "🏆", color: "#FFD700" },
+                { label: "On-Chain",    value: "100%",                      icon: "⛓️", color: "#00FF88" },
+              ].map((stat, i) => (
+                <div key={i} style={{ background: "rgba(123,47,255,0.07)", borderRadius: 7, padding: "9px 12px", border: "1px solid rgba(123,47,255,0.1)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                    <span style={{ fontSize: 14 }}>{stat.icon}</span>
+                    <span style={{ fontSize: 9, color: "rgba(180,150,255,0.45)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>{stat.label}</span>
+                  </div>
+                  <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13, color: stat.color }}>{stat.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
           </div>
         </div>
 
