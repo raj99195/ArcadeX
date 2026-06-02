@@ -7,6 +7,7 @@ import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
 import { wagmiAdapter } from "../Providers";
 
 const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
+const CHAIN_ID = Number(import.meta.env.VITE_BOTCHAIN_MAINNET_CHAIN_ID);
 const CREATOR_NFT_ADDRESS = import.meta.env.VITE_CREATOR_NFT_ADDRESS;
 
 const PLATFORM_ABI = [
@@ -280,7 +281,7 @@ export default function Creator() {
         functionName: "mintCreatorNFT",
         args: [username, selectedStyle],
         gas: BigInt(500000),
-        chainId: 968,
+        chainId: CHAIN_ID,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
@@ -291,7 +292,7 @@ export default function Creator() {
         functionName: "initCreator",
         args: [address],
         gas: BigInt(200000),
-        chainId: 968,
+        chainId: CHAIN_ID,
       });
 
       // 3. Save to Firebase
@@ -366,7 +367,7 @@ export default function Creator() {
           BigInt(tForm.durationInHours),
         ],
         gas: BigInt(500000),
-        chainId: 968, // BOTChain testnet — explicit chainId fix
+        chainId: CHAIN_ID, // BOTChain testnet — explicit chainId fix
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       setTMsg("✓ Tournament created successfully!");
@@ -388,7 +389,7 @@ export default function Creator() {
         functionName: "endTournamentAndDistribute",
         args: [BigInt(tournamentId)],
         gas: BigInt(300000),
-        chainId: 968,
+        chainId: CHAIN_ID,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       setTMsg("🏆 Prizes distributed!");
@@ -464,7 +465,7 @@ export default function Creator() {
         functionName: "registerGame",
         args: [form.name, form.iframeUrl, BigInt(parseInt(form.rewardRate) || MIN_REWARD_RATE)],
         gas: BigInt(500000),
-        chainId: 968,
+        chainId: CHAIN_ID,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 

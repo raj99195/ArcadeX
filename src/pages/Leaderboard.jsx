@@ -193,7 +193,7 @@ export default function Leaderboard() {
             >{refreshing ? "..." : "↻ Refresh"}</button>
           </div>
           <p style={{ color: "rgba(180,150,255,0.7)", fontSize: 12, marginTop: 8, fontFamily: "'Rajdhani',sans-serif" }}>
-            Tamper-proof scores from BOTChain — verified every block.
+            Tamper-proof scores from OnChain — verified every block.
           </p>
         </div>
 

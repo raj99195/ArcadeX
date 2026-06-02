@@ -5,7 +5,7 @@ import { wagmiAdapter } from "../Providers";
 import { useNavigate } from "react-router-dom";
 
 const TOURNAMENT_ADDRESS = import.meta.env.VITE_TOURNAMENT_ADDRESS;
-const CHAIN_ID = Number(import.meta.env.VITE_BOTCHAIN_TESTNET_CHAIN_ID || 968);
+const CHAIN_ID = Number(import.meta.env.VITE_BOTCHAIN_MAINNET_CHAIN_ID);
 const ARCADE_TOKEN_ADDRESS = import.meta.env.VITE_ARCADE_TOKEN_ADDRESS;
 
 const TOURNAMENT_ABI = [
