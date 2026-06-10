@@ -1,11 +1,18 @@
 import { useNavigate } from "react-router-dom";
-import { useAccount } from "wagmi";
+import { useAccount, usePublicClient } from "wagmi";
 import { useAppKit } from "@reown/appkit/react";
 import { useGames } from "../hooks/useGames";
 import GameCard from "../components/GameCard";
 import { useEffect, useState } from "react";
 import { getScores } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
+
+
+const TOURNAMENT_ADDRESS = import.meta.env.VITE_TOURNAMENT_ADDRESS;
+const TOURNAMENT_ABI = [
+  { name: "getTournamentInfo", type: "function", stateMutability: "view", inputs: [{ name: "tournamentId", type: "uint256" }], outputs: [{ name: "", type: "tuple", components: [{ name: "id", type: "uint256" }, { name: "gameId", type: "uint256" }, { name: "gameName", type: "string" }, { name: "gameThumbnail", type: "string" }, { name: "creator", type: "address" }, { name: "entryFee", type: "uint256" }, { name: "maxPlayers", type: "uint256" }, { name: "startTime", type: "uint256" }, { name: "endTime", type: "uint256" }, { name: "prizePool", type: "uint256" }, { name: "status", type: "uint8" }, { name: "players", type: "address[]" }, { name: "prizesDistributed", type: "bool" }] }] },
+  { name: "nextTournamentId", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+];
 
 export default function Home() {
   const navigate = useNavigate();
@@ -20,6 +27,9 @@ export default function Home() {
   const [heroCardIndex, setHeroCardIndex] = useState(0);
   const [heroAngle, setHeroAngle] = useState(0);
   const [carouselAnim, setCarouselAnim] = useState("idle"); // "idle" | "exit" | "enter"
+  const publicClient = usePublicClient();
+  const [upcomingTournaments, setUpcomingTournaments] = useState([]);
+  const [tournamentsLoaded, setTournamentsLoaded] = useState(false);
 
   const CARDS_PER_PAGE = isMobile ? 1 : 3;
   const featured = games;
@@ -53,6 +63,29 @@ export default function Home() {
     }, 2800);
     return () => clearInterval(interval);
   }, [games]);
+
+  useEffect(() => {
+    const fetchUpcoming = async () => {
+      if (!publicClient || !TOURNAMENT_ADDRESS) return;
+      try {
+        const nextId = await publicClient.readContract({ address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "nextTournamentId" });
+        const total = Number(nextId) - 1;
+        if (total <= 0) { setTournamentsLoaded(true); return; }
+        const results = await Promise.all(Array.from({ length: total }, (_, i) =>
+          publicClient.readContract({ address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "getTournamentInfo", args: [BigInt(i + 1)] })
+        ));
+        const now = Date.now() / 1000;
+        const upcoming = results
+          .map(t => ({ ...t, id: Number(t.id), startTime: Number(t.startTime), endTime: Number(t.endTime), prizePool: t.prizePool, maxPlayers: Number(t.maxPlayers), players: t.players, status: Number(t.status) }))
+          .filter(t => t.status !== 2 && t.status !== 3 && now < t.endTime)
+          .sort((a, b) => a.startTime - b.startTime)
+          .slice(0, 3);
+        setUpcomingTournaments(upcoming);
+      } catch (err) { console.error("Home tournaments fetch:", err); }
+      finally { setTournamentsLoaded(true); }
+    };
+    fetchUpcoming();
+  }, [publicClient]);
 
   const leaderboard = Object.values(
     scores.reduce((acc, s) => {
@@ -518,8 +551,8 @@ export default function Home() {
         </div>
 
         {/* Creator Spotlight + Stats */}
-        <div className="lb-scroll" style={{ flex: 1, overflowY: isMobile ? "visible" : "auto", overflowX: "hidden", position: "relative", zIndex: 1, display: "flex", flexDirection: "column", scrollbarWidth: "none", msOverflowStyle: "none" }}>
-          <div style={{ flex: 1 }}>
+        <div className="lb-scroll" style={{ flex: 1, overflowY: isMobile ? "visible" : "auto", overflowX: "hidden", position: "relative", zIndex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-start", scrollbarWidth: "none", msOverflowStyle: "none" }}>
+          <div>
 
           {/* ── CREATOR SPOTLIGHT ── */}
           {(() => {
@@ -626,6 +659,98 @@ export default function Home() {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* ── UPCOMING TOURNAMENTS ── */}
+          <div style={{ margin: "0 10px 8px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00d4ff", boxShadow: "0 0 6px #00d4ff" }} />
+              <span style={{ fontSize: 9, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", color: "#00d4ff" }}>Tournaments</span>
+              <button onClick={() => navigate("/tournaments")} style={{ fontSize: 8, padding: "1px 6px", background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: 3, color: "rgba(0,212,255,0.7)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, marginLeft: "auto", cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.5px" }}>VIEW ALL</button>
+            </div>
+
+            {!tournamentsLoaded ? (
+              /* Loading skeleton */
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {[1,2].map(i => (
+                  <div key={i} style={{ height: 70, borderRadius: 10, background: "linear-gradient(90deg, rgba(123,47,255,0.06) 25%, rgba(123,47,255,0.1) 50%, rgba(123,47,255,0.06) 75%)", backgroundSize: "200% 100%", animation: "shimmer 1.5s infinite", border: "1px solid rgba(123,47,255,0.1)" }} />
+                ))}
+              </div>
+            ) : upcomingTournaments.length === 0 ? (
+              /* Empty state */
+              <div style={{ background: "linear-gradient(135deg, rgba(123,47,255,0.06) 0%, rgba(0,212,255,0.04) 100%)", borderRadius: 12, border: "1px solid rgba(123,47,255,0.15)", padding: "18px 14px", textAlign: "center", position: "relative", overflow: "hidden" }}>
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: "linear-gradient(90deg, transparent, rgba(123,47,255,0.4), transparent)" }} />
+                <div style={{ fontSize: 28, marginBottom: 8, filter: "grayscale(0.3)" }}>🏆</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#c4a0ff", fontFamily: "'Rajdhani',sans-serif", marginBottom: 4 }}>No Active Tournaments</div>
+                <div style={{ fontSize: 9, color: "rgba(120,90,180,0.6)", fontFamily: "'Rajdhani',sans-serif", marginBottom: 14, lineHeight: 1.5 }}>New tournaments dropping soon.<br/>Stay tuned!</div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                  {[0,1,2,3,4].map(i => (
+                    <div key={i} style={{
+                      width: i === 2 ? 8 : (i === 1 || i === 3) ? 6 : 4,
+                      height: i === 2 ? 8 : (i === 1 || i === 3) ? 6 : 4,
+                      borderRadius: "50%",
+                      background: i === 2 ? "#a67fff" : (i === 1 || i === 3) ? "rgba(166,127,255,0.5)" : "rgba(166,127,255,0.2)",
+                      boxShadow: i === 2 ? "0 0 8px rgba(166,127,255,0.8)" : "none",
+                      animation: `pulse-dot 1.4s ease-in-out ${i * 0.15}s infinite`,
+                    }} />
+                  ))}
+                </div>
+                <style>{`
+                  @keyframes pulse-dot {
+                    0%, 100% { opacity: 0.3; transform: scale(1); }
+                    50% { opacity: 1; transform: scale(1.3); }
+                  }
+                `}</style>
+              </div>
+            ) : (
+              /* Real tournament cards */
+              upcomingTournaments.map((t) => {
+                const now = Date.now() / 1000;
+                const isActive = now >= t.startTime && now <= t.endTime;
+                const statusColor = isActive ? "#00FF88" : "#00d4ff";
+                const statusBorder = isActive ? "rgba(0,255,136,0.2)" : "rgba(0,212,255,0.18)";
+                const statusGlow = isActive ? "rgba(0,255,136,0.08)" : "rgba(0,212,255,0.08)";
+                const prize = Number(t.prizePool) / 1e18;
+                const entryFee = Number(t.entryFee) / 1e18;
+                const diff = (isActive ? t.endTime : t.startTime) - now;
+                const h = Math.floor(diff / 3600);
+                const m = Math.floor((diff % 3600) / 60);
+                const timeStr = h > 48 ? `In ${Math.floor(h/24)}d` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+                return (
+                  <div key={t.id} onClick={() => navigate("/tournaments")}
+                    style={{ background: `linear-gradient(135deg, ${statusGlow} 0%, rgba(12,8,28,0.9) 100%)`, borderRadius: 10, border: `1px solid ${statusBorder}`, padding: "10px 12px", marginBottom: 6, position: "relative", overflow: "hidden", cursor: "pointer" }}>
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: `linear-gradient(90deg, transparent, ${statusColor}, transparent)` }} />
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 7 }}>
+                      <div style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#fff", fontFamily: "'Rajdhani',sans-serif", lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.gameName || "Tournament"}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}>
+                          <span style={{ width: 4, height: 4, borderRadius: "50%", background: statusColor, boxShadow: `0 0 4px ${statusColor}`, flexShrink: 0 }} />
+                          <span style={{ fontSize: 8, color: statusColor, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>{isActive ? "LIVE" : "UPCOMING"}</span>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontSize: 7, color: "rgba(255,215,0,0.5)", fontFamily: "'Rajdhani',sans-serif" }}>PRIZE</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#FFD700", fontFamily: "'Orbitron',sans-serif", lineHeight: 1 }}>{prize > 0 ? prize.toFixed(0) : (entryFee * t.maxPlayers * 0.95).toFixed(0)}</div>
+                        <div style={{ fontSize: 7, color: "rgba(255,215,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>ARCADE</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <span style={{ fontSize: 8 }}>⏱️</span>
+                        <span style={{ fontSize: 8, color: statusColor, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>{timeStr}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <span style={{ fontSize: 8 }}>👥</span>
+                        <span style={{ fontSize: 8, color: "rgba(180,150,255,0.5)", fontFamily: "'Rajdhani',sans-serif" }}>{t.players?.length || 0}/{t.maxPlayers}</span>
+                      </div>
+                      <div style={{ fontSize: 7, padding: "2px 7px", background: "rgba(123,47,255,0.15)", border: `1px solid ${statusBorder}`, borderRadius: 3, color: statusColor, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                        {isActive ? "Join Now" : "Register"}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
 
           </div>
