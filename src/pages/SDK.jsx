@@ -481,51 +481,107 @@ export default function SDK() {
           <InfoBox color={C.blue} icon="ℹ">File → Build Settings → WebGL → Switch Platform. Then Player Settings → Publishing Settings → Enable "Decompression Fallback".</InfoBox>
 
           <H3>Step 3 — ArcadeManager.cs</H3>
-          <CodeBlock id="arcade-manager" copied={copied} onCopy={copy} lang="csharp" code={`using UnityEngine;
+          <CodeBlock id="arcade-manager" copied={copied} onCopy={copy} lang="csharp" code={`using System;
 using System.Runtime.InteropServices;
+using UnityEngine;
 
 public class ArcadeManager : MonoBehaviour
 {
-    public static ArcadeManager Instance;
-    public string gameId = "YOUR_GAME_ID"; // Update after approval
+    public static ArcadeManager Instance { get; private set; }
 
-    // Import JS functions from ArcadeBridge.jslib
-    [DllImport("__Internal")] private static extern void arcade_init(string gameId);
-    [DllImport("__Internal")] private static extern void arcade_updateScore(int score);
-    [DllImport("__Internal")] private static extern void arcade_gameOver(int finalScore);
+    public string gameId = "YOUR_GAME_ID";   // Update after approval
+    public string gameName = "My Game";
+
+    public static event Action<PurchaseResult> OnPurchaseSuccessEvent;
+    public static event Action<PurchaseResult> OnPurchaseFailedEvent;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+    [DllImport("__Internal")] static extern void arcade_init(string gameId, string gameName);
+    [DllImport("__Internal")] static extern void arcade_updateScore(int score);
+    [DllImport("__Internal")] static extern void arcade_gameOver(int finalScore);
+    [DllImport("__Internal")] static extern void arcade_purchaseSkin(int skinIndex, string name, string pinataCID, int price);
+    [DllImport("__Internal")] static extern void arcade_purchasePowerUp(string powerUpId, int price);
+#endif
 
     void Awake()
     {
-        if (Instance == null) { Instance = this; DontDestroyOnLoad(gameObject); }
-        else { Destroy(gameObject); return; }
+        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+        Instance = this;
+        DontDestroyOnLoad(gameObject);
     }
 
     void Start()
     {
-        #if !UNITY_EDITOR
-        arcade_init(gameId);
-        #endif
+#if UNITY_WEBGL && !UNITY_EDITOR
+        arcade_init(gameId, gameName);
+#endif
     }
 
     public void UpdateScore(int score)
     {
-        #if !UNITY_EDITOR
+#if UNITY_WEBGL && !UNITY_EDITOR
         arcade_updateScore(score);
-        #endif
+#endif
     }
 
-    public void SubmitScore()
+    public void GameOver(int finalScore)
     {
-        #if !UNITY_EDITOR
-        arcade_gameOver(score);
-        #endif
+#if UNITY_WEBGL && !UNITY_EDITOR
+        arcade_gameOver(finalScore);
+#endif
     }
+
+    // Pay + mint an NFT for a permanent skin — no registration step needed.
+    public void PurchaseSkin(int skinIndex, string name, string pinataCID, int price)
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        arcade_purchaseSkin(skinIndex, name, pinataCID, price);
+#endif
+    }
+
+    // Pay only, no NFT — for power-ups / boosts.
+    public void PurchasePowerUp(string powerUpId, int price)
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        arcade_purchasePowerUp(powerUpId, price);
+#endif
+    }
+
+    // Called by arcade-sdk-unity.js via SendMessage — GameObject must be named "ArcadeManager"
+    public void OnPurchaseSuccess(string json)
+    {
+        var data = JsonUtility.FromJson<PurchaseResult>(json);
+        OnPurchaseSuccessEvent?.Invoke(data);
+    }
+
+    public void OnPurchaseFailed(string json)
+    {
+        var data = JsonUtility.FromJson<PurchaseResult>(json);
+        OnPurchaseFailedEvent?.Invoke(data);
+    }
+}
+
+[Serializable]
+public class PurchaseResult
+{
+    public string kind;       // "skin" | "powerup"
+    public int    skinIndex;
+    public string powerUpId;
+    public string tokenId;    // populated on skin purchase success
+    public string txHash;
+    public string error;
 }`} />
 
           <H3>Step 4 — Use in your game</H3>
           <CodeBlock id="unity-use" copied={copied} onCopy={copy} lang="csharp" code={`public class GameController : MonoBehaviour
 {
     private int score = 0;
+
+    void Start()
+    {
+        ArcadeManager.OnPurchaseSuccessEvent += HandlePurchaseSuccess;
+        ArcadeManager.OnPurchaseFailedEvent += HandlePurchaseFailed;
+    }
 
     void Update()
     {
@@ -538,7 +594,30 @@ public class ArcadeManager : MonoBehaviour
     public void OnGameOver()
     {
         // Submit final score on-chain
-        ArcadeManager.Instance.SubmitScore();
+        ArcadeManager.Instance.GameOver(score);
+    }
+
+    public void OnBuySkinButton(int skinIndex, string name, string pinataCID, int price)
+    {
+        // Pays + mints an NFT in one call — no pre-registration needed
+        ArcadeManager.Instance.PurchaseSkin(skinIndex, name, pinataCID, price);
+    }
+
+    public void OnBuyPowerUpButton(string powerUpId, int price)
+    {
+        // Pays only — apply the effect once HandlePurchaseSuccess fires
+        ArcadeManager.Instance.PurchasePowerUp(powerUpId, price);
+    }
+
+    void HandlePurchaseSuccess(PurchaseResult result)
+    {
+        if (result.kind == "skin") Debug.Log("Skin unlocked, tokenId=" + result.tokenId);
+        if (result.kind == "powerup") Debug.Log("Power-up applied: " + result.powerUpId);
+    }
+
+    void HandlePurchaseFailed(PurchaseResult result)
+    {
+        Debug.LogWarning("Purchase failed: " + result.error);
     }
 }`} />
         </div>
@@ -573,7 +652,17 @@ func update_score(score: int):
 
 func game_over(final_score: int):
     if OS.has_feature("JavaScript"):
-        JavaScript.eval("ArcadeSDK.gameOver(" + str(final_score) + ")")`} />
+        JavaScript.eval("ArcadeSDK.gameOver(" + str(final_score) + ")")
+
+# Pay + mint an NFT for a permanent skin — no registration step needed
+func purchase_skin(skin_index: int, skin_name: String, pinata_cid: String, price: int):
+    if OS.has_feature("JavaScript"):
+        JavaScript.eval("ArcadeSDK.purchaseSkin(" + str(skin_index) + ", '" + skin_name + "', '" + pinata_cid + "', " + str(price) + ")")
+
+# Pay only, no NFT — for power-ups/boosts
+func purchase_power_up(power_up_id: String, price: int):
+    if OS.has_feature("JavaScript"):
+        JavaScript.eval("ArcadeSDK.purchasePowerUp('" + power_up_id + "', " + str(price) + ")")`} />
 
           <H3>Step 3 — Use in your game</H3>
           <CodeBlock id="godot-use" copied={copied} onCopy={copy} lang="gdscript" code={`# In your game script
@@ -586,7 +675,15 @@ func _on_enemy_killed():
     ArcadeSDK.update_score(score)
 
 func _on_player_died():
-    ArcadeSDK.game_over(score)`} />
+    ArcadeSDK.game_over(score)
+
+func _on_buy_skin_button_pressed():
+    # Pays + mints an NFT in one call — no pre-registration needed
+    ArcadeSDK.purchase_skin(0, "Batman", "bafkrei...", 10)
+
+func _on_buy_power_up_button_pressed():
+    # Pays only — apply the effect once the purchase confirms
+    ArcadeSDK.purchase_power_up("SCALE_BOOST", 5)`} />
 
           <InfoBox color={C.gold} icon="💡">For Godot 4.x replace JavaScript.eval() with JavaScriptBridge.eval()</InfoBox>
         </div>
@@ -639,6 +736,18 @@ function update() {
 function onGameOver() {
   // Submit final score on-chain
   ArcadeSDK.gameOver(score);
+}
+
+function onBuySkinButtonClick() {
+  // Pay + mint an NFT for a permanent skin — one call, no registration
+  ArcadeSDK.purchaseSkin(0, "Batman", "bafkrei...", 10);
+  ArcadeSDK.onPurchaseSuccess = (data) => console.log("Skin unlocked:", data.tokenId);
+  ArcadeSDK.onPurchaseFailed = (data) => console.error("Purchase failed:", data.error);
+}
+
+function onBuyPowerUpButtonClick() {
+  // Pay only, no NFT
+  ArcadeSDK.purchasePowerUp("SCALE_BOOST", 5);
 }`} />
 
           <H3>Scene-based integration</H3>
@@ -730,7 +839,7 @@ window.addEventListener("message", (event) => {
 });
 
 // Request player info
-ArcadeSDK.getPlayerInfo();`} />
+ArcadeSDK.getPlayerProfile();`} />
         </div>
       );
 
@@ -738,10 +847,14 @@ ArcadeSDK.getPlayerInfo();`} />
         <div>
           <H2 id="api" sub="Complete API reference for ArcadeX SDK">API Reference</H2>
           {[
-            { fn: "ArcadeSDK.init(gameId)", color: C.green, desc: "Initialize the SDK. Call this once when your game loads.", params: [["gameId", "string", "Your Game ID from Creator Dashboard. Pass '' on first deploy."]] },
+            { fn: "ArcadeSDK.init(gameId, options)", color: C.green, desc: "Initialize the SDK. Call this once when your game loads.", params: [["gameId", "string", "Your Game ID from Creator Dashboard. Pass '' on first deploy."], ["options.gameName", "string", "Display name shown on the platform."], ["options.debug", "boolean", "Enable verbose console logging."]] },
             { fn: "ArcadeSDK.updateScore(score)", color: C.cyan, desc: "Send real-time score to ArcadeX UI. Does NOT trigger blockchain tx. Call frequently.", params: [["score", "number", "Current player score"]] },
             { fn: "ArcadeSDK.gameOver(finalScore)", color: C.purple, desc: "Submit final score on-chain. Triggers blockchain tx. 80% tokens to player, 20% to creator.", params: [["finalScore", "number", "Player's final score"]] },
-            { fn: "ArcadeSDK.getPlayerInfo()", color: C.gold, desc: "Request connected player's wallet info. Returns via PLAYER_INFO postMessage event.", params: [] },
+            { fn: "ArcadeSDK.purchaseSkin(skinIndex, name, pinataCID, price)", color: C.gold, desc: "Pay + mint an ERC-1155 NFT for a permanent skin/character in a single call. No pre-registration needed — pass everything the game already knows about this skin.", params: [["skinIndex", "number", "Unique index for this skin (0, 1, 2...)"], ["name", "string", 'Display name, e.g. "Batman"'], ["pinataCID", "string", "IPFS CID (with or without ipfs:// prefix)"], ["price", "number", "Price in ARCADE/MSTC, whole tokens"]] },
+            { fn: "ArcadeSDK.purchasePowerUp(powerUpId, price)", color: C.orange, desc: "Pay only, no NFT minted. Ownership/unlock state stays entirely on your game side.", params: [["powerUpId", "string", 'Unique identifier, e.g. "SCALE_BOOST"'], ["price", "number", "Price in ARCADE/MSTC, whole tokens"]] },
+            { fn: "ArcadeSDK.recordGameTime(seconds)", color: C.blue, desc: "Log playtime for this session (off-chain, Firestore only).", params: [["seconds", "number", "Seconds played this session"]] },
+            { fn: "ArcadeSDK.recordEvent(eventType, value)", color: C.blue, desc: "Log a custom gameplay event (kill, win, level_up, etc.) off-chain.", params: [["eventType", "string", "Event name"], ["value", "number", "Event value, defaults to 1"]] },
+            { fn: "ArcadeSDK.getPlayerProfile()", color: C.gold, desc: "Request connected player's wallet info. Returns via PLAYER_INFO postMessage event.", params: [] },
           ].map((api, i) => (
             <div key={i} style={{ marginBottom: 16, padding: 20, background: "#050408", borderRadius: 10, border: `1px solid ${C.border}` }}>
               <code style={{ background: api.color + "15", color: api.color, padding: "5px 14px", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: C.mono, border: `1px solid ${api.color}30`, display: "inline-block", marginBottom: 12 }}>{api.fn}</code>
@@ -780,12 +893,22 @@ ArcadeSDK.getPlayerInfo();`} />
     case "TRANSACTION_SUCCESS":
       // Score submitted on-chain successfully
       console.log("TX Hash:", data.txHash);
-      console.log("Tokens earned:", data.tokensEarned);
       break;
 
     case "TRANSACTION_FAILED":
       // Blockchain tx failed
       console.error("Failed:", data.error);
+      break;
+
+    case "PURCHASE_SUCCESS":
+      // Skin or power-up purchase confirmed on-chain
+      console.log("Purchased:", data.kind, data.skinIndex ?? data.powerUpId);
+      console.log("Tx:", data.txHash, "Token ID:", data.tokenId);
+      break;
+
+    case "PURCHASE_FAILED":
+      // Skin or power-up purchase failed / was rejected
+      console.error("Purchase failed:", data.error);
       break;
   }
 });`} />
@@ -793,8 +916,10 @@ ArcadeSDK.getPlayerInfo();`} />
           <H3>Event Reference</H3>
           {[
             { event: "PLAYER_INFO", color: C.cyan, desc: "Sent when player info is requested. Contains wallet address and ARCADE balance.", fields: [["type", '"PLAYER_INFO"'], ["data.address", "string — EVM wallet address"], ["data.balance", "string — ARCADE token balance"]] },
-            { event: "TRANSACTION_SUCCESS", color: C.green, desc: "Sent when score is successfully submitted on-chain.", fields: [["type", '"TRANSACTION_SUCCESS"'], ["data.txHash", "string — blockchain tx hash"], ["data.tokensEarned", "number — ARCADE tokens earned"]] },
+            { event: "TRANSACTION_SUCCESS", color: C.green, desc: "Sent when score is successfully submitted on-chain.", fields: [["type", '"TRANSACTION_SUCCESS"'], ["data.txHash", "string — blockchain tx hash"]] },
             { event: "TRANSACTION_FAILED", color: C.red, desc: "Sent when blockchain transaction fails.", fields: [["type", '"TRANSACTION_FAILED"'], ["data.error", "string — error message"]] },
+            { event: "PURCHASE_SUCCESS", color: C.gold, desc: "Sent when a skin or power-up purchase confirms on-chain.", fields: [["type", '"PURCHASE_SUCCESS"'], ["data.kind", '"skin" | "powerup"'], ["data.skinIndex", "number — present for skin purchases only"], ["data.powerUpId", "string — present for power-up purchases only"], ["data.tokenId", "string — minted NFT tokenId (skin only)"], ["data.txHash", "string — blockchain tx hash"]] },
+            { event: "PURCHASE_FAILED", color: C.red, desc: "Sent when a skin or power-up purchase fails or is rejected in the wallet.", fields: [["type", '"PURCHASE_FAILED"'], ["data.kind", '"skin" | "powerup"'], ["data.error", "string — error message"]] },
           ].map((e, i) => (
             <div key={i} style={{ marginBottom: 14, padding: 18, background: "#050408", borderRadius: 10, border: `1px solid ${C.border}` }}>
               <code style={{ background: e.color + "15", color: e.color, padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: C.mono, border: `1px solid ${e.color}30`, display: "inline-block", marginBottom: 10 }}>{e.event}</code>
@@ -927,7 +1052,7 @@ ArcadeSDK.getPlayerInfo();`} />
 
             <div style={{ marginTop: 28, padding: 14, background: "rgba(0,255,136,0.05)", border: "1px solid rgba(0,255,136,0.15)", borderRadius: 10 }}>
               <div style={{ fontSize: 11, color: C.green, fontWeight: 700, fontFamily: C.ui, marginBottom: 6 }}>SDK Version</div>
-              <div style={{ fontSize: 12, color: C.muted, fontFamily: C.mono }}>v2.0.0</div>
+              <div style={{ fontSize: 12, color: C.muted, fontFamily: C.mono }}>v4.0.0</div>
               <div style={{ fontSize: 10, color: C.dim, fontFamily: C.ui, marginTop: 4 }}>BOTChain EVM</div>
             </div>
           </div>

@@ -6,9 +6,9 @@ import GameCard from "../components/GameCard";
 import { useEffect, useState } from "react";
 import { getScores } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
+import { useChain } from "../context/ChainContext";
 
 
-const TOURNAMENT_ADDRESS = import.meta.env.VITE_TOURNAMENT_ADDRESS;
 const TOURNAMENT_ABI = [
   { name: "getTournamentInfo", type: "function", stateMutability: "view", inputs: [{ name: "tournamentId", type: "uint256" }], outputs: [{ name: "", type: "tuple", components: [{ name: "id", type: "uint256" }, { name: "gameId", type: "uint256" }, { name: "gameName", type: "string" }, { name: "gameThumbnail", type: "string" }, { name: "creator", type: "address" }, { name: "entryFee", type: "uint256" }, { name: "maxPlayers", type: "uint256" }, { name: "startTime", type: "uint256" }, { name: "endTime", type: "uint256" }, { name: "prizePool", type: "uint256" }, { name: "status", type: "uint8" }, { name: "players", type: "address[]" }, { name: "prizesDistributed", type: "bool" }] }] },
   { name: "nextTournamentId", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
@@ -20,6 +20,10 @@ export default function Home() {
   const { open } = useAppKit();
   const { balance } = useArcadeBalance();
   const { games } = useGames();
+  const { contracts, rewardToken, isNativeToken } = useChain();
+  const getRate = (g) => (g ? ((isNativeToken ? g.rewardRateNative : g.rewardRate) || (isNativeToken ? 1 : 50)) : 0);
+  const rewardSymbol = rewardToken || "ARCADE";
+  const TOURNAMENT_ADDRESS = contracts?.tournament;
   const [scores, setScores] = useState([]);
   const [page, setPage] = useState(0);
   const [visible, setVisible] = useState(true);
@@ -81,7 +85,7 @@ export default function Home() {
           .sort((a, b) => a.startTime - b.startTime)
           .slice(0, 3);
         setUpcomingTournaments(upcoming);
-      } catch (err) { console.error("Home tournaments fetch:", err); }
+      } catch (err) { console.warn("Home tournaments fetch:", err.shortMessage || err.message); }
       finally { setTournamentsLoaded(true); }
     };
     fetchUpcoming();
@@ -316,7 +320,7 @@ export default function Home() {
                     <div style={{ padding: "7px 9px" }}>
                       <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#b899ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{games[lIdx]?.name}</div>
                       <div style={{ fontSize: 8, color: "rgba(180,150,255,0.4)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", marginBottom: 4 }}>{games[lIdx]?.category || games[lIdx]?.genre || "Arcade"}</div>
-                      {games[lIdx]?.rewardRate && <span style={{ fontSize: 8, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.07)", border: "1px solid rgba(0,212,255,0.18)", borderRadius: 4, padding: "1px 5px" }}>+{games[lIdx].rewardRate} ARCADE</span>}
+                      {games[lIdx]?.rewardRate != null && <span style={{ fontSize: 8, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.07)", border: "1px solid rgba(0,212,255,0.18)", borderRadius: 4, padding: "1px 5px" }}>+{getRate(games[lIdx])} {rewardSymbol}</span>}
                     </div>
                   </div>
 
@@ -349,8 +353,8 @@ export default function Home() {
                       <div style={{ height: 1, background: "rgba(123,47,255,0.18)", borderRadius: 1 }} />
                       {/* Reward + play row */}
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        {games[ci]?.rewardRate
-                          ? <span style={{ fontSize: 14, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 6, padding: "5px 12px" }}>+{games[ci].rewardRate} ARCADE</span>
+                        {games[ci]?.rewardRate != null
+                          ? <span style={{ fontSize: 14, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 6, padding: "5px 12px" }}>+{getRate(games[ci])} {rewardSymbol}</span>
                           : <span />}
                         <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "rgba(180,150,255,0.45)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00FF88", display: "inline-block" }} />
@@ -378,7 +382,7 @@ export default function Home() {
                     <div style={{ padding: "7px 9px" }}>
                       <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#b899ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{games[rIdx]?.name}</div>
                       <div style={{ fontSize: 8, color: "rgba(180,150,255,0.4)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", marginBottom: 4 }}>{games[rIdx]?.category || games[rIdx]?.genre || "Arcade"}</div>
-                      {games[rIdx]?.rewardRate && <span style={{ fontSize: 8, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.07)", border: "1px solid rgba(0,212,255,0.18)", borderRadius: 4, padding: "1px 5px" }}>+{games[rIdx].rewardRate} ARCADE</span>}
+                      {games[rIdx]?.rewardRate != null && <span style={{ fontSize: 8, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.07)", border: "1px solid rgba(0,212,255,0.18)", borderRadius: 4, padding: "1px 5px" }}>+{getRate(games[rIdx])} {rewardSymbol}</span>}
                     </div>
                   </div>
 
@@ -562,7 +566,7 @@ export default function Home() {
             games.forEach(g => {
               const addr = g.creator?.toLowerCase();
               if (!addr) return;
-              const earned = Math.floor((g.plays || 0) * (g.rewardRate || 50) * 0.2);
+              const earned = Math.floor((g.plays || 0) * getRate(g) * 0.2);
               if (!creatorEarnings[addr]) { creatorEarnings[addr] = 0; creatorGames[addr] = []; }
               creatorEarnings[addr] += earned;
               creatorGames[addr].push(g);
@@ -617,7 +621,7 @@ export default function Home() {
                       <div style={{ textAlign: "right" }}>
                         <div style={{ fontSize: 8, color: "rgba(255,183,0,0.5)", fontFamily: "'Rajdhani',sans-serif", marginBottom: 1 }}>EARNED</div>
                         <div style={{ fontSize: 14, fontWeight: 700, color: "#FFB700", fontFamily: "'Orbitron',sans-serif" }}>{earned.toLocaleString()}</div>
-                        <div style={{ fontSize: 7, color: "rgba(255,183,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>ARCADE</div>
+                        <div style={{ fontSize: 7, color: "rgba(255,183,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>{rewardSymbol}</div>
                       </div>
                     </div>
 
@@ -626,7 +630,7 @@ export default function Home() {
                       {[
                         { label: "Games", value: creatorGames[addr]?.length || 0, color: "#a67fff" },
                         { label: "Total Plays", value: (creatorGames[addr] || []).reduce((s, g) => s + (g.plays || 0), 0), color: "#00d4ff" },
-                        { label: "ARCADE", value: earned.toLocaleString(), color: "#FFB700" },
+                        { label: rewardSymbol, value: earned.toLocaleString(), color: "#FFB700" },
                       ].map(s => (
                         <div key={s.label} style={{ background: "rgba(0,0,0,0.3)", borderRadius: 8, padding: "7px 6px", textAlign: "center", border: "1px solid rgba(123,47,255,0.1)" }}>
                           <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13, color: s.color, lineHeight: 1 }}>{s.value}</div>
@@ -731,7 +735,7 @@ export default function Home() {
                       <div style={{ textAlign: "right", flexShrink: 0 }}>
                         <div style={{ fontSize: 7, color: "rgba(255,215,0,0.5)", fontFamily: "'Rajdhani',sans-serif" }}>PRIZE</div>
                         <div style={{ fontSize: 13, fontWeight: 700, color: "#FFD700", fontFamily: "'Orbitron',sans-serif", lineHeight: 1 }}>{prize > 0 ? prize.toFixed(0) : (entryFee * t.maxPlayers * 0.95).toFixed(0)}</div>
-                        <div style={{ fontSize: 7, color: "rgba(255,215,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>ARCADE</div>
+                        <div style={{ fontSize: 7, color: "rgba(255,215,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>{rewardSymbol}</div>
                       </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>

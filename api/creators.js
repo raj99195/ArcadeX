@@ -43,10 +43,10 @@ export default async function handler(req, res) {
     if (!address) return res.status(400).json({ error: "address required" });
     try {
       const snap = await db.collection("creators").doc(address.toLowerCase()).get();
-      if (!snap.exists()) {
+      if (!snap.exists) {
         // Try original case
         const snap2 = await db.collection("creators").doc(address).get();
-        return res.status(200).json(snap2.exists() ? snap2.data() : null);
+        return res.status(200).json(snap2.exists ? snap2.data() : null);
       }
       return res.status(200).json(snap.data());
     } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -62,7 +62,7 @@ export default async function handler(req, res) {
     try {
       const ref = db.collection("creators").doc(user.address);
       const snap = await ref.get();
-      if (!snap.exists()) {
+      if (!snap.exists) {
         await ref.set({
           address: user.address,
           displayName: displayName || "",
@@ -90,7 +90,7 @@ export default async function handler(req, res) {
     try {
       const ref = db.collection("creators").doc(user.address);
       const snap = await ref.get();
-      if (!snap.exists()) return res.status(404).json({ error: "Creator not found" });
+      if (!snap.exists) return res.status(404).json({ error: "Creator not found" });
       const data = snap.data();
       // Auto approve after 2 hours
       if (data.status === "pending" && data.registeredAt) {

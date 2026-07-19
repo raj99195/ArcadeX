@@ -1,19 +1,48 @@
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useState, useRef } from "react";
 import { useAccount, usePublicClient } from "wagmi";
-import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
+import { writeContract, waitForTransactionReceipt, readContract } from "@wagmi/core";
 import { wagmiAdapter } from "../Providers";
 import { useGames } from "../hooks/useGames";
 import { saveScore } from "../lib/gameService";
+import { useChain } from "../context/ChainContext";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
+import { useArcadeBalance } from "../hooks/useArcadeBalance";
 
-const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
-const TOURNAMENT_ADDRESS = import.meta.env.VITE_TOURNAMENT_ADDRESS;
-const CHAIN_ID = Number(import.meta.env.VITE_BOTCHAIN_MAINNET_CHAIN_ID);
+
+
 
 const TOURNAMENT_SCORE_ABI = [{ name: "submitTournamentScore", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tournamentId", type: "uint256" }, { name: "score", type: "uint256" }], outputs: [] }];
-const PLATFORM_ABI = [{ name: "recordPlayAndEarn", type: "function", stateMutability: "nonpayable", inputs: [{ name: "gameId", type: "uint256" }, { name: "score", type: "uint256" }], outputs: [] }];
-const PLATFORM_READ_ABI = [{ name: "games", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "gameId", type: "uint256" }, { name: "name", type: "string" }, { name: "creator", type: "address" }, { name: "iframeUrl", type: "string" }, { name: "rewardRate", type: "uint256" }, { name: "totalPlays", type: "uint256" }, { name: "isActive", type: "bool" }] }];
+const PLATFORM_ABI = [{ name: "recordPlayAndEarn", type: "function", stateMutability: "nonpayable", inputs: [{ name: "gameId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
+const PLATFORM_READ_ABI = [
+  { name: "games", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "gameId", type: "uint256" }, { name: "name", type: "string" }, { name: "creator", type: "address" }, { name: "iframeUrl", type: "string" }, { name: "rewardRate", type: "uint256" }, { name: "totalPlays", type: "uint256" }, { name: "isActive", type: "bool" }] },
+  { name: "playerSharePercent", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+  { name: "creatorSharePercent", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+];
+
+// ── ArcadeX SDK: GameItems (ERC-1155 — skins + power-ups, no registry) ──
+const GAME_ITEMS_ABI = [
+  { name: "purchaseSkinAndMint", type: "function", stateMutability: "payable", inputs: [{ name: "gameId", type: "uint256" }, { name: "skinIndex", type: "uint256" }, { name: "name", type: "string" }, { name: "imageURI", type: "string" }, { name: "price", type: "uint256" }, { name: "creator", type: "address" }], outputs: [{ name: "tokenId", type: "uint256" }] },
+  { name: "purchasePowerUp", type: "function", stateMutability: "payable", inputs: [{ name: "gameId", type: "uint256" }, { name: "powerUpId", type: "string" }, { name: "price", type: "uint256" }, { name: "creator", type: "address" }], outputs: [] },
+];
+const ERC20_ABI = [
+  { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
+  { name: "allowance", type: "function", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+];
+
+// SkinPurchased(address indexed player, uint256 indexed tokenId, uint256 indexed gameId, uint256 skinIndex, uint256 price)
+// 3 indexed params -> topics.length === 4. Used to pull the minted tokenId out of the receipt
+// without needing the exact keccak topic0 hash.
+function extractSkinTokenId(receipt, gameItemsAddress) {
+  try {
+    const log = receipt.logs.find(
+      (l) => l.address?.toLowerCase() === gameItemsAddress?.toLowerCase() && l.topics.length === 4
+    );
+    return log ? BigInt(log.topics[2]).toString() : null;
+  } catch {
+    return null;
+  }
+}
 
 const C = {
   bg: "#08070f", card: "#0d0b1a", card2: "#12102a",
@@ -52,6 +81,13 @@ export default function GamePlay() {
 
   const { games } = useGames();
   const game = games.find(g => g.id === Number(gameId));
+  const { chainKey, contracts, explorerUrl, chainName, chainId, rewardToken, isNativeToken } = useChain();
+  const PLATFORM_ADDRESS = contracts?.platform;
+  const TOURNAMENT_ADDRESS = contracts?.tournament;
+  const GAME_ITEMS_ADDRESS = contracts?.gameItems;
+  const ERC20_TOKEN_ADDRESS = contracts?.token; // ARCADE token on BOTChain, unused when isNativeToken
+  const CHAIN_ID = chainId;
+  const rewardSymbol = rewardToken || "ARCADE";
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
 
@@ -67,6 +103,8 @@ export default function GamePlay() {
   const [creatorProfile, setCreatorProfile] = useState(null);
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
+  const [playerSplit, setPlayerSplit] = useState(80); // default 80% until on-chain value loads
+  const [creatorSplit, setCreatorSplit] = useState(20);
   const [comments, setComments] = useState([]);
   const [commentText, setCommentText] = useState("");
   const [postingComment, setPostingComment] = useState(false);
@@ -74,7 +112,7 @@ export default function GamePlay() {
 
   const iframeRef = useRef(null);
   const submittingRef = useRef(false);
-
+  const { balance } = useArcadeBalance();
   useEffect(() => {
     const h = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener("resize", h);
@@ -86,6 +124,23 @@ export default function GamePlay() {
   }, [games]);
 
   useEffect(() => { if (game) setLikeCount(game.likes || 0); }, [game]);
+
+  // Fetch on-chain reward split so UI reflects what admin set
+  useEffect(() => {
+    if (!PLATFORM_ADDRESS || !publicClient) return;
+    (async () => {
+      try {
+        const [pct, cPct] = await Promise.all([
+          publicClient.readContract({ address: PLATFORM_ADDRESS, abi: PLATFORM_READ_ABI, functionName: "playerSharePercent" }),
+          publicClient.readContract({ address: PLATFORM_ADDRESS, abi: PLATFORM_READ_ABI, functionName: "creatorSharePercent" }),
+        ]);
+        setPlayerSplit(Number(pct));
+        setCreatorSplit(Number(cPct));
+      } catch (err) {
+        console.warn("Could not fetch reward split, using defaults:", err.message);
+      }
+    })();
+  }, [PLATFORM_ADDRESS, publicClient]);
 
   useEffect(() => {
     if (!gameId || !address) return;
@@ -140,6 +195,117 @@ export default function GamePlay() {
     trackPlay();
   }, [game?.id, address, gameLoading]);
 
+  // ── ArcadeX SDK: postMessage helper (GamePlay -> game iframe) ──
+  const sendToGame = (type, payload) => {
+    iframeRef.current?.contentWindow?.postMessage({ type, _platform: true, ...payload }, "*");
+  };
+
+  // ── ArcadeX SDK: PURCHASE_SKIN ──────────────────────────────
+  // Pay + mint an ERC-1155 NFT for a permanent skin. No registration step —
+  // the game supplies gameId/skinIndex/name/imageURI/price on every call.
+  const handlePurchaseSkin = async ({ gameId, skinIndex, name, imageURI, price }) => {
+    if (!address || !GAME_ITEMS_ADDRESS) return;
+    console.log("[PURCHASE_SKIN] isNativeToken:", isNativeToken, "| chainId:", CHAIN_ID, "| GAME_ITEMS_ADDRESS:", GAME_ITEMS_ADDRESS);
+    const config = wagmiAdapter.wagmiConfig;
+    const creatorAddress = game?.creator || address;
+    const priceWei = BigInt(Math.round(Number(price) || 0)) * 10n ** 18n;
+    const args = [BigInt(gameId), BigInt(skinIndex), name, imageURI, priceWei, creatorAddress];
+
+    try {
+      let hash;
+      if (!isNativeToken) {
+        // BOTChain: ERC-20 approve (if needed) then purchase
+        const allowance = await readContract(config, {
+          address: ERC20_TOKEN_ADDRESS, abi: ERC20_ABI,
+          functionName: "allowance", args: [address, GAME_ITEMS_ADDRESS], chainId: CHAIN_ID,
+        });
+        if (allowance < priceWei) {
+          const approveHash = await writeContract(config, {
+            address: ERC20_TOKEN_ADDRESS, abi: ERC20_ABI,
+            functionName: "approve", args: [GAME_ITEMS_ADDRESS, priceWei], chainId: CHAIN_ID,
+          });
+          await waitForTransactionReceipt(config, { hash: approveHash, chainId: CHAIN_ID });
+        }
+        hash = await writeContract(config, {
+          address: GAME_ITEMS_ADDRESS, abi: GAME_ITEMS_ABI,
+          functionName: "purchaseSkinAndMint", args, chainId: CHAIN_ID,
+        });
+      } else {
+        // MST: native MSTC payment
+        hash = await writeContract(config, {
+          address: GAME_ITEMS_ADDRESS, abi: GAME_ITEMS_ABI,
+          functionName: "purchaseSkinAndMint", args, value: priceWei, chainId: CHAIN_ID,
+        });
+      }
+      const receipt = await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
+      sendToGame("PURCHASE_SUCCESS", { kind: "skin", skinIndex, tokenId: extractSkinTokenId(receipt, GAME_ITEMS_ADDRESS), txHash: hash });
+    } catch (err) {
+      console.error("[PURCHASE_SKIN] failed:", err);
+      sendToGame("PURCHASE_FAILED", { kind: "skin", skinIndex, error: err.shortMessage || err.message || "Purchase failed" });
+    }
+  };
+
+  // ── ArcadeX SDK: PURCHASE_POWERUP ───────────────────────────
+  // Pay only, no NFT minted. Unlock/ownership state stays on the game side.
+  const handlePurchasePowerUp = async ({ gameId, powerUpId, price }) => {
+    if (!address || !GAME_ITEMS_ADDRESS) return;
+    console.log("[PURCHASE_POWERUP] isNativeToken:", isNativeToken, "| chainId:", CHAIN_ID, "| GAME_ITEMS_ADDRESS:", GAME_ITEMS_ADDRESS);
+    const config = wagmiAdapter.wagmiConfig;
+    const creatorAddress = game?.creator || address;
+    const priceWei = BigInt(Math.round(Number(price) || 0)) * 10n ** 18n;
+    const args = [BigInt(gameId), powerUpId, priceWei, creatorAddress];
+
+    try {
+      let hash;
+      if (!isNativeToken) {
+        const allowance = await readContract(config, {
+          address: ERC20_TOKEN_ADDRESS, abi: ERC20_ABI,
+          functionName: "allowance", args: [address, GAME_ITEMS_ADDRESS], chainId: CHAIN_ID,
+        });
+        if (allowance < priceWei) {
+          const approveHash = await writeContract(config, {
+            address: ERC20_TOKEN_ADDRESS, abi: ERC20_ABI,
+            functionName: "approve", args: [GAME_ITEMS_ADDRESS, priceWei], chainId: CHAIN_ID,
+          });
+          await waitForTransactionReceipt(config, { hash: approveHash, chainId: CHAIN_ID });
+        }
+        hash = await writeContract(config, {
+          address: GAME_ITEMS_ADDRESS, abi: GAME_ITEMS_ABI,
+          functionName: "purchasePowerUp", args, chainId: CHAIN_ID,
+        });
+      } else {
+        hash = await writeContract(config, {
+          address: GAME_ITEMS_ADDRESS, abi: GAME_ITEMS_ABI,
+          functionName: "purchasePowerUp", args, value: priceWei, chainId: CHAIN_ID,
+        });
+      }
+      await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
+      sendToGame("PURCHASE_SUCCESS", { kind: "powerup", powerUpId, txHash: hash });
+    } catch (err) {
+      console.error("[PURCHASE_POWERUP] failed:", err);
+      sendToGame("PURCHASE_FAILED", { kind: "powerup", powerUpId, error: err.shortMessage || err.message || "Purchase failed" });
+    }
+  };
+
+  // ── ArcadeX SDK: RECORD_GAME_TIME / GAME_EVENT (off-chain, Firestore) ──
+  const handleRecordGameTime = async ({ gameId, seconds, timestamp }) => {
+    try {
+      await fetch("/api/games?action=record-time", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gameId, player: address, seconds, timestamp, chainId: CHAIN_ID }),
+      });
+    } catch (err) { console.error("[RECORD_GAME_TIME] failed:", err); }
+  };
+
+  const handleGameEvent = async ({ gameId, eventType, value, timestamp }) => {
+    try {
+      await fetch("/api/games?action=record-event", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gameId, player: address, eventType, value, timestamp, chainId: CHAIN_ID }),
+      });
+    } catch (err) { console.error("[GAME_EVENT] failed:", err); }
+  };
+
   // SDK messages
   useEffect(() => {
     const handleMessage = (event) => {
@@ -153,12 +319,32 @@ export default function GamePlay() {
         submitScore(event.data.score);
       }
       if (event.data?.type === "GET_PLAYER_INFO") {
-        iframeRef.current?.contentWindow?.postMessage({ type: "PLAYER_INFO", _platform: true, player: { address: address || "", username: null, balance: "0" } }, "*");
+    iframeRef.current?.contentWindow?.postMessage({
+        type: "PLAYER_INFO",
+        _platform: true,
+        player: {
+            address: address || "",
+            balance: Number(balance)
+        }
+    }, "*");
+
+      }
+      if (event.data?.type === "PURCHASE_SKIN") {
+        handlePurchaseSkin(event.data);
+      }
+      if (event.data?.type === "PURCHASE_POWERUP") {
+        handlePurchasePowerUp(event.data);
+      }
+      if (event.data?.type === "RECORD_GAME_TIME") {
+        handleRecordGameTime(event.data);
+      }
+      if (event.data?.type === "GAME_EVENT") {
+        handleGameEvent(event.data);
       }
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [address, game, submitted]);
+  }, [address, game, submitted, chainId, contracts, isNativeToken]);
 
   const handleLike = async () => {
     if (!address) return;
@@ -201,14 +387,42 @@ export default function GamePlay() {
     try {
       const onChainGameId = game.gameId;
       if (!onChainGameId) throw new Error("Game not registered on-chain");
-      const rewardRate = game.rewardRate || 50;
-      const playerReward = Math.floor(rewardRate * 80 / 100);
+      const rewardRate = (isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50);
+      // Math.floor() was rounding native-chain estimates (rate 1-2) straight
+      // to 0 — 80% of 1 is 0.8, floors to 0. Round to 2 decimals instead so
+      // small native-token amounts still show up.
+      const playerReward = Math.round(rewardRate * playerSplit / 100 * 100) / 100;
+
+      // Ask the backend to sign this (player, gameId, score) attestation —
+      // Platform.sol's recordPlayAndEarn() requires this once a chain has
+      // scoreSigner configured. If the chain hasn't enabled that feature
+      // yet (or the request fails for any reason), fall back to an empty
+      // signature — the contract simply skips verification when
+      // scoreSigner is unset, so this stays backward compatible.
+      let nonce = 0n;
+      let signature = "0x";
+      try {
+        const token = localStorage.getItem("arcadex_jwt");
+        const sigRes = await fetch("/api/games?action=sign-score", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ gameId: onChainGameId, score: finalScore, chain: chainKey }),
+        });
+        if (sigRes.ok) {
+          const sigData = await sigRes.json();
+          nonce = BigInt(sigData.nonce);
+          signature = sigData.signature;
+        }
+      } catch (sigErr) {
+        console.warn("[submitScore] sign-score request failed, proceeding without signature:", sigErr);
+      }
 
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
         functionName: "recordPlayAndEarn",
-        args: [BigInt(onChainGameId), BigInt(finalScore)],
+        args: [BigInt(onChainGameId), BigInt(finalScore), nonce, signature],
         gas: BigInt(500000),
+        chainId: CHAIN_ID,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
@@ -229,7 +443,7 @@ export default function GamePlay() {
       }
 
       setTokensEarned(playerReward);
-      await saveScore({ player: address, score: finalScore, gameId: game.id, gameName: game.name, txHash: hash });
+      await saveScore({ player: address, score: finalScore, gameId: game.id, gameName: game.name, txHash: hash, chain: chainKey });
       setTxHash(hash); setSubmitted(true);
       iframeRef.current?.contentWindow?.postMessage({ type: "TRANSACTION_SUCCESS", _platform: true, txHash: hash }, "*");
     } catch (err) {
@@ -251,9 +465,11 @@ export default function GamePlay() {
     </div>
   );
 
-  const rewardRate = game.rewardRate || 50;
-  const playerReward = Math.floor(rewardRate * 80 / 100);
-  const creatorReward = Math.floor(rewardRate * 20 / 100);
+  const rewardRate = (isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50);
+  // Round to 2 decimals instead of flooring — flooring zeroed out native
+  // chain amounts (rate 1-2), e.g. Math.floor(0.8) = 0.
+  const playerReward = Math.round(rewardRate * playerSplit / 100 * 100) / 100;
+  const creatorReward = Math.round(rewardRate * creatorSplit / 100 * 100) / 100;
   const shortAddr = (a) => a ? a.slice(0, 6) + "..." + a.slice(-4) : "?";
   const thumbnail = game.thumbnailUrl || game.thumbnail || game.image || null;
 
@@ -352,7 +568,7 @@ export default function GamePlay() {
 
             {/* BOTCHAIN tags bar */}
             <div style={{ padding: "8px 14px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 8, background: "rgba(0,0,0,0.3)" }}>
-              {["BOTCHAIN", "ARCADE X", "BOTCHAIN"].map((t, i) => (
+              {[chainName?.toUpperCase() || "ON-CHAIN", "ARCADE X"].map((t, i) => (
                 <span key={i} style={{ fontSize: 9, padding: "3px 8px", background: i === 2 ? "rgba(123,47,255,0.15)" : "rgba(0,0,0,0.4)", border: `1px solid ${i === 2 ? C.border2 : C.border}`, borderRadius: 4, color: i === 2 ? C.purpleL : C.dimMore, fontFamily: C.raj, fontWeight: 700, letterSpacing: "1px" }}>{t}</span>
               ))}
               <span style={{ marginLeft: "auto", fontSize: 9, color: C.dimMore, fontFamily: C.raj, display: "flex", alignItems: "center" }}>⚡ On-Chain Gaming</span>
@@ -403,7 +619,7 @@ export default function GamePlay() {
               </div>
               {/* Game info */}
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 5 }}>
-                {[["Category", game.category || "—"], ["Reward Rate", `${rewardRate} ARCADE/play`], ["Total Plays", totalPlays.toLocaleString()], ["Unique Players", uniquePlayers]].map(([k, v]) => (
+                {[["Category", game.category || "—"], ["Reward Rate", `${rewardRate} ${rewardSymbol}/play`], ["Total Plays", totalPlays.toLocaleString()], ["Unique Players", uniquePlayers]].map(([k, v]) => (
                   <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
                     <span style={{ color: C.dimMore, fontFamily: C.raj }}>{k}</span>
                     <span style={{ color: "#9977cc", fontFamily: C.raj, fontWeight: 600 }}>{v}</span>
@@ -431,8 +647,8 @@ export default function GamePlay() {
             {submitted && txHash && (
               <div style={{ background: "rgba(0,255,136,0.05)", border: "1px solid rgba(0,255,136,0.15)", borderRadius: 10, padding: "14px 16px" }}>
                 <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 12, color: C.green, marginBottom: 5 }}>✓ Score submitted on-chain!</div>
-                {tokensEarned > 0 && <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 16, color: C.green, marginBottom: 6 }}>+{tokensEarned} ARCADE earned! 🎉</div>}
-                <a href={`https://scan.botchain.ai/tx/${txHash}`} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: "#a67fff", textDecoration: "none", fontFamily: C.raj, fontWeight: 700 }}>View on BOTScan →</a>
+                {tokensEarned > 0 && <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 16, color: C.green, marginBottom: 6 }}>+{tokensEarned} {rewardSymbol} earned! 🎉</div>}
+                <a href={`${explorerUrl || "https://scan.botchain.ai"}/tx/${txHash}`} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: "#a67fff", textDecoration: "none", fontFamily: C.raj, fontWeight: 700 }}>View on {chainName} Explorer →</a>
               </div>
             )}
             {score > 0 && !submitted && !submitting && (

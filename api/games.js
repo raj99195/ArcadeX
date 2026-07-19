@@ -29,6 +29,10 @@ function getDb() {
   return admin.firestore();
 }
 
+// NOTE: was used (FV.increment) further down but never defined — that made
+// the "play" and "like" actions throw ReferenceError in production.
+const FV = admin.firestore.FieldValue;
+
 
 
 
@@ -80,13 +84,75 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
+  // ── GET creator-games (all statuses — pending/approved/rejected) ──
+  if (req.method === "GET" && action === "creator-games") {
+    const user = verifyToken(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    try {
+      const snap = await db.collection("games")
+        .where("creator", "==", user.address)
+        .get();
+      const games = snap.docs
+        .map(d => ({ id: d.data().gameId, ...d.data() }))
+        .sort((a, b) => (b.gameId || 0) - (a.gameId || 0));
+      return res.status(200).json({ games });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
   // ── GET scores (public) ──
   if (req.method === "GET" && action === "scores") {
     try {
-      const snap = await db.collection("scores").orderBy("score", "desc").get();
-      return res.status(200).json({
-        scores: snap.docs.map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toDate?.() || null }))
+      const { chain } = req.query;
+      // Sort in JS instead of combining where()+orderBy() in the same query —
+      // that combo needs a Firestore composite index, this doesn't.
+      const ref = chain ? db.collection("scores").where("chain", "==", chain) : db.collection("scores");
+      const snap = await ref.get();
+      const scores = snap.docs
+        .map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toDate?.() || null }))
+        .sort((a, b) => (b.score || 0) - (a.score || 0));
+      return res.status(200).json({ scores });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST record-time (no auth — off-chain analytics, matches what
+  //     GamePlay.jsx actually sends: no Authorization header) ──
+  if (req.method === "POST" && action === "record-time") {
+    const { gameId, player, seconds, timestamp, chainId } = req.body;
+    if (!gameId || !player || seconds == null) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    if (!rateLimit(`record-time:${player}`, 60)) {
+      return res.status(429).json({ error: "Too many requests" });
+    }
+    try {
+      await db.collection("gameTimes").add({
+        gameId, player, seconds,
+        chainId: chainId ?? null,
+        timestamp: timestamp ?? Date.now(),
+        recordedAt: new Date(),
       });
+      return res.status(200).json({ success: true });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST record-event (no auth — off-chain analytics) ──
+  if (req.method === "POST" && action === "record-event") {
+    const { gameId, player, eventType, value, timestamp, chainId } = req.body;
+    if (!gameId || !player || !eventType) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    if (!rateLimit(`record-event:${player}`, 60)) {
+      return res.status(429).json({ error: "Too many requests" });
+    }
+    try {
+      await db.collection("gameEvents").add({
+        gameId, player, eventType,
+        value: value ?? null,
+        chainId: chainId ?? null,
+        timestamp: timestamp ?? Date.now(),
+        recordedAt: new Date(),
+      });
+      return res.status(200).json({ success: true });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
@@ -138,12 +204,13 @@ export default async function handler(req, res) {
 
   // ── POST score ──
   if (req.method === "POST" && action === "score") {
-    const { txHash, score, gameId, gameName } = req.body;
+    const { txHash, score, gameId, gameName, chain } = req.body;
     if (!txHash || !score) return res.status(400).json({ error: "Missing fields" });
     try {
       await db.collection("scores").doc(txHash).set({
         player: user.address, score: parseInt(score),
         gameId: parseInt(gameId), gameName: gameName || "Unknown",
+        chain: chain || "botchain",
         txHash, createdAt: new Date(),
       });
       return res.status(200).json({ success: true });
@@ -152,32 +219,66 @@ export default async function handler(req, res) {
 
   // ── POST save-game (creator) ──
   if (req.method === "POST" && action === "save-game") {
-    const { gameId, name, description, iframeUrl, thumbnailUrl, category, rewardRate, txHash } = req.body;
+    const { gameId, name, description, iframeUrl, thumbnailUrl, category, rewardRate, rewardRateNative, txHash } = req.body;
     try {
       const gameRef = db.collection("games").doc(String(gameId));
       const existing = await gameRef.get();
-      if (existing.exists()) return res.status(400).json({ error: "Game ID already exists" });
-      await gameRef.set({
-        gameId, name, description, iframeUrl,
-        thumbnailUrl: thumbnailUrl || "",
-        category, rewardRate: parseInt(rewardRate) || 50,
-        creator: user.address, txHash,
-        status: "pending", plays: 0, earned: 0,
-        createdAt: new Date(),
-      });
+      if (existing.exists) {
+        // Already exists — update (contract re-registered same ID)
+        await gameRef.update({
+          name, description, iframeUrl,
+          thumbnailUrl: thumbnailUrl || existing.data().thumbnailUrl || "",
+          category, rewardRate: parseInt(rewardRate) || 50,
+          rewardRateNative: rewardRateNative != null ? parseInt(rewardRateNative) : (existing.data().rewardRateNative ?? 1),
+          txHash, status: "pending", updatedAt: new Date(),
+        });
+      } else {
+        await gameRef.set({
+          gameId, name, description, iframeUrl,
+          thumbnailUrl: thumbnailUrl || "",
+          category, rewardRate: parseInt(rewardRate) || 50,
+          rewardRateNative: rewardRateNative != null ? parseInt(rewardRateNative) : 1,
+          creator: user.address, txHash,
+          status: "pending", plays: 0, earned: 0,
+          createdAt: new Date(),
+        });
+      }
       return res.status(200).json({ success: true });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
   // ── POST update-game (creator) ──
   if (req.method === "POST" && action === "update-game") {
-    const { gameId, rewardRate } = req.body;
+    const { gameId, rewardRate, rewardRateNative } = req.body;
     try {
       const gameRef = db.collection("games").doc(String(gameId));
       const game = await gameRef.get();
-      if (!game.exists()) return res.status(404).json({ error: "Game not found" });
+      if (!game.exists) return res.status(404).json({ error: "Game not found" });
       if (game.data().creator !== user.address) return res.status(403).json({ error: "Not your game" });
-      await gameRef.update({ rewardRate: parseInt(rewardRate) });
+      const updates = {};
+      if (rewardRate != null) updates.rewardRate = parseInt(rewardRate);
+      if (rewardRateNative != null) updates.rewardRateNative = parseInt(rewardRateNative);
+      if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
+      await gameRef.update(updates);
+      return res.status(200).json({ success: true });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST admin-update-reward (admin only — updates Firestore rewardRateNative) ──
+  if (req.method === "POST" && action === "admin-update-reward") {
+    const ADMIN_ADDR = process.env.VITE_ADMIN_ADDRESS?.toLowerCase();
+    if (!ADMIN_ADDR || user.address?.toLowerCase() !== ADMIN_ADDR) {
+      return res.status(403).json({ error: "Admin only" });
+    }
+    const { gameId, rewardRateNative } = req.body;
+    if (!gameId || rewardRateNative == null) {
+      return res.status(400).json({ error: "gameId and rewardRateNative required" });
+    }
+    try {
+      const gameRef = db.collection("games").doc(String(gameId));
+      const snap = await gameRef.get();
+      if (!snap.exists) return res.status(404).json({ error: "Game not found in Firestore" });
+      await gameRef.update({ rewardRateNative: Number(rewardRateNative), updatedAt: new Date() });
       return res.status(200).json({ success: true });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }

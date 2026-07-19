@@ -57,26 +57,52 @@
         window.postMessage(msg, "*");
       } catch (e) { console.error("[ArcadeSDK] postMessage error:", e); }
     },
+_onMessage: function (e) {
+    var d = e.data;
+    if (!d || !d._platform) return;
 
-    _onMessage: function (e) {
-      var d = e.data;
-      if (!d || !d._platform) return;
-      if (d.type === "TRANSACTION_SUCCESS") {
+    if (d.type === "TRANSACTION_SUCCESS") {
         this._log("✅ On-chain!", d.txHash);
-        if (typeof this.onSuccess === "function") this.onSuccess(d.txHash);
-        // Notify Unity via SendMessage if available
+
+        if (typeof this.onSuccess === "function")
+            this.onSuccess(d.txHash);
+
         if (typeof SendMessage === "function") {
-          try { SendMessage("ArcadeManager", "OnTransactionSuccess", d.txHash || ""); } catch (e) {}
+            try {
+                SendMessage("ArcadeManager", "OnTransactionSuccess", d.txHash || "");
+            } catch (e) {}
         }
-      }
-      if (d.type === "TRANSACTION_FAILED") {
+    }
+
+    if (d.type === "TRANSACTION_FAILED") {
         console.warn("[ArcadeSDK] ❌ TX Failed:", d.error);
-        if (typeof this.onError === "function") this.onError(d.error);
+
+        if (typeof this.onError === "function")
+            this.onError(d.error);
+
         if (typeof SendMessage === "function") {
-          try { SendMessage("ArcadeManager", "OnTransactionFailed", d.error || ""); } catch (e) {}
+            try {
+                SendMessage("ArcadeManager", "OnTransactionFailed", d.error || "");
+            } catch (e) {}
         }
-      }
-    },
+    }
+
+    if (d.type === "PLAYER_INFO") {
+        this._log("👤 Player Info", d.player);
+
+        if (typeof SendMessage === "function") {
+            try {
+                SendMessage(
+                    "ArcadeManager",
+                    "OnPlayerInfoReceived",
+                    JSON.stringify(d.player || {})
+                );
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    }
+},
 
     _log: function () {
       if (this.debug) { var a = Array.prototype.slice.call(arguments); a.unshift("[ArcadeSDK Unity]"); console.log.apply(console, a); }
@@ -110,5 +136,11 @@
   global.arcade_getScore = function () {
     return ArcadeSDK.getScore();
   };
+  global.arcade_getPlayerProfile = function () {
+    ArcadeSDK._post({
+        type: "GET_PLAYER_INFO",
+        gameId: ArcadeSDK.gameId
+    });
+};
 
 })(typeof window !== "undefined" ? window : this);

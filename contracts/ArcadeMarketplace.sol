@@ -4,37 +4,47 @@ pragma solidity ^0.8.28;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
-import "./ArcadeToken.sol";
 
+/**
+ * @title ArcadeMarketplace
+ * @notice Chain-agnostic marketplace — works with any ERC-20 reward token
+ *         (ARCADE on BOTChain/Somnia) or native token (MSTC on MST chain).
+ *
+ * Deploy params:
+ *   BOTChain/Somnia: isNativeToken=false, _rewardToken=ArcadeToken address, chainName="BOTChain"
+ *   MST:             isNativeToken=true,  _rewardToken=address(0),           chainName="MST Blockchain"
+ */
 contract ArcadeMarketplace is AccessControl, ReentrancyGuard {
     using Strings for uint256;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
-    ArcadeToken public arcadeToken;
+    // ── Token config ─────────────────────────────────────────────────────────
+    IERC20  public rewardToken;       // ERC-20 reward token (zero address if native)
+    bool    public isNativeToken;     // true = native (MSTC), false = ERC-20 (ARCADE)
+    string  public rewardTokenSymbol; // "ARCADE", "MSTC", etc. — for events/metadata
+    string  public chainName;         // "BOTChain", "MST Blockchain", etc.
 
-    // BOT → ARCADE exchange rate (how many ARCADE per 1 BOT)
-    uint256 public arcadePerBot = 1000 * 1e18; // 1 BOT = 1000 ARCADE
+    // Exchange rate: how many reward tokens per 1 native unit (only used when !isNativeToken)
+    uint256 public tokensPerNative = 1000 * 1e18;
 
-    // NFT Badge contract
     BadgeNFT public badgeNFT;
 
-    // Item types
     enum ItemType { Badge, Frame, PowerUp, Skin }
 
     struct ShopItem {
         uint256 id;
-        string name;
-        string description;
-        string imageURI;
+        string  name;
+        string  description;
+        string  imageURI;
         ItemType itemType;
-        uint256 arcadePrice;  // price in ARCADE (0 = not available for ARCADE)
-        uint256 botPrice;     // price in BOT native token (0 = not available for BOT)
+        uint256 tokenPrice;   // price in rewardToken (ERC-20 or native)
         uint256 totalSupply;  // 0 = unlimited
         uint256 sold;
-        bool active;
+        bool    active;
     }
 
     struct UserInventory {
@@ -42,82 +52,72 @@ contract ArcadeMarketplace is AccessControl, ReentrancyGuard {
         mapping(uint256 => bool) owns;
     }
 
-    mapping(uint256 => ShopItem) public items;
+    mapping(uint256 => ShopItem)      public items;
     mapping(address => UserInventory) private inventories;
-    uint256 public nextItemId = 1;
 
-    uint256 public totalArcadeSold;
-    uint256 public totalBotCollected;
+    uint256 public nextItemId = 1;
     uint256 public platformFeePercent = 5;
 
-    event ArcadePurchased(address indexed buyer, uint256 botSpent, uint256 arcadeReceived);
-    event ItemPurchased(address indexed buyer, uint256 itemId, string paymentType, uint256 price);
+    event ItemPurchased(address indexed buyer, uint256 itemId, uint256 price);
     event ItemAdded(uint256 indexed itemId, string name, ItemType itemType);
     event ExchangeRateUpdated(uint256 newRate);
+    event NativeSwapped(address indexed buyer, uint256 nativeSpent, uint256 tokensReceived);
 
-    constructor(address admin, address _arcadeToken) {
+    constructor(
+        address admin,
+        address _rewardToken,
+        bool    _isNativeToken,
+        string  memory _rewardTokenSymbol,
+        string  memory _chainName
+    ) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(ADMIN_ROLE, admin);
-        arcadeToken = ArcadeToken(_arcadeToken);
-        badgeNFT = new BadgeNFT(address(this));
 
-        // Add default shop items
-        _addDefaultItems();
-    }
+        isNativeToken     = _isNativeToken;
+        rewardTokenSymbol = _rewardTokenSymbol;
+        chainName         = _chainName;
 
-    // ─── BUY ARCADE WITH BOT ─────────────────────────────────────────────────
-
-    /// @notice Buy ARCADE tokens with native BOT
-    function buyArcadeWithBot() external payable nonReentrant {
-        require(msg.value > 0, "Send BOT to buy ARCADE");
-        uint256 arcadeAmount = (msg.value * arcadePerBot) / 1e18;
-        require(arcadeAmount > 0, "Amount too small");
-
-        // Mint ARCADE to buyer
-        arcadeToken.mintTo(msg.sender, arcadeAmount);
-
-        totalArcadeSold += arcadeAmount;
-        totalBotCollected += msg.value;
-
-        emit ArcadePurchased(msg.sender, msg.value, arcadeAmount);
-    }
-
-    /// @notice Get ARCADE amount for BOT amount
-    function getArcadeForBot(uint256 botAmount) external view returns (uint256) {
-        return (botAmount * arcadePerBot) / 1e18;
-    }
-
-    // ─── SHOP ITEMS ──────────────────────────────────────────────────────────
-
-    /// @notice Buy item with ARCADE tokens
-    function buyItemWithArcade(uint256 itemId) external nonReentrant {
-        ShopItem storage item = items[itemId];
-        require(item.active, "Item not available");
-        require(item.arcadePrice > 0, "Item not available for ARCADE");
-        require(!inventories[msg.sender].owns[itemId], "Already owned");
-        require(item.totalSupply == 0 || item.sold < item.totalSupply, "Sold out");
-
-        arcadeToken.transferFrom(msg.sender, address(this), item.arcadePrice);
-
-        _giveItem(msg.sender, itemId);
-        item.sold++;
-
-        // Mint badge NFT if it's a badge
-        if (item.itemType == ItemType.Badge) {
-            badgeNFT.mintBadge(msg.sender, itemId, item.name, item.imageURI);
+        if (!_isNativeToken) {
+            require(_rewardToken != address(0), "ERC-20 address required");
+            rewardToken = IERC20(_rewardToken);
         }
 
-        emit ItemPurchased(msg.sender, itemId, "ARCADE", item.arcadePrice);
+        badgeNFT = new BadgeNFT(address(this), _chainName);
     }
 
-    /// @notice Buy item with BOT (native token)
-    function buyItemWithBot(uint256 itemId) external payable nonReentrant {
+    // ── Buy reward tokens with native (only for ERC-20 chains) ──────────────
+    /// @notice Swap native token (BOT/STT) for reward token (ARCADE)
+    ///         Not available on native-token chains (MST) — MSTC IS the reward token.
+    function buyTokensWithNative() external payable nonReentrant {
+        require(!isNativeToken, "Use native token directly on this chain");
+        require(msg.value > 0, "Send native token to swap");
+        uint256 amount = (msg.value * tokensPerNative) / 1e18;
+        require(amount > 0, "Amount too small");
+        // ArcadeToken needs mintTo — cast only on ERC-20 chains
+        IArcadeToken(address(rewardToken)).mintTo(msg.sender, amount);
+        emit NativeSwapped(msg.sender, msg.value, amount);
+    }
+
+    // ── Buy item ─────────────────────────────────────────────────────────────
+    /// @notice Buy shop item.
+    ///         ERC-20 chains: call with value=0, tokens transferred via transferFrom.
+    ///         Native chains: call with msg.value = item price in native token.
+    function buyItem(uint256 itemId) external payable nonReentrant {
         ShopItem storage item = items[itemId];
-        require(item.active, "Item not available");
-        require(item.botPrice > 0, "Item not available for BOT");
-        require(msg.value >= item.botPrice, "Insufficient BOT");
-        require(!inventories[msg.sender].owns[itemId], "Already owned");
+        require(item.active,                                    "Item not available");
+        require(!inventories[msg.sender].owns[itemId],          "Already owned");
         require(item.totalSupply == 0 || item.sold < item.totalSupply, "Sold out");
+
+        if (isNativeToken) {
+            require(msg.value >= item.tokenPrice, "Insufficient native token");
+            // Refund excess
+            if (msg.value > item.tokenPrice) {
+                payable(msg.sender).transfer(msg.value - item.tokenPrice);
+            }
+        } else {
+            require(item.tokenPrice > 0, "Item not available for token purchase");
+            rewardToken.transferFrom(msg.sender, address(this), item.tokenPrice);
+        }
 
         _giveItem(msg.sender, itemId);
         item.sold++;
@@ -126,12 +126,7 @@ contract ArcadeMarketplace is AccessControl, ReentrancyGuard {
             badgeNFT.mintBadge(msg.sender, itemId, item.name, item.imageURI);
         }
 
-        // Refund excess
-        if (msg.value > item.botPrice) {
-            payable(msg.sender).transfer(msg.value - item.botPrice);
-        }
-
-        emit ItemPurchased(msg.sender, itemId, "BOT", item.botPrice);
+        emit ItemPurchased(msg.sender, itemId, item.tokenPrice);
     }
 
     function _giveItem(address user, uint256 itemId) internal {
@@ -139,48 +134,49 @@ contract ArcadeMarketplace is AccessControl, ReentrancyGuard {
         inventories[user].owns[itemId] = true;
     }
 
-    // ─── ADMIN ───────────────────────────────────────────────────────────────
-
+    // ── Admin ────────────────────────────────────────────────────────────────
     function addItem(
-        string memory name,
-        string memory description,
-        string memory imageURI,
-        ItemType itemType,
-        uint256 arcadePrice,
-        uint256 botPrice,
-        uint256 totalSupply
+        string   memory name,
+        string   memory description,
+        string   memory imageURI,
+        ItemType         itemType,
+        uint256          tokenPrice,
+        uint256          botPrice,    // kept for ABI compatibility — ignored internally
+        uint256          totalSupply
     ) external onlyRole(ADMIN_ROLE) {
         items[nextItemId] = ShopItem({
-            id: nextItemId,
-            name: name,
+            id:          nextItemId,
+            name:        name,
             description: description,
-            imageURI: imageURI,
-            itemType: itemType,
-            arcadePrice: arcadePrice,
-            botPrice: botPrice,
+            imageURI:    imageURI,
+            itemType:    itemType,
+            tokenPrice:  tokenPrice,
             totalSupply: totalSupply,
-            sold: 0,
-            active: true
+            sold:        0,
+            active:      true
         });
         emit ItemAdded(nextItemId, name, itemType);
         nextItemId++;
     }
 
     function setExchangeRate(uint256 newRate) external onlyRole(ADMIN_ROLE) {
-        arcadePerBot = newRate;
+        tokensPerNative = newRate;
         emit ExchangeRateUpdated(newRate);
     }
 
-    function withdrawBot() external onlyRole(ADMIN_ROLE) {
+    function withdrawNative() external onlyRole(ADMIN_ROLE) {
         payable(msg.sender).transfer(address(this).balance);
     }
 
-    function withdrawArcade() external onlyRole(ADMIN_ROLE) {
-        arcadeToken.transfer(msg.sender, arcadeToken.balanceOf(address(this)));
+    function withdrawTokens() external onlyRole(ADMIN_ROLE) {
+        if (!isNativeToken) {
+            rewardToken.transfer(msg.sender, rewardToken.balanceOf(address(this)));
+        } else {
+            payable(msg.sender).transfer(address(this).balance);
+        }
     }
 
-    // ─── VIEWS ───────────────────────────────────────────────────────────────
-
+    // ── Views ────────────────────────────────────────────────────────────────
     function getUserItems(address user) external view returns (uint256[] memory) {
         return inventories[user].itemIds;
     }
@@ -197,48 +193,56 @@ contract ArcadeMarketplace is AccessControl, ReentrancyGuard {
         return result;
     }
 
-    function _addDefaultItems() internal {
-        // Badges — ARCADE se
-        items[nextItemId++] = ShopItem({ id: 1, name: "Pioneer Badge", description: "Early ArcadeX adopter", imageURI: "", itemType: ItemType.Badge, arcadePrice: 500 * 1e18, botPrice: 0, totalSupply: 1000, sold: 0, active: true });
-        items[nextItemId++] = ShopItem({ id: 2, name: "Champion Badge", description: "Tournament winner badge", imageURI: "", itemType: ItemType.Badge, arcadePrice: 1000 * 1e18, botPrice: 0, totalSupply: 500, sold: 0, active: true });
-        items[nextItemId++] = ShopItem({ id: 3, name: "Creator Badge", description: "Published 5+ games", imageURI: "", itemType: ItemType.Badge, arcadePrice: 750 * 1e18, botPrice: 0, totalSupply: 200, sold: 0, active: true });
-
-        // Premium items — BOT se
-        items[nextItemId++] = ShopItem({ id: 4, name: "Gold Frame", description: "Exclusive gold profile frame", imageURI: "", itemType: ItemType.Frame, arcadePrice: 0, botPrice: 0.01 ether, totalSupply: 100, sold: 0, active: true });
-        items[nextItemId++] = ShopItem({ id: 5, name: "Diamond Frame", description: "Ultra rare diamond frame", imageURI: "", itemType: ItemType.Frame, arcadePrice: 0, botPrice: 0.05 ether, totalSupply: 10, sold: 0, active: true });
-
-        // Power-ups — ARCADE se
-        items[nextItemId++] = ShopItem({ id: 6, name: "2x Reward Boost", description: "Double ARCADE rewards for 24h", imageURI: "", itemType: ItemType.PowerUp, arcadePrice: 200 * 1e18, botPrice: 0, totalSupply: 0, sold: 0, active: true });
-    }
+    function nextItemId_() external view returns (uint256) { return nextItemId; }
 
     receive() external payable {}
 }
 
-// ─── BADGE NFT CONTRACT ───────────────────────────────────────────────────────
+// ── Minimal interface for ArcadeToken.mintTo (ERC-20 chains only) ────────────
+interface IArcadeToken {
+    function mintTo(address to, uint256 amount) external;
+}
+
+// ── BadgeNFT ─────────────────────────────────────────────────────────────────
 contract BadgeNFT is ERC721 {
     using Strings for uint256;
 
     address public marketplace;
     uint256 private _tokenIdCounter;
+    string  public platformChainName; // dynamic — set at deploy time
 
     struct Badge {
         uint256 itemId;
-        string name;
-        string imageURI;
+        string  name;
+        string  imageURI;
         address owner;
         uint256 mintedAt;
     }
 
     mapping(uint256 => Badge) public badges;
 
-    constructor(address _marketplace) ERC721("ArcadeX Badge", "AXBADGE") {
-        marketplace = _marketplace;
+    constructor(address _marketplace, string memory _chainName)
+        ERC721("ArcadeX Badge", "AXBADGE")
+    {
+        marketplace       = _marketplace;
+        platformChainName = _chainName;
     }
 
-    function mintBadge(address to, uint256 itemId, string memory name, string memory imageURI) external {
+    function mintBadge(
+        address to,
+        uint256 itemId,
+        string memory name,
+        string memory imageURI
+    ) external {
         require(msg.sender == marketplace, "Only marketplace");
         _tokenIdCounter++;
-        badges[_tokenIdCounter] = Badge({ itemId: itemId, name: name, imageURI: imageURI, owner: to, mintedAt: block.timestamp });
+        badges[_tokenIdCounter] = Badge({
+            itemId:   itemId,
+            name:     name,
+            imageURI: imageURI,
+            owner:    to,
+            mintedAt: block.timestamp
+        });
         _mint(to, _tokenIdCounter);
     }
 
@@ -247,8 +251,11 @@ contract BadgeNFT is ERC721 {
         Badge memory b = badges[tokenId];
         string memory json = Base64.encode(bytes(string(abi.encodePacked(
             '{"name":"', b.name, ' #', tokenId.toString(), '",',
-            '"description":"ArcadeX Badge - Earned on BOTChain",',
-            '"attributes":[{"trait_type":"Platform","value":"ArcadeX"},{"trait_type":"Chain","value":"BOTChain"}]}'
+            '"description":"ArcadeX Badge - Earned on ', platformChainName, '",',
+            '"attributes":[',
+                '{"trait_type":"Platform","value":"ArcadeX"},',
+                '{"trait_type":"Chain","value":"', platformChainName, '"}',
+            ']}'
         ))));
         return string(abi.encodePacked("data:application/json;base64,", json));
     }

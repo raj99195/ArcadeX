@@ -3,8 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAccount, usePublicClient } from "wagmi";
 import { useGames } from "../hooks/useGames";
 import { getScores } from "../lib/gameService";
-
-const LEADERBOARD_ADDRESS = import.meta.env.VITE_LEADERBOARD_ADDRESS;
+import { useChain } from "../context/ChainContext";
 
 const LEADERBOARD_ABI = [
   {
@@ -73,6 +72,8 @@ export default function Leaderboard() {
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const { games } = useGames();
+  const { contracts, chainKey, chainName } = useChain();
+  const LEADERBOARD_ADDRESS = contracts?.leaderboard;
   const [scores, setScores] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("global");
@@ -82,7 +83,7 @@ export default function Leaderboard() {
 
   const fetchScores = async () => {
     setLoading(true);
-    try { setScores(await getScores()); } catch { }
+    try { setScores(await getScores(chainKey)); } catch { }
     setLoading(false);
   };
 
@@ -110,7 +111,7 @@ export default function Leaderboard() {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [address]);
+  }, [address, chainKey]);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -181,6 +182,11 @@ export default function Leaderboard() {
                 Leaderboard
               </span>
             </h1>
+            {chainName && (
+              <span style={{ fontSize: 9, padding: "3px 10px", background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: 10, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", whiteSpace: "nowrap" }}>
+                {chainName}
+              </span>
+            )}
             <button onClick={refresh} disabled={refreshing} style={{
               padding: "8px 18px", background: "rgba(123,47,255,0.15)",
               border: "1px solid rgba(123,47,255,0.3)", borderRadius: 7,
@@ -193,7 +199,7 @@ export default function Leaderboard() {
             >{refreshing ? "..." : "↻ Refresh"}</button>
           </div>
           <p style={{ color: "rgba(180,150,255,0.7)", fontSize: 12, marginTop: 8, fontFamily: "'Rajdhani',sans-serif" }}>
-            Tamper-proof scores from OnChain — verified every block.
+            {chainName ? `${chainName} scores — switch chain in navbar to see other chains.` : "Tamper-proof scores from OnChain — verified every block."}
           </p>
         </div>
 

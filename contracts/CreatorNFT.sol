@@ -63,6 +63,41 @@ contract CreatorNFT is ERC721, AccessControl {
         emit CreatorMinted(msg.sender, tokenId, username);
     }
 
+    /// @notice Admin-only mint on behalf of a creator — used to sync a
+    /// creator's profile to a chain they haven't minted on directly yet
+    /// (e.g. they minted on BOTChain, this chain went live afterward).
+    /// Mirrors mintCreatorNFT()'s validation exactly, just targets `creator`
+    /// instead of msg.sender. Username collisions are checked against this
+    /// chain's own usernameTaken map — if the same username somehow got
+    /// claimed by a different wallet on this specific chain, this reverts
+    /// rather than silently overwriting it.
+    function adminMintFor(address creator, string memory username, string memory avatarColor)
+        external onlyRole(MINTER_ROLE)
+    {
+        require(creator != address(0), "Invalid creator address");
+        require(walletToToken[creator] == 0, "Already a creator");
+        require(!usernameTaken[username], "Username taken");
+        require(bytes(username).length >= 3, "Username too short");
+        require(bytes(username).length <= 20, "Username too long");
+
+        _tokenIdCounter++;
+        uint256 tokenId = _tokenIdCounter;
+
+        profiles[tokenId] = CreatorProfile({
+            username: username,
+            avatarColor: avatarColor,
+            wallet: creator,
+            mintedAt: block.timestamp
+        });
+
+        usernameTaken[username] = true;
+        walletToToken[creator] = tokenId;
+
+        _mint(creator, tokenId);
+
+        emit CreatorMinted(creator, tokenId, username);
+    }
+
     /// @notice On-chain SVG metadata
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         require(_ownerOf(tokenId) != address(0), "Token does not exist");

@@ -1,15 +1,17 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useAccount, usePublicClient } from "wagmi";
-import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
-import { wagmiAdapter } from "../Providers";
-import { db } from "../lib/firebase";
-import { doc, getDoc, updateDoc, collection, getDocs, query, orderBy, limit } from "firebase/firestore";
-import { useGames } from "../hooks/useGames";
+import { useAccount } from "wagmi";
+import { useCreatorGames } from "../hooks/useGames";
+import { useChain } from "../context/ChainContext";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import SDKTestModal from "../components/SDKTestModal";
 
-const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
-const CHAIN_ID = Number(import.meta.env.VITE_BOTCHAIN_TESTNET_CHAIN_ID || 968);
+// Note: this page doesn't make any contract writes itself (no
+// recordPlayAndEarn / registerGame calls here — those live in
+// Creator.jsx and GamePlay.jsx). If a chain-specific contract address is
+// ever needed here, pull it via useChain() from "../context/ChainContext"
+// instead of importing from Providers.jsx or reading import.meta.env
+// directly.
 
 const C = {
   bg: "#08070f", sidebar: "#0d0b1a", card: "#12102a",
@@ -22,7 +24,7 @@ const C = {
 
 const SDK_SNIPPETS = {
   unity: (id) => `// Unity WebGL — ArcadeBridge.jslib\nApplication.ExternalCall("arcade_init", "${id}");\nApplication.ExternalCall("arcade_game_over", score.ToString());`,
-  html: (id) => `<!-- Plain HTML -->\n<script src="https://arcade-x-sand.vercel.app/arcade-sdk.js"></script>\n<script>\n  ArcadeSDK.init("${id}");\n  ArcadeSDK.updateScore(score);\n  ArcadeSDK.gameOver(finalScore);\n</script>`,
+  html: (id) => `<!-- Plain HTML -->\n<script src="https://playarcadex.in/arcade-sdk.js"></script>\n<script>\n  ArcadeSDK.init("${id}");\n  ArcadeSDK.updateScore(score);\n  ArcadeSDK.gameOver(finalScore);\n</script>`,
   phaser: (id) => `// Phaser 3\nimport ArcadeSDK from './arcade-sdk-phaser.js';\nArcadeSDK.init("${id}");\nArcadeSDK.gameOver(this.score);`,
   godot: (id) => `# Godot HTML5\nJavaScript.eval('ArcadeSDK.init("${id}");')\nJavaScript.eval('ArcadeSDK.gameOver(' + str(score) + ');')`,
 };
@@ -42,8 +44,13 @@ export default function CreatorGameDetail() {
   const { gameId } = useParams();
   const navigate = useNavigate();
   const { address } = useAccount();
-  const { games } = useGames();
+  const { games } = useCreatorGames();
+  const { chainName, explorerUrl, rewardToken, minRewardRate, maxRewardRate, isNativeToken } = useChain();
   const game = games.find(g => String(g.id) === String(gameId) || String(g.gameId) === String(gameId));
+
+  // Fixed ranges per token type — same convention as Creator.jsx's publish form
+  const ARCADE_MIN = 5, ARCADE_MAX = 500;
+  const NATIVE_MIN = 1, NATIVE_MAX = 2;
 
   const [activeTab, setActiveTab] = useState("overview");
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -60,6 +67,9 @@ export default function CreatorGameDetail() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
 
+  const [statsError, setStatsError] = useState("");
+  const [showSDKTest, setShowSDKTest] = useState(false);
+
   useEffect(() => {
     const h = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener("resize", h);
@@ -68,38 +78,47 @@ export default function CreatorGameDetail() {
 
   useEffect(() => {
     if (!game) return;
-    setEditRewardRate(String(game.rewardRate || 50));
+    setEditRewardRate(String((isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50)));
     const fetchStats = async () => {
+      setLoading(true);
+      setStatsError("");
       try {
-        const gDoc = await getDoc(doc(db, "games", String(game.gameId || game.id)));
-        if (gDoc.exists()) {
-          const data = gDoc.data();
-          const plays = data.plays || 0;
-          setTotalPlays(plays);
-          const rewardRate = game.rewardRate || 50;
-          setTotalEarned(Math.floor(plays * rewardRate * 0.2));
+        // Use the same /api/games?action=stats endpoint the rest of the app
+        // uses (backed by Firebase Admin SDK server-side) — avoids client-side
+        // Firestore Security Rules blocking direct reads.
+        const res = await fetch(`/api/games?action=stats&gameId=${game.gameId || game.id}`);
+        if (!res.ok) throw new Error(`Stats API returned ${res.status}`);
+        const data = await res.json();
 
-          // Generate last 7 days chart data from total plays
-          // Distribute plays across last 7 days for visualization
-          const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-          const today = new Date().getDay(); // 0=Sun
-          const orderedDays = [...days.slice(today), ...days.slice(0, today)];
-          // Simulate distribution — last day has most activity
-          const weights = [0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.30];
-          const chartData = orderedDays.map((day, i) => ({
-            day,
-            plays: Math.floor(plays * weights[i]),
-            earned: Math.floor(plays * weights[i] * rewardRate * 0.2),
-          }));
-          setPlaysChartData(chartData);
-        }
-        const pSnap = await getDocs(collection(db, "games", String(game.gameId || game.id), "players"));
-        setUniquePlayers(pSnap.size);
-      } catch (e) {}
-      finally { setLoading(false); }
+        const plays = data.plays || 0;
+        setTotalPlays(plays);
+        setUniquePlayers(data.uniquePlayers || 0);
+
+        const rewardRate = (isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50);
+        setTotalEarned(Math.floor(plays * rewardRate * 0.2));
+
+        // Generate last 7 days chart data from total plays
+        // Distribute plays across last 7 days for visualization
+        const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+        const today = new Date().getDay(); // 0=Sun
+        const orderedDays = [...days.slice(today), ...days.slice(0, today)];
+        // Simulate distribution — last day has most activity
+        const weights = [0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.30];
+        const chartData = orderedDays.map((day, i) => ({
+          day,
+          plays: Math.floor(plays * weights[i]),
+          earned: Math.floor(plays * weights[i] * rewardRate * 0.2),
+        }));
+        setPlaysChartData(chartData);
+      } catch (e) {
+        console.error("Failed to fetch game stats:", e);
+        setStatsError("Couldn't load stats — try refreshing.");
+      } finally {
+        setLoading(false);
+      }
     };
     fetchStats();
-  }, [game?.id]);
+  }, [game?.id, isNativeToken]);
 
   const copy = (text, key) => {
     navigator.clipboard.writeText(text);
@@ -115,7 +134,7 @@ export default function CreatorGameDetail() {
     </div>
   );
 
-  const rewardRate = game.rewardRate || 50;
+  const rewardRate = (isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50);
   const playerReward = Math.floor(rewardRate * 80 / 100);
   const creatorReward = Math.floor(rewardRate * 20 / 100);
   const thumbnail = game.thumbnailUrl || game.thumbnail || null;
@@ -128,6 +147,7 @@ export default function CreatorGameDetail() {
   ];
 
   return (
+    <>
     <div style={{ minHeight: "calc(100vh - 54px)", background: C.bg }}>
       <style>{`
         * { scrollbar-width: none; }
@@ -160,13 +180,14 @@ export default function CreatorGameDetail() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
               <h1 style={{ fontFamily: C.raj, fontWeight: 700, fontSize: isMobile ? 22 : 32, color: "#fff", textTransform: "uppercase", letterSpacing: "0.5px", margin: 0 }}>{game.name}</h1>
-              <span style={{ fontSize: 9, padding: "3px 9px", background: "rgba(0,255,136,0.12)", border: "1px solid rgba(0,255,136,0.25)", borderRadius: 4, color: C.green, fontFamily: C.raj, fontWeight: 700, letterSpacing: "1px" }}>✓ LIVE</span>
+              <span style={{ fontSize: 9, padding: "3px 9px", background: game.status === "approved" ? "rgba(0,255,136,0.12)" : game.status === "pending" ? "rgba(255,184,0,0.12)" : "rgba(255,68,68,0.12)", border: game.status === "approved" ? "1px solid rgba(0,255,136,0.25)" : game.status === "pending" ? "1px solid rgba(255,184,0,0.25)" : "1px solid rgba(255,68,68,0.25)", borderRadius: 4, color: game.status === "approved" ? C.green : game.status === "pending" ? C.gold : C.red, fontFamily: C.raj, fontWeight: 700, letterSpacing: "1px" }}>{game.status === "approved" ? "✓ LIVE" : game.status === "pending" ? "⏳ PENDING" : "✗ REJECTED"}</span>
             </div>
             {game.description && <div style={{ fontSize: 12, color: C.dim, fontFamily: C.raj, lineHeight: 1.5, marginBottom: 10, maxWidth: 600 }}>{game.description}</div>}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               {game.category && <span style={{ fontSize: 10, padding: "3px 10px", background: "rgba(123,47,255,0.15)", border: `1px solid ${C.border2}`, borderRadius: 4, color: C.purpleL, fontFamily: C.raj, fontWeight: 700 }}>{game.category}</span>}
               <span style={{ fontSize: 10, padding: "3px 10px", background: "rgba(0,0,0,0.4)", border: `1px solid ${C.border}`, borderRadius: 4, color: C.dimMore, fontFamily: "monospace" }}>Game ID: #{game.gameId}</span>
               <button onClick={() => navigate(`/play/${game.id}`)} style={{ fontSize: 10, padding: "3px 12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 4, color: "#fff", fontFamily: C.raj, fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px" }}>▶ Play Now</button>
+              <button onClick={() => setShowSDKTest(true)} style={{ fontSize: 10, padding: "3px 12px", background: "rgba(255,183,0,0.1)", border: "1px solid rgba(255,183,0,0.3)", borderRadius: 4, color: "#FFB700", fontFamily: C.raj, fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px" }}>🧪 Test SDK</button>
             </div>
           </div>
         </div>
@@ -185,14 +206,20 @@ export default function CreatorGameDetail() {
       {/* ── CONTENT ── */}
       <div style={{ padding: isMobile ? "16px" : "24px 36px" }}>
 
+        {statsError && (
+          <div style={{ marginBottom: 16, padding: "10px 16px", background: "rgba(255,68,68,0.06)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 8, fontSize: 12, color: C.red, fontFamily: C.raj }}>
+            {statsError}
+          </div>
+        )}
+
         {/* ── OVERVIEW ── */}
         {activeTab === "overview" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 12 }}>
               <StatCard icon="🎮" label="Total Plays" value={loading ? "..." : totalPlays.toLocaleString()} color={C.cyan} sub="All time" />
               <StatCard icon="👥" label="Unique Players" value={loading ? "..." : uniquePlayers} color={C.green} sub="Distinct wallets" />
-              <StatCard icon="💰" label="ARCADE Earned" value={loading ? "..." : totalEarned.toLocaleString()} color={C.gold} sub="Creator 20% share" />
-              <StatCard icon="⚡" label="Reward Rate" value={`${rewardRate}`} color={C.purpleL} sub="ARCADE per play" />
+              <StatCard icon="💰" label={`${rewardToken || "ARCADE"} Earned`} value={loading ? "..." : totalEarned.toLocaleString()} color={C.gold} sub="Creator 20% share" />
+              <StatCard icon="⚡" label="Reward Rate" value={`${rewardRate}`} color={C.purpleL} sub={`${rewardToken || "ARCADE"} per play`} />
             </div>
 
             {/* Split breakdown */}
@@ -200,7 +227,7 @@ export default function CreatorGameDetail() {
               <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 20px" }}>
                 <div style={{ fontSize: 9, color: C.dimMore, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 14 }}>Reward Split</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {[["🎮 Player", `${playerReward} ARCADE (80%)`, C.cyan], ["🎨 Creator (You)", `${creatorReward} ARCADE (20%)`, C.purpleL]].map(([label, value, color]) => (
+                  {[["🎮 Player", `${playerReward} ${rewardToken || "ARCADE"} (80%)`, C.cyan], ["🎨 Creator (You)", `${creatorReward} ${rewardToken || "ARCADE"} (20%)`, C.purpleL]].map(([label, value, color]) => (
                     <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: "rgba(0,0,0,0.3)", borderRadius: 8, border: `1px solid rgba(123,47,255,0.1)` }}>
                       <span style={{ fontSize: 12, color: C.dim, fontFamily: C.raj }}>{label}</span>
                       <span style={{ fontSize: 13, fontWeight: 700, color, fontFamily: C.raj }}>{value}</span>
@@ -211,16 +238,16 @@ export default function CreatorGameDetail() {
 
               <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 20px" }}>
                 <div style={{ fontSize: 9, color: C.dimMore, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 14 }}>Game Details</div>
-                {[["Game ID", `#${game.gameId}`], ["Category", game.category || "—"], ["Status", "Live ✓"], ["Chain", "BOTChain EVM (968)"], ["Contract", "Platform.sol"]].map(([k, v]) => (
+                {[["Game ID", `#${game.gameId}`], ["Category", game.category || "—"], ["Status", "Live ✓"], ["Chain", chainName || "—"], ["Contract", "Platform.sol"]].map(([k, v]) => (
                   <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "7px 0", borderBottom: `1px solid ${C.border}` }}>
                     <span style={{ color: C.dimMore, fontFamily: C.raj }}>{k}</span>
                     <span style={{ color: "#c4a0ff", fontFamily: C.raj, fontWeight: 600 }}>{v}</span>
                   </div>
                 ))}
-                {game.txHash && (
-                  <a href={`https://scan.botchain.ai/tx/${game.txHash}`} target="_blank" rel="noreferrer"
+                {game.txHash && explorerUrl && (
+                  <a href={`${explorerUrl}/tx/${game.txHash}`} target="_blank" rel="noreferrer"
                     style={{ display: "block", marginTop: 12, fontSize: 10, color: C.purpleL, textDecoration: "none", fontFamily: C.raj, fontWeight: 700 }}>
-                    View on BOTScan →
+                    View on {chainName} Explorer →
                   </a>
                 )}
               </div>
@@ -235,7 +262,7 @@ export default function CreatorGameDetail() {
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3,1fr)", gap: 12 }}>
               <StatCard icon="🎮" label="Total Plays" value={totalPlays.toLocaleString()} color={C.cyan} />
               <StatCard icon="👥" label="Unique Players" value={uniquePlayers} color={C.green} />
-              <StatCard icon="💰" label="Creator Earned" value={`${totalEarned}`} color={C.gold} sub="ARCADE tokens" />
+              <StatCard icon="💰" label="Creator Earned" value={`${totalEarned}`} color={C.gold} sub={`${rewardToken || "ARCADE"} tokens`} />
             </div>
 
             {/* Plays Area Chart */}
@@ -273,7 +300,7 @@ export default function CreatorGameDetail() {
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                 <div>
-                  <div style={{ fontSize: 9, color: C.dimMore, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 3 }}>ARCADE Earned — Last 7 Days</div>
+                  <div style={{ fontSize: 9, color: C.dimMore, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 3 }}>{rewardToken || "ARCADE"} Earned — Last 7 Days</div>
                   <div style={{ fontSize: 22, fontFamily: C.orb, fontWeight: 700, color: C.gold }}>{totalEarned.toLocaleString()}</div>
                 </div>
                 <div style={{ fontSize: 10, padding: "4px 10px", background: "rgba(255,183,0,0.08)", border: "1px solid rgba(255,183,0,0.2)", borderRadius: 6, color: C.gold, fontFamily: C.raj, fontWeight: 700 }}>Creator 20%</div>
@@ -293,7 +320,7 @@ export default function CreatorGameDetail() {
                     contentStyle={{ background: "#0d0b1a", border: "1px solid rgba(255,183,0,0.25)", borderRadius: 8, fontSize: 11, fontFamily: "Rajdhani" }}
                     labelStyle={{ color: "#c4a0ff", fontWeight: 700 }}
                     itemStyle={{ color: "#FFB700" }}
-                    formatter={(val) => [`${val} ARCADE`, "Earned"]}
+                    formatter={(val) => [`${val} ${rewardToken || "ARCADE"}`, "Earned"]}
                   />
                   <Bar dataKey="earned" fill="url(#earnGrad)" radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -306,8 +333,8 @@ export default function CreatorGameDetail() {
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {[
                   ["Total Plays", totalPlays, C.cyan],
-                  ["× Creator Rate (20%)", `${creatorReward} ARCADE/play`, C.purpleL],
-                  ["= Total Earned", `${totalEarned} ARCADE`, C.gold],
+                  ["× Creator Rate (20%)", `${creatorReward} ${rewardToken || "ARCADE"}/play`, C.purpleL],
+                  ["= Total Earned", `${totalEarned} ${rewardToken || "ARCADE"}`, C.gold],
                 ].map(([k, v, color], i) => (
                   <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: "rgba(0,0,0,0.3)", borderRadius: 8, border: `1px solid ${i === 2 ? "rgba(255,183,0,0.2)" : C.border}` }}>
                     <span style={{ fontSize: 12, color: C.dim, fontFamily: C.raj }}>{k}</span>
@@ -344,6 +371,16 @@ export default function CreatorGameDetail() {
         {/* ── SDK INTEGRATION ── */}
         {activeTab === "sdk" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {/* Test SDK banner */}
+            <div style={{ background: "rgba(255,183,0,0.06)", border: "1px solid rgba(255,183,0,0.2)", borderRadius: 12, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 14, color: C.gold, marginBottom: 4 }}>🧪 Test SDK Integration</div>
+                <div style={{ fontSize: 11, color: C.dimMore, fontFamily: C.raj }}>Load your game live and verify all SDK events fire correctly before publishing.</div>
+              </div>
+              <button onClick={() => setShowSDKTest(true)} style={{ padding: "10px 22px", background: "rgba(255,183,0,0.12)", border: "1px solid rgba(255,183,0,0.35)", borderRadius: 8, color: C.gold, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: C.raj, letterSpacing: "0.5px", flexShrink: 0 }}>
+                ▶ Run SDK Test
+              </button>
+            </div>
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 20px" }}>
               <div style={{ fontSize: 9, color: C.dimMore, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 14 }}>Choose Engine</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -376,7 +413,7 @@ export default function CreatorGameDetail() {
                 { step: "1", title: "Init SDK", desc: "Call init with your Game ID when game loads.", color: C.cyan },
                 { step: "2", title: "Track Score", desc: "Call updateScore() whenever score changes.", color: C.purpleL },
                 { step: "3", title: "Game Over", desc: "Call gameOver() with final score — triggers on-chain reward.", color: C.green },
-                { step: "4", title: "Done!", desc: "ARCADE auto-minted to player (80%) and you (20%).", color: C.gold },
+                { step: "4", title: "Done!", desc: `${rewardToken || "ARCADE"} auto-minted to player (80%) and you (20%).`, color: C.gold },
               ].map(item => (
                 <div key={item.step} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", display: "flex", gap: 12, alignItems: "flex-start" }}>
                   <div style={{ width: 28, height: 28, borderRadius: "50%", background: `${item.color}20`, border: `1px solid ${item.color}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: item.color, fontFamily: C.orb, flexShrink: 0 }}>{item.step}</div>
@@ -404,25 +441,44 @@ export default function CreatorGameDetail() {
             </div>
 
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px" }}>
-              <div style={{ fontSize: 9, color: C.dimMore, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 14 }}>Reward Rate</div>
+              <div style={{ fontSize: 9, color: C.dimMore, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 14 }}>
+                Reward Rate {isNativeToken ? "(Native — MST)" : "(ARCADE)"}
+              </div>
               <div style={{ fontSize: 12, color: C.dimMore, fontFamily: C.raj, marginBottom: 12, lineHeight: 1.5 }}>
-                Set how many ARCADE tokens players earn per play. 80% goes to player, 20% to you.
+                Set how many {rewardToken || "ARCADE"} tokens players earn per play on {chainName || "this chain"}. 80% goes to player, 20% to you.
+                {isNativeToken && <span style={{ color: C.amber || "#ffaa00" }}> Capped {NATIVE_MIN}–{NATIVE_MAX} since MSTC carries real value.</span>}
               </div>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <input value={editRewardRate} onChange={e => setEditRewardRate(e.target.value)} type="number" min="10" max="500"
+                <input value={editRewardRate} onChange={e => setEditRewardRate(e.target.value)} type="number" min={isNativeToken ? NATIVE_MIN : ARCADE_MIN} max={isNativeToken ? NATIVE_MAX : ARCADE_MAX}
                   style={{ flex: 1, padding: "10px 14px", background: "rgba(0,0,0,0.4)", border: `1px solid ${C.border2}`, borderRadius: 8, color: "#d4b8ff", fontSize: 13, fontFamily: C.raj }} />
-                <span style={{ color: C.dimMore, fontFamily: C.raj, fontSize: 12 }}>ARCADE/play</span>
+                <span style={{ color: C.dimMore, fontFamily: C.raj, fontSize: 12 }}>{rewardToken || "ARCADE"}/play</span>
               </div>
               <div style={{ fontSize: 10, color: C.dimMore, fontFamily: C.raj, marginTop: 8 }}>
-                Player gets: <span style={{ color: C.cyan }}>{Math.floor(Number(editRewardRate) * 0.8)} ARCADE</span> · Creator gets: <span style={{ color: C.purpleL }}>{Math.floor(Number(editRewardRate) * 0.2)} ARCADE</span>
+                Player gets: <span style={{ color: C.cyan }}>{Math.floor(Number(editRewardRate) * 0.8)} {rewardToken || "ARCADE"}</span> · Creator gets: <span style={{ color: C.purpleL }}>{Math.floor(Number(editRewardRate) * 0.2)} {rewardToken || "ARCADE"}</span>
               </div>
               {saveMsg && <div style={{ marginTop: 10, fontSize: 11, color: saveMsg.includes("✓") ? C.green : C.red, fontFamily: C.raj }}>{saveMsg}</div>}
               <button onClick={async () => {
                 setSaving(true); setSaveMsg("");
                 try {
-                  await updateDoc(doc(db, "games", String(game.gameId || game.id)), { rewardRate: Number(editRewardRate) });
-                  setSaveMsg("✓ Saved! Redeploy contract to apply on-chain.");
-                } catch (e) { setSaveMsg("Error saving. Try again."); }
+                  const clampMin = isNativeToken ? NATIVE_MIN : ARCADE_MIN;
+                  const clampMax = isNativeToken ? NATIVE_MAX : ARCADE_MAX;
+                  const rawRate = Number(editRewardRate);
+                  const safeRate = Math.max(clampMin, Math.min(clampMax, isNaN(rawRate) ? clampMin : rawRate));
+                  const token = localStorage.getItem("arcadex_jwt");
+                  // Only the field for the currently active chain's token type
+                  // gets updated — the other chain's rate is left untouched.
+                  const body = { gameId: game.gameId || game.id };
+                  if (isNativeToken) body.rewardRateNative = safeRate;
+                  else body.rewardRate = safeRate;
+                  const res = await fetch("/api/games?action=update-game", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                    body: JSON.stringify(body),
+                  });
+                  const data = await res.json();
+                  if (!res.ok) throw new Error(data.error || "Update failed");
+                  setSaveMsg("✓ Saved!");
+                } catch (e) { setSaveMsg("Error: " + e.message); }
                 finally { setSaving(false); }
               }} disabled={saving}
                 style={{ marginTop: 14, padding: "10px 24px", background: saving ? "rgba(123,47,255,0.2)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 8, color: saving ? C.dimMore : "#fff", fontSize: 12, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", fontFamily: C.raj, letterSpacing: "1px" }}>
@@ -438,5 +494,13 @@ export default function CreatorGameDetail() {
         )}
       </div>
     </div>
+    {showSDKTest && game && (
+      <SDKTestModal
+        iframeUrl={game.iframeUrl}
+        gameName={game.name}
+        onClose={() => setShowSDKTest(false)}
+      />
+    )}
+    </>
   );
 }

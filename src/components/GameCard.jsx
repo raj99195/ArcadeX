@@ -1,14 +1,15 @@
 import { useNavigate } from "react-router-dom";
-
+import { useChain } from "../context/ChainContext";
 const tagColors = {
   HOT: { bg: "#ff4444", color: "#fff" },
   NEW: { bg: "#7B2FFF", color: "#fff" },
   TOP: { bg: "linear-gradient(90deg,#7B2FFF,#00d4ff)", color: "#fff" },
 };
-
 export default function GameCard({ game }) {
   const navigate = useNavigate();
-
+  const { rewardToken, isNativeToken } = useChain();
+  const rewardSymbol = rewardToken || "ARCADE";
+  const rewardRate = (isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50);
   return (
     <div
       onClick={() => navigate(`/play/${game.id}`)}
@@ -33,8 +34,7 @@ export default function GameCard({ game }) {
         e.currentTarget.style.boxShadow = "none";
       }}
     >
-
-      {/* ── THUMBNAIL ── fixed 16:9 ratio box, image always fills it */}
+      {/* ── THUMBNAIL ── */}
       <div style={{
         width: "100%",
         paddingTop: "62%",
@@ -43,7 +43,6 @@ export default function GameCard({ game }) {
         overflow: "hidden",
         flexShrink: 0,
       }}>
-
         {game.thumbnailUrl ? (
           <img
             src={game.thumbnailUrl}
@@ -74,8 +73,6 @@ export default function GameCard({ game }) {
             {game.emoji || "🎮"}
           </span>
         )}
-
-        {/* Bottom gradient */}
         <div style={{
           position: "absolute", bottom: 0, left: 0, right: 0,
           height: "50%",
@@ -83,8 +80,6 @@ export default function GameCard({ game }) {
           pointerEvents: "none",
           zIndex: 1,
         }} />
-
-        {/* Tag badge */}
         {game.tag && (
           <span style={{
             position: "absolute", top: 9, left: 9, zIndex: 2,
@@ -98,8 +93,6 @@ export default function GameCard({ game }) {
             {game.tag}
           </span>
         )}
-
-        {/* Category badge */}
         <span style={{
           position: "absolute", bottom: 9, left: 9, zIndex: 2,
           padding: "2px 7px", borderRadius: 3,
@@ -111,7 +104,6 @@ export default function GameCard({ game }) {
           {game.category}
         </span>
       </div>
-
       {/* ── INFO ── */}
       <div style={{ padding: "12px 14px 0", flex: 1 }}>
         <div style={{
@@ -126,17 +118,15 @@ export default function GameCard({ game }) {
           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
           fontFamily: "'Rajdhani',sans-serif",
         }}>
-          {game.description || "A blockchain game on Initia"}
+          {game.description || "A blockchain game on ArcadeX"}
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <span style={{ fontSize: 10, color: "#7755aa", fontFamily: "'Rajdhani',sans-serif" }}>
-                   </span>
+          <span style={{ fontSize: 10, color: "#7755aa", fontFamily: "'Rajdhani',sans-serif" }}></span>
           <span style={{ fontSize: 10, color: "#a67fff", fontFamily: "'Orbitron',sans-serif", fontWeight: 600 }}>
-            +{game.reward || game.rewardRate || 50} ARCADE
+            +{rewardRate} {rewardSymbol}
           </span>
         </div>
       </div>
-
       {/* ── PLAY BUTTON ── */}
       <div style={{ padding: "0 14px 12px" }}>
         <button

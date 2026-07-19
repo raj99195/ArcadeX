@@ -5,10 +5,12 @@ import { saveGame, saveCreator, getGamesByCreator, registerCreator, getCreatorSt
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
 import { wagmiAdapter } from "../Providers";
+import { useChain } from "../context/ChainContext";
 
-const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
-const CHAIN_ID = Number(import.meta.env.VITE_BOTCHAIN_MAINNET_CHAIN_ID);
-const CREATOR_NFT_ADDRESS = import.meta.env.VITE_CREATOR_NFT_ADDRESS;
+// PLATFORM_ADDRESS, CHAIN_ID, CREATOR_NFT_ADDRESS, TOURNAMENT_ADDRESS,
+// ARCADE_TOKEN_ADDRESS all now come from useChain() inside the component
+// (see src/context/ChainContext.jsx) — no more reading import.meta.env
+// or hardcoding a single chain's addresses at module scope.
 
 const PLATFORM_ABI = [
   { name: "initCreator", type: "function", stateMutability: "nonpayable", inputs: [{ name: "creator", type: "address" }], outputs: [] },
@@ -41,16 +43,26 @@ const P = {
   raj: "'Rajdhani',sans-serif", orb: "'Orbitron',sans-serif",
 };
 
+// Shared form field styles — used by every <label>/<input>/<textarea>/<select> below
+const labelStyle = {
+  display: "block", fontSize: 11, fontWeight: 700, color: "#9977cc",
+  marginBottom: 6, fontFamily: P.raj, textTransform: "uppercase", letterSpacing: "0.5px",
+};
+const inputStyle = {
+  width: "100%", boxSizing: "border-box", padding: "10px 12px",
+  background: "rgba(123,47,255,0.05)", border: `1px solid ${P.b}`, borderRadius: 8,
+  color: "#e0d4ff", fontSize: 13, fontFamily: P.raj, outline: "none",
+};
+
 const statusMap = {
   approved: { bg: "rgba(0,255,136,0.08)", color: "#00FF88", border: "rgba(0,255,136,0.2)", label: "✓ Live" },
   pending: { bg: "rgba(255,184,0,0.08)", color: "#FFB800", border: "rgba(255,184,0,0.2)", label: "⏳ Pending" },
   rejected: { bg: "rgba(255,68,68,0.08)", color: "#ff4444", border: "rgba(255,68,68,0.2)", label: "✗ Rejected" },
 };
 
-const TOURNAMENT_ADDRESS = import.meta.env.VITE_TOURNAMENT_ADDRESS;
-const ARCADE_TOKEN_ADDRESS = import.meta.env.VITE_ARCADE_TOKEN_ADDRESS;
 const CLOUDINARY_CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
 const CLOUDINARY_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+// TOURNAMENT_ADDRESS and ARCADE_TOKEN_ADDRESS now come from useChain()
 
 const TOURNAMENT_ABI = [
   { name: "createTournament", type: "function", stateMutability: "nonpayable", inputs: [{ name: "gameId", type: "uint256" }, { name: "gameName", type: "string" }, { name: "gameThumbnail", type: "string" }, { name: "entryFee", type: "uint256" }, { name: "maxPlayers", type: "uint256" }, { name: "startTime", type: "uint256" }, { name: "durationInHours", type: "uint256" }], outputs: [] },
@@ -72,6 +84,23 @@ const DICEBEAR_STYLES = [
   { id: "identicon",   label: "🔷 Identicon",desc: "Minimal"      },
 ];
 
+// ── Dynamic gas helper ──────────────────────────────────────────────────────
+// Estimates real gas needed for a contract call on whichever chain is
+// currently active, then adds a safety buffer. Works correctly across all
+// chains in the registry — no more hardcoded per-chain gas guesswork that
+// breaks (or wastes gas) when a new chain has different costs than BOTChain.
+async function getGasWithBuffer(publicClient, { address, abi, functionName, args, account, bufferPct = 30 }) {
+  try {
+    const estimated = await publicClient.estimateContractGas({
+      address, abi, functionName, args, account,
+    });
+    return (estimated * BigInt(100 + bufferPct)) / 100n;
+  } catch (err) {
+    console.warn(`Gas estimation failed for ${functionName}, using fallback:`, err.shortMessage || err.message);
+    return BigInt(3000000);
+  }
+}
+
 function Btn({ children, onClick, disabled, variant = "primary", style = {} }) {
   const base = { padding: "10px 20px", border: "none", borderRadius: 7, cursor: disabled ? "not-allowed" : "pointer", fontFamily: P.raj, fontWeight: 700, fontSize: 12, letterSpacing: "0.5px", textTransform: "uppercase", transition: "all 0.18s", ...style };
   const styles = {
@@ -83,10 +112,12 @@ function Btn({ children, onClick, disabled, variant = "primary", style = {} }) {
 }
 
 function GameModal({ game, onClose }) {
+  const { explorerUrl, chainName, rewardToken, isNativeToken } = useChain();
   const [copied, setCopied] = useState(false);
   const copy = (text) => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); };
   if (!game) return null;
   const s = statusMap[game.status] || statusMap.pending;
+  const displayRate = isNativeToken ? (game.rewardRateNative || 1) : (game.rewardRate || 50);
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} onClick={onClose}>
       <div style={{ background: P.s1, border: `1px solid ${P.b2}`, borderRadius: 14, padding: 28, width: "100%", maxWidth: 500, position: "relative", boxShadow: "0 24px 60px rgba(0,0,0,0.8)" }} onClick={e => e.stopPropagation()}>
@@ -98,7 +129,7 @@ function GameModal({ game, onClose }) {
         </div>
         {game.description && <div style={{ fontSize: 12, color: "#9977cc", lineHeight: 1.6, marginBottom: 16, fontFamily: P.raj }}>{game.description}</div>}
         <div style={{ marginBottom: 18 }}>
-          {[["Game ID", `#${game.gameId}`], ["Category", game.category], ["Reward Rate", `${game.rewardRate} ARCADE / play`], ["Creator Revenue", "20% of all rewards"]].map(([k, v]) => (
+          {[["Game ID", `#${game.gameId}`], ["Category", game.category], ["Reward Rate", `${displayRate} ${rewardToken || "ARCADE"} / play`], ["Creator Revenue", "20% of all rewards"]].map(([k, v]) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "8px 0", borderBottom: `1px solid ${P.b}` }}>
               <span style={{ color: "#9977cc", fontFamily: P.raj }}>{k}</span>
               <span style={{ color: "#c4a0ff", fontFamily: P.raj, fontWeight: 600 }}>{v}</span>
@@ -112,9 +143,9 @@ function GameModal({ game, onClose }) {
             {copied ? "Copied!" : "Copy"}
           </button>
         </div>
-        {game.txHash && (
-          <a href={`https://scan.botchain.ai/tx/${game.txHash}`} target="_blank" rel="noreferrer" style={{ display: "block", textAlign: "center", padding: "10px", background: "rgba(123,47,255,0.08)", border: `1px solid ${P.b2}`, borderRadius: 8, color: "#a67fff", fontSize: 11, textDecoration: "none", fontFamily: P.raj, fontWeight: 700 }}>
-            View on BOTChain Explorer →
+        {game.txHash && explorerUrl && (
+          <a href={`${explorerUrl}/tx/${game.txHash}`} target="_blank" rel="noreferrer" style={{ display: "block", textAlign: "center", padding: "10px", background: "rgba(123,47,255,0.08)", border: `1px solid ${P.b2}`, borderRadius: 8, color: "#a67fff", fontSize: 11, textDecoration: "none", fontFamily: P.raj, fontWeight: 700 }}>
+            View on {chainName} Explorer →
           </a>
         )}
       </div>
@@ -143,6 +174,17 @@ export default function Creator() {
   const publicClient = usePublicClient();
   const navigate = useNavigate();
   const { balance } = useArcadeBalance();
+  const { contracts, chainId: CHAIN_ID, chainName, rewardToken, minRewardRate, maxRewardRate, isNativeToken } = useChain();
+
+  // Fixed ranges per token type — independent of which chain is currently
+  // connected, since a creator publishing from BOTChain still needs to set
+  // a sane native-chain rate for when the game later gets synced to MST.
+  const ARCADE_MIN = 5, ARCADE_MAX = 500;
+  const NATIVE_MIN = 1, NATIVE_MAX = 2;
+  const PLATFORM_ADDRESS = contracts.platform;
+  const CREATOR_NFT_ADDRESS = contracts.creatorNft;
+  const TOURNAMENT_ADDRESS = contracts.tournament;
+  const ARCADE_TOKEN_ADDRESS = contracts.token;
 
   const [activeTab, setActiveTab] = useState("my-games");
   const [step, setStep] = useState(1);
@@ -157,7 +199,7 @@ export default function Creator() {
   const [claimMsg, setClaimMsg] = useState("");
   const [creatorStatus, setCreatorStatus] = useState(null);
   const [creatorLoading, setCreatorLoading] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50" });
+  const [form, setForm] = useState({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50", rewardRateNative: "1" });
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = { current: null };
@@ -274,24 +316,34 @@ export default function Creator() {
     setMintError("");
     setMintLoading(true);
     try {
-      // 1. Mint NFT
+      // 1. Mint NFT — gas estimated dynamically per chain
+      const mintArgs = [username, selectedStyle];
+      const mintGas = await getGasWithBuffer(publicClient, {
+        address: CREATOR_NFT_ADDRESS, abi: NFT_ABI,
+        functionName: "mintCreatorNFT", args: mintArgs, account: address,
+      });
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: CREATOR_NFT_ADDRESS,
         abi: NFT_ABI,
         functionName: "mintCreatorNFT",
-        args: [username, selectedStyle],
-        gas: BigInt(500000),
+        args: mintArgs,
+        gas: mintGas,
         chainId: CHAIN_ID,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
-      // 2. initCreator on Platform
+      // 2. initCreator on Platform — gas estimated dynamically per chain
+      const initArgs = [address];
+      const initGas = await getGasWithBuffer(publicClient, {
+        address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
+        functionName: "initCreator", args: initArgs, account: address,
+      });
       await writeContract(wagmiAdapter.wagmiConfig, {
         address: PLATFORM_ADDRESS,
         abi: PLATFORM_ABI,
         functionName: "initCreator",
-        args: [address],
-        gas: BigInt(200000),
+        args: initArgs,
+        gas: initGas,
         chainId: CHAIN_ID,
       });
 
@@ -353,21 +405,27 @@ export default function Creator() {
       const startTime = BigInt(Math.floor(Date.now() / 1000) + 60);
       const entryFeeWei = BigInt(Math.floor(Number(tForm.entryFee) * 1e18));
 
+      const createArgs = [
+        BigInt(onChainGameId),
+        selGame.name,
+        selGame.thumbnailUrl || "",
+        entryFeeWei,
+        BigInt(tForm.maxPlayers),
+        startTime,
+        BigInt(tForm.durationInHours),
+      ];
+      const createGas = await getGasWithBuffer(publicClient, {
+        address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI,
+        functionName: "createTournament", args: createArgs, account: address,
+      });
+
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: TOURNAMENT_ADDRESS,
         abi: TOURNAMENT_ABI,
         functionName: "createTournament",
-        args: [
-          BigInt(onChainGameId),
-          selGame.name,
-          selGame.thumbnailUrl || "",
-          entryFeeWei,
-          BigInt(tForm.maxPlayers),
-          startTime,
-          BigInt(tForm.durationInHours),
-        ],
-        gas: BigInt(500000),
-        chainId: CHAIN_ID, // BOTChain testnet — explicit chainId fix
+        args: createArgs,
+        gas: createGas,
+        chainId: CHAIN_ID,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       setTMsg("✓ Tournament created successfully!");
@@ -383,12 +441,17 @@ export default function Creator() {
 
   const handleEndTournament = async (tournamentId) => {
     try {
+      const endArgs = [BigInt(tournamentId)];
+      const endGas = await getGasWithBuffer(publicClient, {
+        address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI,
+        functionName: "endTournamentAndDistribute", args: endArgs, account: address,
+      });
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: TOURNAMENT_ADDRESS,
         abi: TOURNAMENT_ABI,
         functionName: "endTournamentAndDistribute",
-        args: [BigInt(tournamentId)],
-        gas: BigInt(300000),
+        args: endArgs,
+        gas: endGas,
         chainId: CHAIN_ID,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
@@ -433,68 +496,90 @@ export default function Creator() {
     }
   };
 
-  const submitGame = async () => {
+const submitGame = async () => {
     if (!form.name || !form.iframeUrl || !form.description) { setError("Fill in all required fields."); return; }
     if (!validateUrl(form.iframeUrl)) { setError("Enter a valid game URL."); return; }
     if (!form.thumbnailUrl) { setError("Please upload a thumbnail image."); return; }
     setError("");
     setLoading(true);
+    
     try {
-      // Step 1: Firebase mein available game ID dhundho
+      // 1. Reward Rate Safety Check — clamp both, each to its own fixed range
+      const rr = parseInt(form.rewardRate);
+      const safeRewardRate = Math.max(ARCADE_MIN, Math.min(ARCADE_MAX, isNaN(rr) ? 50 : rr));
+
+      const rrNative = parseInt(form.rewardRateNative);
+      const safeRewardRateNative = Math.max(NATIVE_MIN, Math.min(NATIVE_MAX, isNaN(rrNative) ? 1 : rrNative));
+
+      // Whichever chain the creator is actually connected to right now is
+      // the one this on-chain registerGame() call goes to — pick the
+      // matching rate for that chain's token type.
+      const rateForThisChain = isNativeToken ? safeRewardRateNative : safeRewardRate;
+
+      // 2. Contract se total games nikalo
       const totalGames = await publicClient.readContract({ 
         address: PLATFORM_ADDRESS, 
         abi: PLATFORM_ABI, 
         functionName: "getTotalGames" 
       });
-      
-      let candidateId = Number(totalGames) + 1;
-      let attempts = 0;
-      while (attempts < 20) {
-        const exists = await getGameById(candidateId);
-        if (!exists) break; // ID available hai!
-        candidateId++;
-        attempts++;
-      }
-      
-      console.log("✅ Available Game ID:", candidateId);
+      const contractTotal = Number(totalGames);
 
-      // Step 2: Transaction karo
+      // 3. Register Game on-chain
+      const registerArgs = [form.name, form.iframeUrl, BigInt(rateForThisChain)];
+      const registerGas = await getGasWithBuffer(publicClient, {
+        address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
+        functionName: "registerGame", args: registerArgs, account: address,
+      });
+
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: PLATFORM_ADDRESS,
         abi: PLATFORM_ABI,
         functionName: "registerGame",
-        args: [form.name, form.iframeUrl, BigInt(parseInt(form.rewardRate) || MIN_REWARD_RATE)],
-        gas: BigInt(500000),
+        args: registerArgs,
+        gas: registerGas,
         chainId: CHAIN_ID,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
-      // Step 3: Firebase mein save karo
-      await saveGame({ gameId: candidateId, name: form.name, description: form.description, iframeUrl: form.iframeUrl, thumbnailUrl: form.thumbnailUrl || "", category: form.category, rewardRate: form.rewardRate, creator: address, txHash: hash });
+      // 4. Actual ID confirm karo
+      const totalGamesAfter = await publicClient.readContract({ 
+        address: PLATFORM_ADDRESS, 
+        abi: PLATFORM_ABI, 
+        functionName: "getTotalGames" 
+      });
+      const actualGameId = Number(totalGamesAfter);
+
+      // 5. Firebase mein save — dono rates save karo, taaki baad me kisi
+      // aur chain pe sync ho toh sahi rate uss chain ke liye already available ho
+      await saveGame({ 
+        gameId: actualGameId, 
+        name: form.name, 
+        description: form.description, 
+        iframeUrl: form.iframeUrl, 
+        thumbnailUrl: form.thumbnailUrl || "", 
+        category: form.category, 
+        rewardRate: safeRewardRate,             // ARCADE (ERC-20 chains)
+        rewardRateNative: safeRewardRateNative, // native chains (MST)
+        creator: address, 
+        txHash: hash 
+      });
+      
       await saveCreator({ address, displayName: nftProfile?.username || address.slice(0, 8) });
-      setNewGameId(candidateId);
+      
+      setNewGameId(actualGameId);
       setTxHash(hash);
       await fetchMyGames();
       setStep(3);
     } catch (err) {
-      setError("Transaction failed: " + err.message);
-    } finally { setLoading(false); }
+      console.error("Submit error:", err);
+      setError("Transaction failed: " + (err.message || err));
+    } finally { 
+      setLoading(false); 
+    }
   };
-
-  const totalEarned = myGames.reduce((sum, g) => sum + (g.earned || 0), 0);
-  const inputStyle = { width: "100%", padding: "11px 14px", background: "rgba(123,47,255,0.06)", border: `1px solid ${P.b}`, borderRadius: 7, color: "#d4b8ff", fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: P.raj, transition: "border-color 0.18s" };
-  const labelStyle = { fontSize: 10, color: "#7755aa", display: "block", marginBottom: 6, fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" };
-
-  // Loading
-  if (creatorLoading) return (
-    <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ fontSize: 11, color: "#9977cc", fontFamily: P.raj, textTransform: "uppercase", letterSpacing: "2px" }}>Checking creator status...</div>
-    </div>
-  );
-
   // STATE 1: Not connected
   if (!isConnected) return (
-    <GateScreen icon="🎮" title="Creator" accent="Dashboard" sub="Connect your wallet to publish games and earn ARCADE tokens.">
+    <GateScreen icon="🎮" title="Creator" accent="Dashboard" sub={`Connect your wallet to publish games and earn ${rewardToken || "ARCADE"} tokens.`}>
       <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 16, fontSize: 12, color: "#9977cc", fontFamily: P.raj }}>
         Use the "Connect Wallet" button in the navbar to get started.
       </div>
@@ -513,7 +598,7 @@ export default function Creator() {
             Mint Your <span style={{ background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Creator NFT</span>
           </h2>
           <p style={{ color: "#9977cc", fontSize: 12, fontFamily: P.raj, lineHeight: 1.7 }}>
-            Your on-chain identity on ArcadeX. Choose a unique username and mint your NFT — it includes ArcadeX + BOTChain branding!
+            Your on-chain identity on ArcadeX. Choose a unique username and mint your NFT — it includes ArcadeX + {chainName} branding!
           </p>
         </div>
 
@@ -607,7 +692,7 @@ export default function Creator() {
         {/* Benefits */}
         <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
           <div style={{ fontSize: 9, color: "#9977cc", textTransform: "uppercase", letterSpacing: "1.5px", fontFamily: P.raj, fontWeight: 700, marginBottom: 10 }}>What you get</div>
-          {[["🎨", "Unique on-chain identity NFT"], ["⛓️", "ArcadeX + BOTChain branding embedded"], ["💰", "Earn 20% revenue from your games"], ["🎮", "Publish unlimited games on ArcadeX"]].map(([icon, text]) => (
+          {[["🎨", "Unique on-chain identity NFT"], ["⛓️", `ArcadeX + ${chainName} branding embedded`], ["💰", "Earn 20% revenue from your games"], ["🎮", "Publish unlimited games on ArcadeX"]].map(([icon, text]) => (
             <div key={text} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
               <span style={{ fontSize: 14 }}>{icon}</span>
               <span style={{ fontSize: 11, color: "#c4a0ff", fontFamily: P.raj }}>{text}</span>
@@ -616,7 +701,7 @@ export default function Creator() {
         </div>
 
         <button onClick={mintNFT} disabled={mintLoading || !usernameAvailable || username.length < 3} style={{ width: "100%", padding: "14px", background: (mintLoading || !usernameAvailable || username.length < 3) ? "rgba(123,47,255,0.2)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 8, color: (mintLoading || !usernameAvailable || username.length < 3) ? "#5533aa" : "#fff", fontSize: 13, fontWeight: 700, cursor: (mintLoading || !usernameAvailable || username.length < 3) ? "not-allowed" : "pointer", fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase", transition: "all 0.18s" }}>
-          {mintLoading ? "Minting on BOTChain..." : "🎨 Mint Creator NFT"}
+          {mintLoading ? `Minting on ${chainName}...` : "🎨 Mint Creator NFT"}
         </button>
       </div>
     </div>
@@ -723,9 +808,10 @@ export default function Creator() {
                         <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 13, color: "#d4b8ff", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{game.name}</div>
                         <div style={{ fontSize: 9, color: "#9977cc", marginBottom: 8, fontFamily: P.raj }}>Game #{game.gameId} · {game.category}</div>
                         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                          <span style={{ fontSize: 9, color: "#a67fff", fontFamily: P.orb, fontWeight: 600 }}>{game.earned || 0} ARCADE</span>
-                        </div>
-                      </div>
+  <span style={{ fontSize: 9, color: "#a67fff", fontFamily: P.orb, fontWeight: 600 }}>
+    {Math.floor((game.plays || 0) * (isNativeToken ? (game.rewardRateNative || 1) : (game.rewardRate || 50)) * 0.2)} {rewardToken || "ARCADE"}
+  </span>
+</div></div>
                     </div>
                   );
                 })}
@@ -787,7 +873,7 @@ export default function Creator() {
 
                     <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 12 }}>
                       <div>
-                        <label style={labelStyle}>Entry Fee (ARCADE)</label>
+                        <label style={labelStyle}>Entry Fee ({rewardToken || "ARCADE"})</label>
                         <input
                           type="number" min="0" value={tForm.entryFee}
                           onChange={e => setTForm(f => ({ ...f, entryFee: e.target.value }))}
@@ -815,7 +901,7 @@ export default function Creator() {
                     {/* Info box */}
                     <div style={{ background: "rgba(123,47,255,0.05)", border: `1px solid ${P.b}`, borderRadius: 8, padding: "12px 14px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       {[
-                        ["Prize Pool", `${Number(tForm.entryFee || 0) * Number(tForm.maxPlayers || 0)} ARCADE`],
+                        ["Prize Pool", `${Number(tForm.entryFee || 0) * Number(tForm.maxPlayers || 0)} ${rewardToken || "ARCADE"}`],
                         ["Starts In", "~1 min after creation"],
                         ["Max Players", tForm.maxPlayers],
                         ["Duration", `${tForm.durationInHours}h`],
@@ -836,7 +922,7 @@ export default function Creator() {
                     <div style={{ display: "flex", gap: 10 }}>
                       <Btn onClick={() => { setShowCreateTournament(false); setTMsg(""); }} variant="ghost" style={{ flex: 1 }}>Cancel</Btn>
                       <Btn onClick={handleCreateTournament} disabled={tCreating || !tForm.gameId} style={{ flex: 2 }}>
-                        {tCreating ? "Creating on BOTChain..." : "🚀 Create Tournament"}
+                        {tCreating ? `Creating on ${chainName}...` : "🚀 Create Tournament"}
                       </Btn>
                     </div>
                   </div>
@@ -883,8 +969,8 @@ export default function Creator() {
                         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                           {[
                             ["Players", `${t.players?.length || 0} / ${Number(t.maxPlayers)}`],
-                            ["Entry Fee", `${Number(t.entryFee) / 1e18} ARCADE`],
-                            ["Prize Pool", `${prizePool.toFixed(0)} ARCADE`],
+                            ["Entry Fee", `${Number(t.entryFee) / 1e18} ${rewardToken || "ARCADE"}`],
+                            ["Prize Pool", `${prizePool.toFixed(0)} ${rewardToken || "ARCADE"}`],
                             ["Ends", endTime.toLocaleDateString()],
                           ].map(([k, v]) => (
                             <div key={k} style={{ fontSize: 10, color: "#9977cc", fontFamily: P.raj }}>
@@ -1006,9 +1092,16 @@ export default function Creator() {
                     </select>
                   </div>
                   <div>
-                    <label style={labelStyle}>Reward Rate (ARCADE)</label>
-                    <input name="rewardRate" value={form.rewardRate} onChange={handleChange} type="number" min="10" max="500" className="cr-input" style={inputStyle} />
+                    <label style={labelStyle}>Reward Rate (ARCADE — BOTChain/Somnia)</label>
+                    <input name="rewardRate" value={form.rewardRate} onChange={handleChange} type="number" min={ARCADE_MIN} max={ARCADE_MAX} className="cr-input" style={inputStyle} />
                   </div>
+                  <div>
+                    <label style={labelStyle}>Reward Rate (Native — MST, real value token)</label>
+                    <input name="rewardRateNative" value={form.rewardRateNative} onChange={handleChange} type="number" min={NATIVE_MIN} max={NATIVE_MAX} className="cr-input" style={inputStyle} />
+                  </div>
+                </div>
+                <div style={{ fontSize: 10.5, color: "#7755aa", fontFamily: P.raj, marginTop: -6 }}>
+                  Native-chain rate is capped {NATIVE_MIN}–{NATIVE_MAX} since MSTC carries real value — this only applies when your game is played on a native-token chain like MST.
                 </div>
                 {error && <div style={{ padding: 10, background: "rgba(255,68,68,0.07)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 7, color: "#ff4444", fontSize: 11, fontFamily: P.raj }}>{error}</div>}
                 <Btn onClick={() => {
@@ -1026,7 +1119,7 @@ export default function Creator() {
               <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 600 }}>
                 <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 20 }}>
                   <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 16 }}>Review your submission</div>
-                  {[["Game Name", form.name], ["Description", form.description], ["Game URL", form.iframeUrl], ["Category", form.category], ["Reward Rate", `${form.rewardRate} ARCADE per play`], ["Creator", `${nftProfile?.username || address?.slice(0, 8)}.arcade`]].map(([k, v]) => (
+                  {[["Game Name", form.name], ["Description", form.description], ["Game URL", form.iframeUrl], ["Category", form.category], ["Reward Rate (ARCADE)", `${form.rewardRate} ARCADE per play`], ["Reward Rate (Native)", `${form.rewardRateNative} MSTC per play`], ["Creator", `${nftProfile?.username || address?.slice(0, 8)}.arcade`]].map(([k, v]) => (
                     <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "8px 0", borderBottom: `1px solid ${P.b}` }}>
                       <span style={{ color: "#9977cc", minWidth: 130, fontFamily: P.raj }}>{k}</span>
                       <span style={{ color: "#c4a0ff", textAlign: "right", wordBreak: "break-all", fontFamily: P.raj, fontWeight: 600 }}>{v}</span>
@@ -1037,7 +1130,7 @@ export default function Creator() {
                 <div style={{ display: "flex", gap: 10 }}>
                   <Btn onClick={() => setStep(1)} variant="ghost" style={{ flex: 1 }}>← Back</Btn>
                   <Btn onClick={submitGame} disabled={loading} style={{ flex: 2 }}>
-                    {loading ? "Submitting to BOTChain..." : "Submit Game 🚀"}
+                    {loading ? `Submitting to ${chainName}...` : "Submit Game 🚀"}
                   </Btn>
                 </div>
               </div>
@@ -1068,8 +1161,8 @@ export default function Creator() {
                   </div>
                 )}
                 <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-                  <Btn onClick={() => { setActiveTab("my-games"); setStep(1); setForm({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50" }); setTxHash(""); setNewGameId(null); }}>View My Games →</Btn>
-                  <Btn onClick={() => { setStep(1); setForm({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50" }); setTxHash(""); setNewGameId(null); }} variant="ghost">Submit Another</Btn>
+                  <Btn onClick={() => { setActiveTab("my-games"); setStep(1); setForm({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50", rewardRateNative: "1" }); setTxHash(""); setNewGameId(null); }}>View My Games →</Btn>
+                  <Btn onClick={() => { setStep(1); setForm({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50", rewardRateNative: "1" }); setTxHash(""); setNewGameId(null); }} variant="ghost">Submit Another</Btn>
                 </div>
               </div>
             )}

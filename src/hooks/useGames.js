@@ -1,6 +1,7 @@
 // src/hooks/useGames.js
 import { useState, useEffect } from "react";
 
+// ── Public games (approved only) — Home, Leaderboard, etc. ──
 export function useGames() {
   const [games, setGames] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -22,6 +23,42 @@ export function useGames() {
         setGames(formatted);
       } catch (err) {
         console.error("Games fetch failed:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchGames();
+  }, []);
+
+  return { games, loading };
+}
+
+// ── Creator games (all statuses) — CreatorGameDetail, Creator Dashboard ──
+export function useCreatorGames() {
+  const [games, setGames] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchGames = async () => {
+      try {
+        const token = localStorage.getItem("arcadex_jwt");
+        if (!token) { setLoading(false); return; }
+        const res = await fetch("/api/games?action=creator-games", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        const formatted = (data.games || []).map(g => ({
+          ...g,
+          id: g.gameId,
+          emoji: "🎮",
+          bg: "#0d1a10",
+          tag: null,
+          plays: g.plays || 0,
+          reward: g.rewardRate || 50,
+        }));
+        setGames(formatted);
+      } catch (err) {
+        console.error("Creator games fetch failed:", err);
       } finally {
         setLoading(false);
       }

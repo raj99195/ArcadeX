@@ -2,12 +2,11 @@ import { useState, useEffect } from "react";
 import { useAccount, usePublicClient } from "wagmi";
 import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
 import { wagmiAdapter } from "../Providers";
+import { useChain } from "../context/ChainContext";
 import { getAllGames, approveGameInFirebase, rejectGameInFirebase } from "../lib/gameService";
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { db } from "../lib/firebase";
-import { collection, getDocs } from "firebase/firestore";
+import SDKTestModal from "../components/SDKTestModal";
 
-const PLATFORM_ADDRESS = import.meta.env.VITE_PLATFORM_ADDRESS;
 const ADMIN_ADDRESS = import.meta.env.VITE_ADMIN_ADDRESS;
 
 const PLATFORM_ABI = [
@@ -19,6 +18,18 @@ const PLATFORM_ABI = [
     outputs: [],
   },
 ];
+
+async function getGasWithBuffer(publicClient, { address, abi, functionName, args, account, bufferPct = 30 }) {
+  try {
+    const estimated = await publicClient.estimateContractGas({
+      address, abi, functionName, args, account,
+    });
+    return (estimated * BigInt(100 + bufferPct)) / 100n;
+  } catch (err) {
+    console.warn(`Gas estimation failed for ${functionName}, using fallback:`, err.shortMessage || err.message);
+    return BigInt(3000000);
+  }
+}
 
 const P = {
   p: "#7B2FFF", p2: "rgba(123,47,255,0.14)", p3: "rgba(123,47,255,0.06)",
@@ -72,6 +83,18 @@ function GamePreviewModal({ game, onClose, onApprove, onReject, loading }) {
 
 export default function Admin() {
   const { address, isConnected } = useAccount();
+  const publicClient = usePublicClient();
+  const { contracts, chainId, chainName, explorerUrl } = useChain();
+  const PLATFORM_ADDRESS = contracts.platform;
+
+  const [refreshingLeaderboard, setRefreshingLeaderboard] = useState(false);
+
+  // Creators tab
+  const [creators, setCreators] = useState([]);
+  const [creatorsLoading, setCreatorsLoading] = useState(false);
+  const [syncingCreatorAddr, setSyncingCreatorAddr] = useState(null);
+  const [creatorSyncResults, setCreatorSyncResults] = useState({}); 
+  const [leaderboardMsg, setLeaderboardMsg] = useState("");
 
   const [games, setGames] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -80,6 +103,12 @@ export default function Admin() {
   const [log, setLog] = useState("");
   const [activeTab, setActiveTab] = useState("pending");
   const [gameStats, setGameStats] = useState({});
+
+  // Support Tickets State
+  const [tickets, setTickets] = useState([]);
+  const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [replyText, setReplyText] = useState("");
 
   // Analytics state
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
@@ -112,17 +141,14 @@ export default function Admin() {
   const fetchAnalytics = async () => {
     setAnalyticsLoading(true);
     try {
-      // Fetch scores
       const scoresRes = await fetch("/api/games?action=scores");
       const scoresData = await scoresRes.json();
       const allScores = scoresData.scores || [];
       setScores(allScores);
 
-      // Total unique players
       const uniqueWallets = new Set(allScores.map(s => s.player)).size;
       setTotalPlayers(uniqueWallets);
 
-      // Community messages
       const channels = ["general", "game-talk", "flex", "announcements"];
       let msgCount = 0;
       await Promise.all(channels.map(async ch => {
@@ -133,11 +159,24 @@ export default function Admin() {
         } catch {}
       }));
       setTotalMessages(msgCount);
-
-      // Generate chart data based on timeRange
       generateChartData(allScores, timeRange);
     } catch (e) { console.error(e); }
     finally { setAnalyticsLoading(false); }
+  };
+
+ // Support Tickets Fetch Logic
+  const fetchTickets = async () => {
+    setTicketsLoading(true);
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/support?action=list", {
+        method: "POST", // 👈 YE LINE MISSING THI
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if(res.ok) setTickets(data.tickets || []);
+    } catch (e) { console.error("Error fetching tickets:", e); }
+    finally { setTicketsLoading(false); }
   };
 
   const generateChartData = (allScores, range) => {
@@ -151,7 +190,6 @@ export default function Admin() {
         ? d.toLocaleDateString("en", { weekday: "short" })
         : d.toLocaleDateString("en", { month: "short", day: "numeric" });
       labels.push(label);
-      // Distribute plays across days with some randomness based on total
       const totalP = allScores.length;
       const weight = i === 0 ? 0.25 : i === 1 ? 0.18 : i === 2 ? 0.14 : 0.43 / (days - 3);
       data.push({ day: label, plays: Math.floor(totalP * weight), players: Math.floor(totalP * weight * 0.7) });
@@ -161,17 +199,24 @@ export default function Admin() {
 
   useEffect(() => { if (isAdmin) fetchGames(); }, [isAdmin]);
   useEffect(() => { if (isAdmin && activeTab === "analytics") fetchAnalytics(); }, [isAdmin, activeTab]);
+  useEffect(() => { if (isAdmin && activeTab === "support") fetchTickets(); }, [isAdmin, activeTab]);
   useEffect(() => { if (scores.length) generateChartData(scores, timeRange); }, [timeRange]);
 
   const approveGame = async (game) => {
     setLoading(true);
     try {
+      const approveArgs = [BigInt(game.gameId)];
+      const approveGas = await getGasWithBuffer(publicClient, {
+        address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
+        functionName: "approveGame", args: approveArgs, account: address,
+      });
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: PLATFORM_ADDRESS,
         abi: PLATFORM_ABI,
         functionName: "approveGame",
-        args: [BigInt(game.gameId)],
-        gas: BigInt(200000),
+        args: approveArgs,
+        gas: approveGas,
+        chainId,
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
       await approveGameInFirebase(game.gameId);
@@ -191,6 +236,141 @@ export default function Admin() {
       await fetchGames();
     } catch (e) { setLog(`Error: ${e.message}`); }
     finally { setLoading(false); }
+  };
+
+  const [syncingGameId, setSyncingGameId] = useState(null);
+  const [syncResults, setSyncResults] = useState({});
+  const [testingGame, setTestingGame] = useState(null);
+  const [syncingMarketplace, setSyncingMarketplace] = useState(false);
+  const [marketplaceSyncResults, setMarketplaceSyncResults] = useState(null);
+
+  const handleSyncMultichain = async (game) => {
+    const gameId = game.gameId || game.id;
+    setSyncingGameId(gameId);
+    setSyncResults(prev => ({ ...prev, [gameId]: null }));
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/admin/deploy-multichain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ gameId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Sync failed");
+      setSyncResults(prev => ({ ...prev, [gameId]: data.results }));
+    } catch (err) {
+      setSyncResults(prev => ({ ...prev, [gameId]: [{ chain: "Error", status: "failed", reason: err.message }] }));
+    } finally {
+      setSyncingGameId(null);
+    }
+  };
+
+  const fetchCreators = async () => {
+    setCreatorsLoading(true);
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/admin/creators", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json();
+      setCreators(data.creators || []);
+    } catch (e) { console.error(e); }
+    finally { setCreatorsLoading(false); }
+  };
+
+  useEffect(() => { if (isAdmin && activeTab === "creators") fetchCreators(); }, [isAdmin, activeTab]);
+
+  const handleSyncCreator = async (creator) => {
+    setSyncingCreatorAddr(creator.address);
+    setCreatorSyncResults(prev => ({ ...prev, [creator.address]: null }));
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/admin/sync-creator-nft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          username: creator.displayName,
+          avatarColor: creator.avatarStyle || "bottts",
+          originChainKey: null, 
+          targetAddress: creator.address,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Sync failed");
+      setCreatorSyncResults(prev => ({ ...prev, [creator.address]: data.results }));
+    } catch (err) {
+      setCreatorSyncResults(prev => ({ ...prev, [creator.address]: [{ chain: "Error", status: "failed", reason: err.message }] }));
+    } finally {
+      setSyncingCreatorAddr(null);
+    }
+  };
+
+  const handleRefreshLeaderboard = async () => {
+    setRefreshingLeaderboard(true);
+    setLeaderboardMsg("");
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/admin/refresh-badge-leaderboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Refresh failed");
+      setLeaderboardMsg(`✓ Refreshed — ${data.rankedCount} players ranked.`);
+    } catch (err) {
+      setLeaderboardMsg(`Error: ${err.message}`);
+    } finally {
+      setRefreshingLeaderboard(false);
+    }
+  };
+
+  const handleSyncMarketplace = async () => {
+    setSyncingMarketplace(true);
+    setMarketplaceSyncResults(null);
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/admin/sync-marketplace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Sync failed");
+      setMarketplaceSyncResults(data.results);
+    } catch (err) {
+      setMarketplaceSyncResults([{ chain: "Error", status: "failed", reason: err.message }]);
+    } finally {
+      setSyncingMarketplace(false);
+    }
+  };
+
+  // Ticket Actions
+  const handleReplyTicket = async (ticketId) => {
+    if (!replyText.trim()) return;
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/support?action=reply", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ticketId, replyText })
+      });
+      if(res.ok) {
+        setReplyingTo(null);
+        setReplyText("");
+        fetchTickets();
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const handleResolveTicket = async (ticketId) => {
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      await fetch("/api/support?action=resolve", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ticketId })
+      });
+      fetchTickets();
+    } catch (e) { console.error(e); }
   };
 
   if (!isConnected) return (
@@ -255,17 +435,148 @@ export default function Admin() {
           ))}
         </div>
 
-
-        <div style={{ display: "flex", gap: 0, marginBottom: 20, borderBottom: `1px solid ${P.b}` }}>
+        {/* ── TABS ── */}
+        <div style={{ display: "flex", gap: 0, marginBottom: 20, borderBottom: `1px solid ${P.b}`, overflowX: "auto" }}>
           {[
             { id: "pending", label: `Pending (${pendingGames.length})`, color: "#FFB800" },
             { id: "approved", label: `Approved (${approvedGames.length})`, color: "#00FF88" },
             { id: "rejected", label: `Rejected (${rejectedGames.length})`, color: "#ff4444" },
+            { id: "creators", label: `👤 Creators (${creators.length})`, color: "#a67fff" },
+            { id: "support", label: `🎫 Support`, color: "#ff8800" },
             { id: "analytics", label: "📊 Analytics", color: "#00d4ff" },
           ].map(t => (
-            <button key={t.id} className="adm-tab" onClick={() => setActiveTab(t.id)} style={{ padding: "9px 20px", background: "transparent", border: "none", borderBottom: activeTab === t.id ? `2px solid ${t.color}` : "2px solid transparent", color: activeTab === t.id ? t.color : "#3a2a5a", fontSize: 11, cursor: "pointer", marginBottom: "-1px", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", transition: "color 0.18s" }}>{t.label}</button>
+            <button key={t.id} className="adm-tab" onClick={() => setActiveTab(t.id)} style={{ padding: "9px 20px", background: "transparent", border: "none", borderBottom: activeTab === t.id ? `2px solid ${t.color}` : "2px solid transparent", color: activeTab === t.id ? t.color : "#3a2a5a", fontSize: 11, cursor: "pointer", marginBottom: "-1px", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", transition: "color 0.18s", flexShrink: 0 }}>{t.label}</button>
           ))}
         </div>
+
+        {/* ── SUPPORT TICKETS TAB ── */}
+        {activeTab === "support" && (
+          <div>
+             {ticketsLoading ? (
+               <div style={{ padding: "40px 0", textAlign: "center", color: "#5533aa", fontFamily: P.raj }}>Loading tickets...</div>
+             ) : tickets.length === 0 ? (
+               <div style={{ padding: "40px 0", textAlign: "center", color: "#5533aa", fontFamily: P.raj }}>No support tickets found.</div>
+             ) : (
+               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                 {tickets.map((ticket) => (
+                   <div key={ticket.id} style={{ background: P.s1, border: `1px solid ${ticket.status === 'resolved' ? 'rgba(0,255,136,0.2)' : P.b}`, borderRadius: 10, padding: 18 }}>
+                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "rgba(123,47,255,0.15)", color: "#c4a0ff", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase" }}>{ticket.issueType}</span>
+                          <span style={{ fontSize: 10, color: "#5533aa", fontFamily: "monospace" }}>Ticket: {ticket.id}</span>
+                       </div>
+                       <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: ticket.status === 'resolved' ? "rgba(0,255,136,0.1)" : ticket.status === 'in-progress' ? "rgba(255,183,0,0.1)" : "rgba(255,68,68,0.1)", color: ticket.status === 'resolved' ? "#00FF88" : ticket.status === 'in-progress' ? "#FFB700" : "#ff4444", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase" }}>
+                         {ticket.status}
+                       </span>
+                     </div>
+                     
+                     <div style={{ fontSize: 13, color: "#fff", fontFamily: P.raj, lineHeight: 1.5, marginBottom: 10 }}>{ticket.description}</div>
+                     
+                     {ticket.email && <div style={{ fontSize: 11, color: "#a67fff", fontFamily: P.raj, marginBottom: 6 }}>Email: {ticket.email}</div>}
+                     {ticket.screenshotUrl && (
+                        <a href={ticket.screenshotUrl} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#00d4ff", fontFamily: P.raj, textDecoration: "none", display: "inline-block", marginBottom: 10 }}>🖼️ View Screenshot →</a>
+                     )}
+
+                     {ticket.replies && ticket.replies.length > 0 && (
+                       <div style={{ marginTop: 12, padding: 12, background: "rgba(123,47,255,0.04)", borderRadius: 8, borderLeft: `2px solid ${P.p}` }}>
+                         {ticket.replies.map((reply, i) => (
+                           <div key={i} style={{ marginBottom: i < ticket.replies.length - 1 ? 10 : 0 }}>
+                             <div style={{ fontSize: 9, color: "#7755aa", fontFamily: P.raj, fontWeight: 700, marginBottom: 3 }}>ADMIN REPLY:</div>
+                             <div style={{ fontSize: 12, color: "#c4a0ff", fontFamily: P.raj, lineHeight: 1.4 }}>{reply.text}</div>
+                           </div>
+                         ))}
+                       </div>
+                     )}
+
+                     {ticket.status !== 'resolved' && (
+                       <div style={{ marginTop: 16, display: "flex", gap: 10, borderTop: `1px solid ${P.b}`, paddingTop: 16 }}>
+                         {replyingTo === ticket.id ? (
+                           <div style={{ flex: 1, display: "flex", gap: 8 }}>
+                             <input 
+                               value={replyText} 
+                               onChange={e => setReplyText(e.target.value)} 
+                               placeholder="Type reply..." 
+                               style={{ flex: 1, padding: "8px 12px", background: "rgba(123,47,255,0.06)", border: `1px solid ${P.b}`, borderRadius: 6, color: "#fff", fontSize: 12, fontFamily: P.raj, outline: "none" }} 
+                             />
+                             <button onClick={() => handleReplyTicket(ticket.id)} style={{ padding: "8px 16px", background: P.p, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", fontSize: 11, fontFamily: P.raj, fontWeight: 700 }}>Send</button>
+                             <button onClick={() => setReplyingTo(null)} style={{ padding: "8px 16px", background: "transparent", border: `1px solid ${P.b}`, borderRadius: 6, color: "#a67fff", cursor: "pointer", fontSize: 11, fontFamily: P.raj, fontWeight: 700 }}>Cancel</button>
+                           </div>
+                         ) : (
+                           <>
+                             <button onClick={() => setReplyingTo(ticket.id)} style={{ padding: "8px 16px", background: "rgba(123,47,255,0.1)", border: `1px solid ${P.b2}`, borderRadius: 6, color: "#c4a0ff", cursor: "pointer", fontSize: 11, fontFamily: P.raj, fontWeight: 700 }}>💬 Reply</button>
+                             <button onClick={() => handleResolveTicket(ticket.id)} style={{ padding: "8px 16px", background: "rgba(0,255,136,0.1)", border: "1px solid rgba(0,255,136,0.25)", borderRadius: 6, color: "#00FF88", cursor: "pointer", fontSize: 11, fontFamily: P.raj, fontWeight: 700 }}>✓ Mark Resolved</button>
+                           </>
+                         )}
+                       </div>
+                     )}
+                   </div>
+                 ))}
+               </div>
+             )}
+          </div>
+        )}
+
+        {/* ── CREATORS TAB ── */}
+        {activeTab === "creators" && (
+          <div>
+            {creatorsLoading ? (
+              <div style={{ padding: "40px 0", textAlign: "center", color: "#5533aa", fontFamily: P.raj }}>Loading creators...</div>
+            ) : creators.length === 0 ? (
+              <div style={{ padding: "40px 0", textAlign: "center", color: "#5533aa", fontFamily: P.raj }}>No creators registered yet.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                {creators.map(creator => {
+                  const isSyncing = syncingCreatorAddr === creator.address;
+                  const results = creatorSyncResults[creator.address];
+                  return (
+                    <div key={creator.address} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 9, padding: "12px 18px", display: "flex", alignItems: "center", gap: 14 }}>
+                      {/* Avatar */}
+                      <div style={{ width: 40, height: 40, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(123,47,255,0.4)", flexShrink: 0, background: "#0e0c1a" }}>
+                        <img src={`https://api.dicebear.com/9.x/${creator.avatarStyle || "bottts"}/svg?seed=${creator.displayName || creator.address}`} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      </div>
+
+                      {/* Info */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 13, color: "#c4a0ff", marginBottom: 2 }}>
+                          {creator.displayName || "—"}<span style={{ color: "#5533aa" }}>.arcade</span>
+                        </div>
+                        <div style={{ fontSize: 9, color: "#5533aa", fontFamily: "monospace" }}>{creator.address}</div>
+                        <div style={{ fontSize: 9, color: "#5533aa", fontFamily: P.raj, marginTop: 2 }}>
+                          {creator.gamesPublished || 0} games · Joined {creator.registeredAt ? new Date(creator.registeredAt).toLocaleDateString() : "—"}
+                        </div>
+                      </div>
+
+                      {/* Sync button + results */}
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                        <button onClick={() => handleSyncCreator(creator)} disabled={isSyncing} style={{
+                          padding: "5px 12px", background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.25)",
+                          borderRadius: 6, color: "#00d4ff", fontSize: 10, cursor: isSyncing ? "not-allowed" : "pointer",
+                          fontFamily: P.raj, fontWeight: 700, opacity: isSyncing ? 0.6 : 1, whiteSpace: "nowrap",
+                        }}>
+                          {isSyncing ? "🔄 Syncing..." : "🔗 Sync to All Chains"}
+                        </button>
+                        {results && (
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 200 }}>
+                            {results.map((r, i) => (
+                              <span key={i} title={r.reason || ""} style={{
+                                fontSize: 8, padding: "2px 7px", borderRadius: 10, fontFamily: P.raj, fontWeight: 700,
+                                background: r.status === "minted" || r.status === "already_minted" ? "rgba(0,255,136,0.1)" : r.status === "skipped" ? "rgba(255,184,0,0.1)" : "rgba(255,68,68,0.1)",
+                                color: r.status === "minted" || r.status === "already_minted" ? "#00FF88" : r.status === "skipped" ? "#FFB800" : "#ff4444",
+                                border: `1px solid ${r.status === "minted" || r.status === "already_minted" ? "rgba(0,255,136,0.25)" : r.status === "skipped" ? "rgba(255,184,0,0.25)" : "rgba(255,68,68,0.25)"}`,
+                              }}>
+                                {r.chain}: {r.status === "minted" ? "✓ minted" : r.status === "already_minted" ? "✓ already" : r.status === "skipped" ? "skip" : "✗ fail"}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── ANALYTICS TAB ── */}
         {activeTab === "analytics" && (
@@ -376,27 +687,29 @@ export default function Admin() {
                     ))}
                     <div style={{ marginTop: 12, padding: "8px 12px", background: "rgba(0,255,136,0.05)", border: "1px solid rgba(0,255,136,0.12)", borderRadius: 7 }}>
                       <div style={{ fontSize: 9, color: "#5533aa", fontFamily: P.raj, marginBottom: 3 }}>Network</div>
-                      <div style={{ fontSize: 11, color: "#00FF88", fontFamily: P.raj, fontWeight: 700 }}>BOTChain EVM (Chain ID: {import.meta.env.VITE_BOTCHAIN_TESTNET_CHAIN_ID})</div>
+                      <div style={{ fontSize: 11, color: "#00FF88", fontFamily: P.raj, fontWeight: 700 }}>{chainName} (Chain ID: {chainId})</div>
                     </div>
                   </div>
                 </div>
 
                 {/* Contract addresses */}
                 <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 12, padding: "16px 20px" }}>
-                  <div style={{ fontSize: 9, color: "#5533aa", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 12 }}>📋 Deployed Contracts</div>
+                  <div style={{ fontSize: 9, color: "#5533aa", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 12 }}>📋 Deployed Contracts — {chainName}</div>
                   {[
-                    ["ArcadeToken", import.meta.env.VITE_ARCADE_TOKEN_ADDRESS],
-                    ["Platform", import.meta.env.VITE_PLATFORM_ADDRESS],
-                    ["Tournament", import.meta.env.VITE_TOURNAMENT_ADDRESS],
-                    ["Leaderboard", import.meta.env.VITE_LEADERBOARD_ADDRESS],
-                    ["Marketplace", import.meta.env.VITE_MARKETPLACE_ADDRESS],
-                    ["CreatorNFT", import.meta.env.VITE_CREATOR_NFT_ADDRESS],
+                    ["ArcadeToken", contracts.token],
+                    ["Platform", contracts.platform],
+                    ["Tournament", contracts.tournament],
+                    ["Leaderboard", contracts.leaderboard],
+                    ["Marketplace", contracts.marketplace],
+                    ["CreatorNFT", contracts.creatorNft],
                   ].map(([name, addr]) => (
                     <div key={name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, padding: "7px 0", borderBottom: `1px solid ${P.b}` }}>
                       <span style={{ color: "#a67fff", fontFamily: P.raj, fontWeight: 700, minWidth: 100 }}>{name}</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ color: "#5533aa", fontFamily: "monospace", fontSize: 10 }}>{addr?.slice(0, 10)}...{addr?.slice(-6)}</span>
-                        <a href={`https://scan.botchain.ai/address/${addr}`} target="_blank" rel="noreferrer" style={{ fontSize: 9, color: "#00d4ff", textDecoration: "none", fontFamily: P.raj, fontWeight: 700 }}>View →</a>
+                        {explorerUrl && (
+                          <a href={`${explorerUrl}/address/${addr}`} target="_blank" rel="noreferrer" style={{ fontSize: 9, color: "#00d4ff", textDecoration: "none", fontFamily: P.raj, fontWeight: 700 }}>View →</a>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -406,7 +719,7 @@ export default function Admin() {
           </div>
         )}
 
-        {activeTab !== "analytics" && (gamesLoading ? (
+        {activeTab !== "analytics" && activeTab !== "creators" && activeTab !== "support" && (gamesLoading ? (
           <div style={{ padding: 48, textAlign: "center", fontSize: 11, color: "#5533aa", fontFamily: P.raj }}>Loading...</div>
         ) : tabGames.length === 0 ? (
           <div style={{ padding: 56, textAlign: "center" }}>
@@ -443,6 +756,32 @@ export default function Admin() {
                       <button onClick={() => approveGame(game)} disabled={loading} style={{ padding: "5px 13px", background: "rgba(0,255,136,0.08)", border: "1px solid rgba(0,255,136,0.2)", borderRadius: 6, color: "#00FF88", fontSize: 10, cursor: "pointer", fontFamily: P.raj, fontWeight: 700 }}>{loading ? "..." : "Approve"}</button>
                     </div>
                   )}
+                  {activeTab === "approved" && (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => setTestingGame(game)} style={{ padding: "5px 13px", background: "rgba(255,183,0,0.08)", border: "1px solid rgba(255,183,0,0.25)", borderRadius: 6, color: "#FFB700", fontSize: 10, cursor: "pointer", fontFamily: P.raj, fontWeight: 700, whiteSpace: "nowrap" }}>
+                          🧪 Test SDK
+                        </button>
+                        <button onClick={() => handleSyncMultichain(game)} disabled={syncingGameId === (game.gameId || game.id)} style={{ padding: "5px 13px", background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 6, color: "#00d4ff", fontSize: 10, cursor: "pointer", fontFamily: P.raj, fontWeight: 700, whiteSpace: "nowrap" }}>
+                          {syncingGameId === (game.gameId || game.id) ? "🔄 Syncing..." : "🔗 Sync to All Chains"}
+                        </button>
+                      </div>
+                      {syncResults[game.gameId || game.id] && (
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 220 }}>
+                          {syncResults[game.gameId || game.id].map((r, i) => (
+                            <span key={i} title={r.reason || ""} style={{
+                              fontSize: 8, padding: "2px 7px", borderRadius: 10, fontFamily: P.raj, fontWeight: 700,
+                              background: r.status === "live" || r.status === "already_live" ? "rgba(0,255,136,0.12)" : r.status === "skipped" ? "rgba(255,184,0,0.12)" : "rgba(255,68,68,0.12)",
+                              color: r.status === "live" || r.status === "already_live" ? "#00FF88" : r.status === "skipped" ? "#FFB800" : "#ff4444",
+                              border: `1px solid ${r.status === "live" || r.status === "already_live" ? "rgba(0,255,136,0.25)" : r.status === "skipped" ? "rgba(255,184,0,0.25)" : "rgba(255,68,68,0.25)"}`,
+                            }}>
+                              {r.chain}: {r.status === "live" ? "✓ live" : r.status === "already_live" ? "✓ already" : r.status === "skipped" ? "skipped" : "✗ failed"}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div style={{ fontSize: 10, color: "#5533aa", flexShrink: 0, fontFamily: P.raj }}>View →</div>
                 </div>
               );
@@ -451,8 +790,57 @@ export default function Admin() {
         ))}
 
         <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 20, marginTop: 24 }}>
+          <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 6 }}>🏆 Campaign Badges</div>
+          <div style={{ fontSize: 11, color: "#5533aa", fontFamily: P.raj, marginBottom: 14, lineHeight: 1.6 }}>
+            Recalculates the ARCADE-earned leaderboard used for Pioneer (top 500) and Legend (top 50) badge eligibility. Run this whenever you want fresh rankings — claims always check eligibility live, this just refreshes the cached ranking they check against.
+          </div>
+          <button onClick={handleRefreshLeaderboard} disabled={refreshingLeaderboard} style={{
+            padding: "10px 20px", background: refreshingLeaderboard ? "rgba(123,47,255,0.2)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)",
+            border: "none", borderRadius: 8, color: refreshingLeaderboard ? "#5533aa" : "#fff",
+            fontSize: 12, fontWeight: 700, cursor: refreshingLeaderboard ? "not-allowed" : "pointer",
+            fontFamily: P.raj, letterSpacing: "0.5px",
+          }}>
+            {refreshingLeaderboard ? "🔄 Refreshing..." : "🔄 Refresh Leaderboard Cache"}
+          </button>
+          {leaderboardMsg && (
+            <div style={{ marginTop: 12, padding: 10, background: leaderboardMsg.startsWith("✓") ? "rgba(0,255,136,0.06)" : "rgba(255,68,68,0.06)", border: `1px solid ${leaderboardMsg.startsWith("✓") ? "rgba(0,255,136,0.18)" : "rgba(255,68,68,0.18)"}`, borderRadius: 7, fontSize: 11, color: leaderboardMsg.startsWith("✓") ? "#00FF88" : "#ff4444", fontFamily: P.raj }}>
+              {leaderboardMsg}
+            </div>
+          )}
+        </div>
+
+        <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 20, marginTop: 24 }}>
+          <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 14 }}>🏪 Marketplace — Per-Chain Sync</div>
+          <div style={{ fontSize: 11, color: "#5533aa", fontFamily: P.raj, marginBottom: 14, lineHeight: 1.6 }}>
+            Syncs all avatar style items to every live chain. Safe to run multiple times — only adds items that are missing on each chain (checks nextItemId before adding).
+          </div>
+          <button onClick={handleSyncMarketplace} disabled={syncingMarketplace} style={{
+            padding: "10px 20px", background: syncingMarketplace ? "rgba(123,47,255,0.2)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)",
+            border: "none", borderRadius: 8, color: syncingMarketplace ? "#5533aa" : "#fff",
+            fontSize: 12, fontWeight: 700, cursor: syncingMarketplace ? "not-allowed" : "pointer",
+            fontFamily: P.raj, letterSpacing: "0.5px",
+          }}>
+            {syncingMarketplace ? "🔄 Syncing..." : "🛒 Sync Marketplace Items"}
+          </button>
+          {marketplaceSyncResults && (
+            <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+              {marketplaceSyncResults.map((r, i) => (
+                <div key={i} style={{
+                  padding: "8px 12px", borderRadius: 7, fontSize: 10, fontFamily: P.raj,
+                  background: r.status === "synced" ? "rgba(0,255,136,0.06)" : r.status === "already_synced" ? "rgba(0,212,255,0.06)" : r.status === "skipped" ? "rgba(255,183,0,0.06)" : "rgba(255,68,68,0.06)",
+                  border: `1px solid ${r.status === "synced" ? "rgba(0,255,136,0.2)" : r.status === "already_synced" ? "rgba(0,212,255,0.2)" : r.status === "skipped" ? "rgba(255,183,0,0.2)" : "rgba(255,68,68,0.2)"}`,
+                  color: r.status === "synced" ? "#00FF88" : r.status === "already_synced" ? "#00d4ff" : r.status === "skipped" ? "#FFB700" : "#ff4444",
+                }}>
+                  {r.chain}: {r.status === "synced" ? `✓ ${r.added} items added (total: ${r.total})` : r.status === "already_synced" ? `✓ Already synced (${r.total} items)` : r.status === "skipped" ? `⏭ Skipped — ${r.reason}` : `✗ Failed — ${r.reason}`}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 20, marginTop: 24 }}>
           <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 14 }}>Platform Settings</div>
-          {[["Player share", "80%"], ["Creator share", "20%"], ["Chain", "BOTChain"], ["Chain ID", import.meta.env.VITE_BOTCHAIN_TESTNET_CHAIN_ID], ["Platform Contract", PLATFORM_ADDRESS], ["Admin", ADMIN_ADDRESS]].map(([k, v]) => (
+          {[["Player share", "80%"], ["Creator share", "20%"], ["Chain", chainName], ["Chain ID", chainId], ["Platform Contract", PLATFORM_ADDRESS], ["Admin", ADMIN_ADDRESS]].map(([k, v]) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "8px 0", borderBottom: `1px solid ${P.b}` }}>
               <span style={{ color: "#5533aa", fontFamily: P.raj }}>{k}</span>
               <span style={{ color: "#9977cc", fontFamily: k === "Platform Contract" || k === "Admin" ? "monospace" : P.raj, fontWeight: 600, fontSize: k === "Platform Contract" || k === "Admin" ? 10 : 11 }}>{v}</span>
@@ -467,6 +855,13 @@ export default function Admin() {
         )}
       </div>
       {selectedGame && <GamePreviewModal game={selectedGame} onClose={() => setSelectedGame(null)} onApprove={approveGame} onReject={rejectGame} loading={loading} />}
+      {testingGame && (
+        <SDKTestModal
+          iframeUrl={testingGame.iframeUrl}
+          gameName={testingGame.name}
+          onClose={() => setTestingGame(null)}
+        />
+      )}
     </div>
   );
 }

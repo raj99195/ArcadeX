@@ -1,5 +1,5 @@
 /**
- * ArcadeX SDK v2.0.0
+ * ArcadeX SDK v4.0.0
  * Integrate your game with ArcadeX on BOTChain EVM
  * https://arcade-x-sand.vercel.app/sdk
  *
@@ -7,13 +7,19 @@
  *   ArcadeSDK.init("YOUR_GAME_ID");
  *   ArcadeSDK.updateScore(1500);
  *   ArcadeSDK.gameOver(9999);
+ *
+ *   // Pay + mint an NFT for a permanent skin — no registration step needed
+ *   ArcadeSDK.purchaseSkin(0, "Batman", "bafkrei...", 10);
+ *
+ *   // Pay only, no NFT — for power-ups/boosts
+ *   ArcadeSDK.purchasePowerUp("SCALE_BOOST", 5);
  */
 
 (function (global) {
   "use strict";
 
   var ArcadeSDK = {
-    version: "2.0.0",
+    version: "4.0.0",
     gameId: "",
     currentScore: 0,
     initialized: false,
@@ -33,6 +39,7 @@
 
       // Notify platform SDK is ready
       this._post({ type: "ARCADE_SDK_READY", gameId: this.gameId });
+      this._post({ type: "GET_PLAYER_INFO" });
 
       // Listen for messages from platform
       window.addEventListener("message", this._onMessage.bind(this));
@@ -42,10 +49,7 @@
 
     // ─── UPDATE SCORE ─────────────────────────────────────────
     updateScore: function (score) {
-      if (!this.initialized) {
-        console.warn("[ArcadeSDK] Call init() before updateScore()");
-        return;
-      }
+      if (!this._requireInit("updateScore")) return;
       this.currentScore = parseInt(score) || 0;
       this._post({ type: "SCORE_UPDATE", score: this.currentScore, gameId: this.gameId });
       this._log("Score updated:", this.currentScore);
@@ -53,10 +57,7 @@
 
     // ─── GAME OVER ────────────────────────────────────────────
     gameOver: function (finalScore) {
-      if (!this.initialized) {
-        console.warn("[ArcadeSDK] Call init() before gameOver()");
-        return;
-      }
+      if (!this._requireInit("gameOver")) return;
       var score = finalScore !== undefined ? parseInt(finalScore) : this.currentScore;
       this.currentScore = score;
       this._post({ type: "GAME_OVER", score: score, gameId: this.gameId });
@@ -79,7 +80,72 @@
       return this.currentScore;
     },
 
+    // ─── PURCHASE SKIN ────────────────────────────────────────
+    // Pay + mint an ERC-1155 NFT for a permanent skin/character. No
+    // registration step — pass everything the game already knows about
+    // this skin on every call.
+    //   skinIndex : number  — unique index for this skin (0, 1, 2...)
+    //   name      : string  — display name, e.g. "Batman"
+    //   pinataCID : string  — IPFS CID (with or without "ipfs://" prefix)
+    //   price     : number  — price in ARCADE/MSTC, whole tokens
+    purchaseSkin: function (skinIndex, name, pinataCID, price) {
+      if (!this._requireInit("purchaseSkin")) return;
+      if (skinIndex === undefined || skinIndex === null || !name || !pinataCID) {
+        console.warn("[ArcadeSDK] purchaseSkin: skinIndex, name and pinataCID are required");
+        return;
+      }
+      var imageURI = String(pinataCID).indexOf("ipfs://") === 0 ? pinataCID : "ipfs://" + pinataCID;
+      this._post({
+        type: "PURCHASE_SKIN", gameId: this.gameId,
+        skinIndex: skinIndex, name: name, imageURI: imageURI, price: parseInt(price) || 0,
+      });
+      this._log("purchaseSkin:", skinIndex, name, "| price:", price);
+    },
+
+    // ─── PURCHASE POWER-UP ────────────────────────────────────
+    // Pay only, no NFT minted. Unlock/ownership state stays entirely on
+    // your game side.
+    //   powerUpId : string — unique identifier, e.g. "SCALE_BOOST"
+    //   price     : number — price in ARCADE/MSTC, whole tokens
+    purchasePowerUp: function (powerUpId, price) {
+      if (!this._requireInit("purchasePowerUp")) return;
+      if (!powerUpId) {
+        console.warn("[ArcadeSDK] purchasePowerUp: powerUpId is required");
+        return;
+      }
+      this._post({ type: "PURCHASE_POWERUP", gameId: this.gameId, powerUpId: powerUpId, price: parseInt(price) || 0 });
+      this._log("purchasePowerUp:", powerUpId, "| price:", price);
+    },
+
+    // ─── RECORD GAME TIME / EVENT (off-chain, Firestore) ─────
+    recordGameTime: function (seconds) {
+      if (!this._requireInit("recordGameTime")) return;
+      if (!seconds || seconds <= 0) return;
+      this._post({ type: "RECORD_GAME_TIME", gameId: this.gameId, seconds: parseInt(seconds), timestamp: Date.now() });
+      this._log("recordGameTime:", seconds, "seconds");
+    },
+
+    recordEvent: function (eventType, value) {
+      if (!this._requireInit("recordEvent")) return;
+      this._post({ type: "GAME_EVENT", gameId: this.gameId, eventType: eventType, value: parseInt(value) || 1, timestamp: Date.now() });
+      this._log("recordEvent:", eventType, value);
+    },
+
+    // ─── GET PLAYER PROFILE ───────────────────────────────────
+    getPlayerProfile: function () {
+      if (!this._requireInit("getPlayerProfile")) return;
+      this._post({ type: "GET_PLAYER_INFO" });
+    },
+
     // ─── INTERNAL ─────────────────────────────────────────────
+    _requireInit: function (fnName) {
+      if (!this.initialized) {
+        console.warn("[ArcadeSDK] Call init() before " + fnName + "()");
+        return false;
+      }
+      return true;
+    },
+
     _post: function (data) {
       try {
         var msg = Object.assign({}, data, { _arcadex: true, version: this.version });
@@ -101,6 +167,11 @@
       this._log("Platform message received:", data.type);
 
       switch (data.type) {
+        case "PLAYER_INFO":
+          this._log("Player connected:", data.player && data.player.address);
+          if (typeof this.onPlayerInfo === "function") this.onPlayerInfo(data.player || {});
+          break;
+
         case "TRANSACTION_SUCCESS":
           this._log("✅ Score submitted on-chain!", { txHash: data.txHash });
           if (typeof this.onSuccess === "function") this.onSuccess(data.txHash);
@@ -109,6 +180,16 @@
         case "TRANSACTION_FAILED":
           console.warn("[ArcadeSDK] ❌ Transaction failed:", data.error);
           if (typeof this.onError === "function") this.onError(data.error);
+          break;
+
+        case "PURCHASE_SUCCESS":
+          this._log("✅ Purchase confirmed:", data.kind, data.skinIndex !== undefined ? data.skinIndex : data.powerUpId, "| tx:", data.txHash);
+          if (typeof this.onPurchaseSuccess === "function") this.onPurchaseSuccess(data);
+          break;
+
+        case "PURCHASE_FAILED":
+          console.warn("[ArcadeSDK] ❌ Purchase failed:", data.kind, "|", data.error);
+          if (typeof this.onPurchaseFailed === "function") this.onPurchaseFailed(data);
           break;
 
         case "WALLET_CONNECTED":
