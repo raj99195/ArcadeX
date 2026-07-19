@@ -9,9 +9,6 @@ import { useChain } from "../context/ChainContext";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 
-
-
-
 const TOURNAMENT_SCORE_ABI = [{ name: "submitTournamentScore", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tournamentId", type: "uint256" }, { name: "score", type: "uint256" }], outputs: [] }];
 const PLATFORM_ABI = [{ name: "recordPlayAndEarn", type: "function", stateMutability: "nonpayable", inputs: [{ name: "gameId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
 const PLATFORM_READ_ABI = [
@@ -28,6 +25,17 @@ const GAME_ITEMS_ABI = [
 const ERC20_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
   { name: "allowance", type: "function", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+];
+
+// ── ClashPot Escrow ABI ────────────────────────────────────────────────────
+const CLASHPOT_ESCROW_ABI = [
+  { 
+    name: "join", 
+    type: "function", 
+    stateMutability: "payable", 
+    inputs: [{ name: "matchId", type: "bytes32" }], 
+    outputs: [] 
+  }
 ];
 
 // SkinPurchased(address indexed player, uint256 indexed tokenId, uint256 indexed gameId, uint256 skinIndex, uint256 price)
@@ -85,6 +93,7 @@ export default function GamePlay() {
   const PLATFORM_ADDRESS = contracts?.platform;
   const TOURNAMENT_ADDRESS = contracts?.tournament;
   const GAME_ITEMS_ADDRESS = contracts?.gameItems;
+  const ESCROW_ADDRESS = contracts?.clashpotEscrow || import.meta.env.VITE_CLASHPOT_ESCROW_ADDRESS;
   const ERC20_TOKEN_ADDRESS = contracts?.token; // ARCADE token on BOTChain, unused when isNativeToken
   const CHAIN_ID = chainId;
   const rewardSymbol = rewardToken || "ARCADE";
@@ -306,6 +315,41 @@ export default function GamePlay() {
     } catch (err) { console.error("[GAME_EVENT] failed:", err); }
   };
 
+  // ── ClashPot Escrow: CLASHPOT_JOIN ────────────────────────────────────────
+  const handleClashPotJoin = async ({ matchKey, stakeWei }) => {
+    if (!address) {
+      sendToGame("CLASHPOT_JOIN_FAILED", { error: "Wallet not connected" });
+      return;
+    }
+    const escrowAddress = ESCROW_ADDRESS;
+    if (!escrowAddress) {
+      console.error("[CLASHPOT_JOIN] ESCROW_ADDRESS not set");
+      sendToGame("CLASHPOT_JOIN_FAILED", { error: "Escrow contract not configured" });
+      return;
+    }
+    try {
+      const { ethers } = await import("ethers");
+      const matchId = ethers.keccak256(ethers.toUtf8Bytes(matchKey));
+      console.log("[CLASHPOT_JOIN] Depositing stake...", { matchKey, matchId, stakeWei, escrowAddress });
+
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address: escrowAddress,
+        abi: CLASHPOT_ESCROW_ABI,
+        functionName: "join",
+        args: [matchId],
+        value: BigInt(stakeWei),
+        chainId: CHAIN_ID,
+      });
+
+      const receipt = await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash, chainId: CHAIN_ID });
+      console.log("[CLASHPOT_JOIN] ✅ Deposit confirmed:", receipt.transactionHash);
+      sendToGame("CLASHPOT_JOIN_SUCCESS", { txHash: receipt.transactionHash });
+    } catch (err) {
+      console.error("[CLASHPOT_JOIN] ❌ Failed:", err);
+      sendToGame("CLASHPOT_JOIN_FAILED", { error: err.shortMessage || err.message || "Deposit failed" });
+    }
+  };
+
   // SDK messages
   useEffect(() => {
     const handleMessage = (event) => {
@@ -319,15 +363,14 @@ export default function GamePlay() {
         submitScore(event.data.score);
       }
       if (event.data?.type === "GET_PLAYER_INFO") {
-    iframeRef.current?.contentWindow?.postMessage({
-        type: "PLAYER_INFO",
-        _platform: true,
-        player: {
-            address: address || "",
-            balance: Number(balance)
-        }
-    }, "*");
-
+        iframeRef.current?.contentWindow?.postMessage({
+            type: "PLAYER_INFO",
+            _platform: true,
+            player: {
+                address: address || "",
+                balance: Number(balance)
+            }
+        }, "*");
       }
       if (event.data?.type === "PURCHASE_SKIN") {
         handlePurchaseSkin(event.data);
@@ -340,6 +383,9 @@ export default function GamePlay() {
       }
       if (event.data?.type === "GAME_EVENT") {
         handleGameEvent(event.data);
+      }
+      if (event.data?.type === "CLASHPOT_JOIN") {
+        handleClashPotJoin(event.data);
       }
     };
     window.addEventListener("message", handleMessage);
