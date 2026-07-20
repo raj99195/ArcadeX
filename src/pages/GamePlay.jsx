@@ -2,6 +2,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useState, useRef } from "react";
 import { useAccount, usePublicClient } from "wagmi";
 import { writeContract, waitForTransactionReceipt, readContract } from "@wagmi/core";
+import { keccak256, toHex } from "viem";
 import { wagmiAdapter } from "../Providers";
 import { useGames } from "../hooks/useGames";
 import { saveScore } from "../lib/gameService";
@@ -316,38 +317,102 @@ export default function GamePlay() {
   };
 
   // ── ClashPot Escrow: CLASHPOT_JOIN ────────────────────────────────────────
+  //
+  // Game iframe se CLASHPOT_JOIN aata hai jab dono players ready hote hain.
+  // Player ke wallet se ClashPotEscrow.join(matchId) call hoti hai stake ke saath.
+  //
+  // matchId formula TEEN jagah bilkul same hona chahiye:
+  //   Frontend :  keccak256(toHex(matchKey))                      <- ye file
+  //   Backend  :  ethers.keccak256(ethers.toUtf8Bytes(matchKey))  <- contractCaller.js
+  //   Contract :  keccak256(abi.encodePacked(roomId))             <- ClashPotEscrow.sol
+  //
   const handleClashPotJoin = async ({ matchKey, stakeWei }) => {
     if (!address) {
       sendToGame("CLASHPOT_JOIN_FAILED", { error: "Wallet not connected" });
       return;
     }
+
     const escrowAddress = ESCROW_ADDRESS;
     if (!escrowAddress) {
       console.error("[CLASHPOT_JOIN] ESCROW_ADDRESS not set");
       sendToGame("CLASHPOT_JOIN_FAILED", { error: "Escrow contract not configured" });
       return;
     }
-    try {
-      const { ethers } = await import("ethers");
-      const matchId = ethers.keccak256(ethers.toUtf8Bytes(matchKey));
-      console.log("[CLASHPOT_JOIN] Depositing stake...", { matchKey, matchId, stakeWei, escrowAddress });
 
+    // stakeWei game se aata hai - validate karo
+    let value;
+    try {
+      value = BigInt(stakeWei);
+      if (value <= 0n) throw new Error("stake <= 0");
+    } catch {
+      console.error("[CLASHPOT_JOIN] Invalid stakeWei:", stakeWei);
+      sendToGame("CLASHPOT_JOIN_FAILED", { error: "Invalid stake amount" });
+      return;
+    }
+
+    try {
+      // viem - ethers dynamic import hata diya (project me ethers nahi hai)
+      const matchId = keccak256(toHex(matchKey));
+
+      console.log("[CLASHPOT_JOIN] Depositing stake...", {
+        matchKey, matchId, stakeWei: value.toString(), escrowAddress,
+      });
+
+      // MST pe chainId NAHI bhejte - warna wallet ka chain-switch popup
+      // hang ho jaata hai. Wallet already MST pe connected hai.
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: escrowAddress,
         abi: CLASHPOT_ESCROW_ABI,
         functionName: "join",
         args: [matchId],
-        value: BigInt(stakeWei),
-        chainId: CHAIN_ID,
+        value,
       });
 
-      const receipt = await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash, chainId: CHAIN_ID });
-      console.log("[CLASHPOT_JOIN] ✅ Deposit confirmed:", receipt.transactionHash);
-      sendToGame("CLASHPOT_JOIN_SUCCESS", { txHash: receipt.transactionHash });
+      console.log("[CLASHPOT_JOIN] tx sent:", hash, "- receipt poll kar raha hu");
+
+      // waitForTransactionReceipt({chainId}) MST RPC pe reliable nahi.
+      // Manual polling - 60 x 2s = 2 min tak.
+      const receipt = await pollReceipt(hash);
+
+      if (!receipt) {
+        // Receipt nahi mila par tx shayad chali gayi - server isFunded() se
+        // khud verify kar lega, isliye success maan ke aage badho.
+        console.warn("[CLASHPOT_JOIN] Receipt timeout - server verify karega");
+        sendToGame("CLASHPOT_JOIN_SUCCESS", { txHash: hash });
+        return;
+      }
+
+      if (receipt.status === "reverted") {
+        console.error("[CLASHPOT_JOIN] Transaction reverted");
+        sendToGame("CLASHPOT_JOIN_FAILED", { error: "Transaction reverted on-chain" });
+        return;
+      }
+
+      console.log("[CLASHPOT_JOIN] Deposit confirmed:", hash);
+      sendToGame("CLASHPOT_JOIN_SUCCESS", { txHash: hash });
+
     } catch (err) {
-      console.error("[CLASHPOT_JOIN] ❌ Failed:", err);
-      sendToGame("CLASHPOT_JOIN_FAILED", { error: err.shortMessage || err.message || "Deposit failed" });
+      console.error("[CLASHPOT_JOIN] Failed:", err);
+      const msg = err.shortMessage || err.message || "Deposit failed";
+      const friendly = /user rejected|denied/i.test(msg) ? "Transaction cancelled" : msg;
+      sendToGame("CLASHPOT_JOIN_FAILED", { error: friendly });
     }
+  };
+
+  /**
+   * Manual receipt polling - MST RPC kabhi-kabhi receipt turant nahi deta.
+   */
+  const pollReceipt = async (hash, attempts = 60, delayMs = 2000) => {
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const r = await publicClient.getTransactionReceipt({ hash });
+        if (r) return r;
+      } catch {
+        // "not found" normal hai jab tak tx mine na ho - retry
+      }
+      await new Promise((res) => setTimeout(res, delayMs));
+    }
+    return null;
   };
 
   // SDK messages
