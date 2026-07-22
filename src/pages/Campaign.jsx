@@ -13,11 +13,11 @@ import { getTasks, verifySocialTask, submitTransaction, verifyTransaction } from
 // TODO: replace these placeholder links with the real ArcadeX / BOT Chain
 // handles once you have them from Brian Wong / the BOT Chain team.
 const SOCIAL_TASKS = [
-  { id: "follow_arcadex_x", index: 2, label: "Follow ArcadeX on X", link: "https://x.com/ArcadeX_gg", placeholder: "Your X username (e.g. @yourhandle)", field: "twitter" },
+  { id: "follow_arcadex_x", index: 2, label: "Follow ArcadeX on X", link: "https://x.com/PlayArcadeX", placeholder: "Your X username (e.g. @yourhandle)", field: "twitter" },
   { id: "follow_botchain_x", index: 3, label: "Follow BOT Chain on X", link: "https://x.com/BOTChain_ai", placeholder: "Your X username (e.g. @yourhandle)", field: "twitter" },
-  { id: "join_arcadex_tg", index: 4, label: "Join ArcadeX Telegram", link: "https://t.me/ArcadeX_community", placeholder: "Your Telegram username", field: "telegram" },
-  { id: "join_botchain_tg", index: 5, label: "Join BOT Chain Telegram", link: "https://t.me/BOTChain_community", placeholder: "Your Telegram username", field: "telegram" },
-  { id: "join_discord", index: 6, label: "Join Discord", link: "https://discord.gg/arcadex", placeholder: "Your Discord username", field: "discord" },
+  { id: "join_arcadex_tg", index: 4, label: "Join ArcadeX Telegram", link: "https://t.me/AracdeX", placeholder: "Your Telegram username", field: "telegram" },
+  { id: "join_botchain_tg", index: 5, label: "Join BOT Chain Telegram", link: "https://t.me/BOTChainNetwork", placeholder: "Your Telegram username", field: "telegram" },
+  { id: "join_discord", index: 6, label: "Join Discord", link: "https://discord.gg/836Mx9XjbB", placeholder: "Your Discord username", field: "discord" },
 ];
 
 export default function Campaign() {
@@ -259,10 +259,7 @@ export default function Campaign() {
               <div style={{ fontFamily: P.raj, fontSize: 11, color: P.textDim, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6 }}>Campaign Reward</div>
               <div style={{ fontFamily: P.orb, fontSize: 18, color: P.textBright }}>20 BOT</div>
             </div>
-            <div>
-              <div style={{ fontFamily: P.raj, fontSize: 11, color: P.textDim, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6 }}>Gas Fee</div>
-              <div style={{ fontFamily: P.orb, fontSize: 18, color: P.textBright }}>Sponsored</div>
-            </div>
+         
             <div>
               <div style={{ fontFamily: P.raj, fontSize: 11, color: P.textDim, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6 }}>Reward Status</div>
               <StatusBadge status={txResult?.verified ? "eligible" : "pending"} />
