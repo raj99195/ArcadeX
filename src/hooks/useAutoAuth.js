@@ -16,8 +16,7 @@
 // it just runs the side effect.
 
 import { useEffect, useRef } from "react";
-import { useAccount, useWalletClient, useChainId } from "wagmi";
-import { CHAINS } from "../config/chains";
+import { useAccount, useWalletClient } from "wagmi";
 
 const TOKEN_KEY = "arcadex_jwt";
 const TOKEN_ADDRESS_KEY = "arcadex_jwt_address"; // which wallet this token belongs to
@@ -44,26 +43,10 @@ function isTokenStillValid(token) {
 export function useAutoAuth() {
   const { address, isConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
-  const connectedChainId = useChainId();
   const signingRef = useRef(false); // guards against double-firing (e.g. fast re-renders, StrictMode)
 
   useEffect(() => {
     if (!isConnected || !address || !walletClient) return;
-
-    // Agar wallet ka current chain, user ke selected chain se match nahi karta
-    // toh sign mat karo — wrong network ka JWT ban jayega.
-    // Navbar ka handleConnect() pehle chain switch karta hai, phir AppKit open
-    // karta hai, toh jab tak useAutoAuth fire hoga tab chain sahi hogi.
-    const savedChainKey = (() => {
-      try { return window.localStorage.getItem("arcadex_selected_chain"); } catch { return null; }
-    })();
-    if (savedChainKey) {
-      const expectedChainId = CHAINS[savedChainKey]?.chainId;
-      if (expectedChainId && connectedChainId !== expectedChainId) {
-        console.warn(`useAutoAuth: wallet on chain ${connectedChainId}, expected ${expectedChainId} — skipping sign`);
-        return;
-      }
-    }
 
     const { token, tokenAddress } = getStoredAuth();
     const tokenBelongsToThisWallet = tokenAddress?.toLowerCase() === address.toLowerCase();
@@ -78,7 +61,18 @@ export function useAutoAuth() {
     const authenticate = async () => {
       try {
         const message = `Sign in to ArcadeX\n${Date.now()}`;
-        const signature = await walletClient.signMessage({ message });
+        // walletClient.signMessage kuch wallets mein EIP-712 format use karta hai
+        // jo ethers.verifyMessage se verify nahi hota — isliye directly
+        // personal_sign use karo jo standard Ethereum prefix lagata hai
+        let signature;
+        if (window.ethereum) {
+          signature = await window.ethereum.request({
+            method: "personal_sign",
+            params: [message, address],
+          });
+        } else {
+          signature = await walletClient.signMessage({ message });
+        }
 
         const res = await fetch("/api/auth", {
           method: "POST",
@@ -103,5 +97,5 @@ export function useAutoAuth() {
     };
 
     authenticate();
-  }, [isConnected, address, walletClient, connectedChainId]);
+  }, [isConnected, address, walletClient]);
 }

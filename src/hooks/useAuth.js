@@ -1,72 +1,74 @@
-// src/hooks/useAuth.js
-import { useState, useEffect, useCallback } from "react";
-import { useAccount, useSignMessage } from "wagmi";
+// api/auth.js
+import { ethers } from "ethers";
+import jwt from "jsonwebtoken";
 
-const TOKEN_KEY = "arcadex_jwt";
-const ADDR_KEY = "arcadex_address";
+function cors(res) {
+  res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN || "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+}
 
-export function useAuth() {
-  const { address, isConnected } = useAccount();
-  const { signMessageAsync } = useSignMessage();
-  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY));
-  const [signing, setSigning] = useState(false);
+export default async function handler(req, res) {
+  cors(res);
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  // Clear token if address changes
-  useEffect(() => {
-    const saved = localStorage.getItem(ADDR_KEY);
-    if (address && saved && saved !== address.toLowerCase()) {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(ADDR_KEY);
-      setToken(null);
+  try {
+    const { address, signature, message } = req.body;
+    if (!address || !signature || !message) {
+      return res.status(400).json({ error: "Missing fields" });
     }
-  }, [address]);
 
-  // Clear on disconnect
-  useEffect(() => {
-    if (!isConnected) {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(ADDR_KEY);
-      setToken(null);
+    // Timestamp check — 5 min window
+    const tsMatch = message.match(/(\d+)$/);
+    if (!tsMatch) return res.status(400).json({ error: "Invalid message format" });
+    const msgAge = Date.now() - parseInt(tsMatch[1]);
+    if (msgAge > 5 * 60 * 1000) {
+      return res.status(400).json({ error: "Message expired — please reconnect" });
     }
-  }, [isConnected]);
 
-  const login = useCallback(async () => {
-    if (!address || signing) return null;
-    setSigning(true);
+    // Signature verify — try both personal_sign formats
+    // Some wallets (WalletConnect, Coinbase) may produce different prefix formats
+    let recovered = null;
+    let verifyError = null;
+
     try {
-      const message = `ArcadeX Login\nWallet: ${address}\nTimestamp: ${Date.now()}`;
-      const signature = await signMessageAsync({ message });
-      const res = await fetch("/api/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address, signature, message }),
+      // Standard: ethers personal_sign (\x19Ethereum Signed Message:\n prefix)
+      recovered = ethers.verifyMessage(message, signature);
+    } catch (e) {
+      verifyError = e.message;
+    }
+
+    // Agar standard verify fail hua — try with explicit hash
+    if (!recovered || recovered.toLowerCase() !== address.toLowerCase()) {
+      try {
+        const msgHash = ethers.hashMessage(message);
+        recovered = ethers.recoverAddress(msgHash, signature);
+      } catch (e2) {
+        // ignore second attempt error
+      }
+    }
+
+    if (!recovered || recovered.toLowerCase() !== address.toLowerCase()) {
+      console.error("Auth signature mismatch:", {
+        expected: address.toLowerCase(),
+        recovered: recovered?.toLowerCase() || "null",
+        messagePreview: message.slice(0, 50),
+        verifyError,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Auth failed");
-      localStorage.setItem(TOKEN_KEY, data.token);
-      localStorage.setItem(ADDR_KEY, address.toLowerCase());
-      setToken(data.token);
-      return data.token;
-    } catch (err) {
-      console.error("Login failed:", err);
-      return null;
-    } finally { setSigning(false); }
-  }, [address, signing, signMessageAsync]);
+      return res.status(401).json({ error: "Invalid signature" });
+    }
 
-  // API call with auto-login
-  const api = useCallback(async (url, options = {}) => {
-    let t = token;
-    if (!t && isConnected) t = await login();
-    return fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(t ? { Authorization: `Bearer ${t}` } : {}),
-        ...options.headers,
-      },
-      body: options.body ? (typeof options.body === "string" ? options.body : JSON.stringify(options.body)) : undefined,
-    });
-  }, [token, isConnected, login]);
+    // JWT — 24hr valid
+    const token = jwt.sign(
+      { address: address.toLowerCase() },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
 
-  return { token, isAuthenticated: !!token, login, signing, api };
+    return res.status(200).json({ token, address: address.toLowerCase() });
+  } catch (err) {
+    console.error("Auth error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
 }
