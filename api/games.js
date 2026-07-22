@@ -89,15 +89,23 @@ export default async function handler(req, res) {
     const user = verifyToken(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     try {
-      // BUG FIX: Firestore mein kuch games lowercase address se save hain,
-      // kuch checksum (mixed-case) se — server.js ki tarah dono query karo.
-      // Sirf ek where() se sirf 2/9 games milti thi production pe.
+      // FIX: Firestore mein creator address 3 formats mein save ho sakta hai:
+      // 1. lowercase:  0xb6d0c5...  (JWT format)
+      // 2. checksum:   0xB6D0C5...  (MetaMask default)
+      // 3. mixed:      0xB6d0C5...  (koi bhi variant)
+      // Teeno formats try karo — sab approved/pending/rejected games milenge
       const lowerAddress = user.address.toLowerCase();
-      const snapLower = await db.collection("games").where("creator", "==", lowerAddress).get();
-      const snapExact = await db.collection("games").where("creator", "==", user.address).get();
-      // Deduplicate by Firestore doc ID
-      const allDocs = [...snapLower.docs, ...snapExact.docs];
-      const uniqueDocs = Array.from(new Map(allDocs.map(d => [d.id, d])).values());
+      
+      // Checksum format manually banao (every other char uppercase pattern se nahi,
+      // Ethereum EIP-55 checksum use karo — simple approach: sab known variants try karo)
+      // Yahan hum Firestore se SAB games fetch karke JS mein filter karte hain —
+      // yeh guaranteed sab games dikhayega chahe address kisi bhi format mein ho
+      const allGamesSnap = await db.collection("games").get();
+      const uniqueDocs = allGamesSnap.docs.filter(d => {
+        const creator = d.data().creator;
+        return creator && creator.toLowerCase() === lowerAddress;
+      });
+
       const games = uniqueDocs
         .map(d => ({ id: d.data().gameId || d.id, ...d.data() }))
         .sort((a, b) => (b.gameId || 0) - (a.gameId || 0));
