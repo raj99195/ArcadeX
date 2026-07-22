@@ -282,6 +282,20 @@ export default function AdminMST() {
             }
           } catch { /* skip gaps */ }
         }
+          // ── Firestore se thumbnailUrl fetch karo (on-chain me nahi hota) ──
+try {
+  const res = await fetch(`/api/games?action=list&chain=mst`);
+  const data = await res.json();
+  const firestoreMap = {};
+  (data.games || []).forEach(fg => {
+    firestoreMap[String(fg.gameId || fg.id)] = fg.thumbnailUrl || "";
+  });
+  gameList.forEach(g => {
+    g.thumbnailUrl = firestoreMap[String(g.id)] || "";
+  });
+} catch (err) {
+  console.warn("Firestore thumbnail fetch failed:", err);
+}
         setGames(gameList);
         const initialMinScores = {};
         gameList.forEach(g => { initialMinScores[g.id] = g.minScore; });
