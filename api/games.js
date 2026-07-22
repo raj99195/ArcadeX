@@ -89,11 +89,17 @@ export default async function handler(req, res) {
     const user = verifyToken(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     try {
-      const snap = await db.collection("games")
-        .where("creator", "==", user.address)
-        .get();
-      const games = snap.docs
-        .map(d => ({ id: d.data().gameId, ...d.data() }))
+      // BUG FIX: Firestore mein kuch games lowercase address se save hain,
+      // kuch checksum (mixed-case) se — server.js ki tarah dono query karo.
+      // Sirf ek where() se sirf 2/9 games milti thi production pe.
+      const lowerAddress = user.address.toLowerCase();
+      const snapLower = await db.collection("games").where("creator", "==", lowerAddress).get();
+      const snapExact = await db.collection("games").where("creator", "==", user.address).get();
+      // Deduplicate by Firestore doc ID
+      const allDocs = [...snapLower.docs, ...snapExact.docs];
+      const uniqueDocs = Array.from(new Map(allDocs.map(d => [d.id, d])).values());
+      const games = uniqueDocs
+        .map(d => ({ id: d.data().gameId || d.id, ...d.data() }))
         .sort((a, b) => (b.gameId || 0) - (a.gameId || 0));
       return res.status(200).json({ games });
     } catch (err) { return res.status(500).json({ error: err.message }); }
