@@ -102,6 +102,7 @@ export default function GamePlay() {
   const publicClient = usePublicClient();
 
   const [score, setScore] = useState(0);
+  const [showHelpModal, setShowHelpModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [txHash, setTxHash] = useState("");
@@ -583,6 +584,7 @@ export default function GamePlay() {
   const creatorReward = Math.round(rewardRate * creatorSplit / 100 * 100) / 100;
   const shortAddr = (a) => a ? a.slice(0, 6) + "..." + a.slice(-4) : "?";
   const thumbnail = game.thumbnailUrl || game.thumbnail || game.image || null;
+  const hasHelpContent = !!(game.helpContent && Object.values(game.helpContent).some(v => v && v.trim()));
 
   return (
     <div style={{ minHeight: "calc(100vh - 54px)", background: C.bg }}>
@@ -615,6 +617,12 @@ export default function GamePlay() {
 
         <div style={{ position: "relative", zIndex: 1, padding: isMobile ? "14px 16px" : "16px 32px", display: "flex", alignItems: "center", gap: 14 }}>
           <button onClick={() => navigate(-1)} style={{ padding: "7px 14px", background: "rgba(0,0,0,0.5)", border: `1px solid ${C.border2}`, borderRadius: 7, color: "#a67fff", fontSize: 12, cursor: "pointer", fontFamily: C.raj, fontWeight: 700, backdropFilter: "blur(8px)", flexShrink: 0 }}>← Back</button>
+
+          {hasHelpContent && (
+            <button onClick={() => setShowHelpModal(true)} style={{ padding: "7px 14px", background: "rgba(123,47,255,0.15)", border: `1px solid ${C.border2}`, borderRadius: 7, color: C.purpleL, fontSize: 12, cursor: "pointer", fontFamily: C.raj, fontWeight: 700, backdropFilter: "blur(8px)", flexShrink: 0, whiteSpace: "nowrap" }}>
+              ❓ How to Play
+            </button>
+          )}
 
           {/* Thumbnail icon */}
           <div style={{ width: isMobile ? 48 : 56, height: isMobile ? 48 : 56, borderRadius: 10, overflow: "hidden", border: `2px solid ${C.border2}`, flexShrink: 0, background: "#0e0c1a", boxShadow: "0 4px 20px rgba(0,0,0,0.5)" }}>
@@ -841,6 +849,46 @@ export default function GamePlay() {
           </div>
         </div>
       </div>
+
+      {showHelpModal && (
+        <div onClick={() => setShowHelpModal(false)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.card || "#0d0b1a", border: `1px solid ${C.border2}`, borderRadius: 16, padding: 28, width: "100%", maxWidth: 480, maxHeight: "80vh", overflowY: "auto", position: "relative" }}>
+            <button onClick={() => setShowHelpModal(false)} style={{ position: "absolute", top: 14, right: 14, background: "rgba(123,47,255,0.08)", border: `1px solid ${C.border2}`, borderRadius: 6, color: "#a67fff", fontSize: 12, padding: "4px 10px", cursor: "pointer", fontFamily: C.raj, fontWeight: 700 }}>✕ Close</button>
+            <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 18, color: "#fff", marginBottom: 18 }}>❓ How to Play</div>
+
+            {game.helpContent?.objective && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>🎯 Objective</div>
+                <div style={{ fontSize: 13, color: "#c4a0ff", fontFamily: C.raj, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{game.helpContent.objective}</div>
+              </div>
+            )}
+            {game.helpContent?.controls && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>🎮 Controls</div>
+                <div style={{ fontSize: 13, color: "#c4a0ff", fontFamily: C.raj, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{game.helpContent.controls}</div>
+              </div>
+            )}
+            {game.helpContent?.instructions && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>📝 Instructions</div>
+                <div style={{ fontSize: 13, color: "#c4a0ff", fontFamily: C.raj, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{game.helpContent.instructions}</div>
+              </div>
+            )}
+            {game.helpContent?.tips && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>💡 Tips</div>
+                <div style={{ fontSize: 13, color: "#c4a0ff", fontFamily: C.raj, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{game.helpContent.tips}</div>
+              </div>
+            )}
+            {game.helpContent?.videoUrl && (
+              <div>
+                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>▶️ Tutorial Video</div>
+                <a href={game.helpContent.videoUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: C.cyan, fontFamily: C.raj, wordBreak: "break-all" }}>{game.helpContent.videoUrl}</a>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

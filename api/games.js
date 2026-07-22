@@ -249,7 +249,7 @@ export default async function handler(req, res) {
 
   // ── POST update-game (creator) ──
   if (req.method === "POST" && action === "update-game") {
-    const { gameId, rewardRate, rewardRateNative } = req.body;
+    const { gameId, rewardRate, rewardRateNative, helpContent } = req.body;
     try {
       const gameRef = db.collection("games").doc(String(gameId));
       const game = await gameRef.get();
@@ -258,27 +258,17 @@ export default async function handler(req, res) {
       const updates = {};
       if (rewardRate != null) updates.rewardRate = parseInt(rewardRate);
       if (rewardRateNative != null) updates.rewardRateNative = parseInt(rewardRateNative);
+      if (helpContent != null) {
+        updates.helpContent = {
+          objective: (helpContent.objective || "").trim(),
+          controls: (helpContent.controls || "").trim(),
+          instructions: (helpContent.instructions || "").trim(),
+          tips: (helpContent.tips || "").trim(),
+          videoUrl: (helpContent.videoUrl || "").trim(),
+        };
+      }
       if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
       await gameRef.update(updates);
-      return res.status(200).json({ success: true });
-    } catch (err) { return res.status(500).json({ error: err.message }); }
-  }
-
-  // ── POST admin-update-reward (admin only — updates Firestore rewardRateNative) ──
-  if (req.method === "POST" && action === "admin-update-reward") {
-    const ADMIN_ADDR = process.env.VITE_ADMIN_ADDRESS?.toLowerCase();
-    if (!ADMIN_ADDR || user.address?.toLowerCase() !== ADMIN_ADDR) {
-      return res.status(403).json({ error: "Admin only" });
-    }
-    const { gameId, rewardRateNative } = req.body;
-    if (!gameId || rewardRateNative == null) {
-      return res.status(400).json({ error: "gameId and rewardRateNative required" });
-    }
-    try {
-      const gameRef = db.collection("games").doc(String(gameId));
-      const snap = await gameRef.get();
-      if (!snap.exists) return res.status(404).json({ error: "Game not found in Firestore" });
-      await gameRef.update({ rewardRateNative: Number(rewardRateNative), updatedAt: new Date() });
       return res.status(200).json({ success: true });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }

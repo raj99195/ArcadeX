@@ -48,9 +48,20 @@ export default function CreatorGameDetail() {
   const { chainName, explorerUrl, rewardToken, minRewardRate, maxRewardRate, isNativeToken } = useChain();
   const game = games.find(g => String(g.id) === String(gameId) || String(g.gameId) === String(gameId));
 
+  // useCreatorGames() fetches asynchronously — on first render `games` is
+  // still empty, so `game` is briefly undefined even though it's about to
+  // load. Without this, "Game not found" flashes for a second before the
+  // real page shows up. Give it a few seconds before treating an empty
+  // match as genuinely "not found".
+  const [waitedForGames, setWaitedForGames] = useState(false);
+  useEffect(() => {
+    if (games.length > 0) { setWaitedForGames(true); return; }
+    const t = setTimeout(() => setWaitedForGames(true), 4000);
+    return () => clearTimeout(t);
+  }, [games.length]);
+
   // Fixed ranges per token type — same convention as Creator.jsx's publish form
-  const ARCADE_MIN = 5, ARCADE_MAX = 500;
-  const NATIVE_MIN = 1, NATIVE_MAX = 2;
+  // (ARCADE_MIN/MAX, NATIVE_MIN/MAX removed — were only used by the reward-rate edit card)
 
   const [activeTab, setActiveTab] = useState("overview");
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -63,9 +74,9 @@ export default function CreatorGameDetail() {
   const [loading, setLoading] = useState(true);
 
   // Edit settings
-  const [editRewardRate, setEditRewardRate] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState("");
+  const [helpForm, setHelpForm] = useState({ objective: "", controls: "", instructions: "", tips: "", videoUrl: "" });
+  const [savingHelp, setSavingHelp] = useState(false);
+  const [helpMsg, setHelpMsg] = useState("");
 
   const [statsError, setStatsError] = useState("");
   const [showSDKTest, setShowSDKTest] = useState(false);
@@ -78,7 +89,13 @@ export default function CreatorGameDetail() {
 
   useEffect(() => {
     if (!game) return;
-    setEditRewardRate(String((isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50)));
+    setHelpForm({
+      objective: game.helpContent?.objective || "",
+      controls: game.helpContent?.controls || "",
+      instructions: game.helpContent?.instructions || "",
+      tips: game.helpContent?.tips || "",
+      videoUrl: game.helpContent?.videoUrl || "",
+    });
     const fetchStats = async () => {
       setLoading(true);
       setStatsError("");
@@ -126,13 +143,24 @@ export default function CreatorGameDetail() {
     setTimeout(() => setCopied(""), 2000);
   };
 
-  if (!game) return (
-    <div style={{ minHeight: "calc(100vh - 54px)", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12 }}>
-      <div style={{ fontSize: 48 }}>🎮</div>
-      <div style={{ fontFamily: C.raj, fontSize: 16, color: C.purpleL, fontWeight: 700 }}>Game not found</div>
-      <button onClick={() => navigate("/publish")} style={{ padding: "8px 20px", background: "rgba(123,47,255,0.1)", border: `1px solid ${C.border2}`, borderRadius: 8, color: "#a67fff", fontSize: 12, cursor: "pointer", fontFamily: C.raj }}>← Back to Dashboard</button>
-    </div>
-  );
+  if (!game) {
+    if (!waitedForGames) {
+      return (
+        <div style={{ minHeight: "calc(100vh - 54px)", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12 }}>
+          <div style={{ width: 32, height: 32, borderRadius: "50%", border: `3px solid ${C.border2}`, borderTopColor: C.purpleL, animation: "cgd-spin 0.7s linear infinite" }} />
+          <style>{`@keyframes cgd-spin { to { transform: rotate(360deg); } }`}</style>
+          <div style={{ fontFamily: C.raj, fontSize: 13, color: C.dimMore }}>Loading game...</div>
+        </div>
+      );
+    }
+    return (
+      <div style={{ minHeight: "calc(100vh - 54px)", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 48 }}>🎮</div>
+        <div style={{ fontFamily: C.raj, fontSize: 16, color: C.purpleL, fontWeight: 700 }}>Game not found</div>
+        <button onClick={() => navigate("/publish")} style={{ padding: "8px 20px", background: "rgba(123,47,255,0.1)", border: `1px solid ${C.border2}`, borderRadius: 8, color: "#a67fff", fontSize: 12, cursor: "pointer", fontFamily: C.raj }}>← Back to Dashboard</button>
+      </div>
+    );
+  }
 
   const rewardRate = (isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50);
   const playerReward = Math.floor(rewardRate * 80 / 100);
@@ -441,55 +469,62 @@ export default function CreatorGameDetail() {
             </div>
 
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px" }}>
-              <div style={{ fontSize: 9, color: C.dimMore, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 14 }}>
-                Reward Rate {isNativeToken ? "(Native — MST)" : "(ARCADE)"}
+              <div style={{ fontSize: 9, color: C.dimMore, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 6 }}>
+                ❓ How to Play
               </div>
-              <div style={{ fontSize: 12, color: C.dimMore, fontFamily: C.raj, marginBottom: 12, lineHeight: 1.5 }}>
-                Set how many {rewardToken || "ARCADE"} tokens players earn per play on {chainName || "this chain"}. 80% goes to player, 20% to you.
-                {isNativeToken && <span style={{ color: C.amber || "#ffaa00" }}> Capped {NATIVE_MIN}–{NATIVE_MAX} since MSTC carries real value.</span>}
+              <div style={{ fontSize: 12, color: C.dimMore, fontFamily: C.raj, marginBottom: 16, lineHeight: 1.5 }}>
+                Shown to players via a "How to Play" button on the game page. Leave fields blank if not applicable — the button only appears once you've added something here.
               </div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <input value={editRewardRate} onChange={e => setEditRewardRate(e.target.value)} type="number" min={isNativeToken ? NATIVE_MIN : ARCADE_MIN} max={isNativeToken ? NATIVE_MAX : ARCADE_MAX}
-                  style={{ flex: 1, padding: "10px 14px", background: "rgba(0,0,0,0.4)", border: `1px solid ${C.border2}`, borderRadius: 8, color: "#d4b8ff", fontSize: 13, fontFamily: C.raj }} />
-                <span style={{ color: C.dimMore, fontFamily: C.raj, fontSize: 12 }}>{rewardToken || "ARCADE"}/play</span>
+
+              {[
+                ["objective", "Objective", "What's the goal of the game?"],
+                ["controls", "Controls", "e.g. Arrow keys to move, Space to jump"],
+                ["instructions", "Instructions", "Step-by-step how to play"],
+                ["tips", "Tips", "Any strategy tips for players"],
+              ].map(([key, label, placeholder]) => (
+                <div key={key} style={{ marginBottom: 14 }}>
+                  <label style={{ display: "block", fontSize: 10.5, color: C.dim, fontFamily: C.raj, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
+                  <textarea
+                    value={helpForm[key]}
+                    onChange={e => setHelpForm(f => ({ ...f, [key]: e.target.value }))}
+                    placeholder={placeholder}
+                    rows={key === "instructions" ? 4 : 2}
+                    style={{ width: "100%", boxSizing: "border-box", padding: "10px 14px", background: "rgba(0,0,0,0.4)", border: `1px solid ${C.border2}`, borderRadius: 8, color: "#d4b8ff", fontSize: 12.5, fontFamily: C.raj, resize: "vertical" }}
+                  />
+                </div>
+              ))}
+
+              <div style={{ marginBottom: 6 }}>
+                <label style={{ display: "block", fontSize: 10.5, color: C.dim, fontFamily: C.raj, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>Tutorial Video URL (optional)</label>
+                <input
+                  value={helpForm.videoUrl}
+                  onChange={e => setHelpForm(f => ({ ...f, videoUrl: e.target.value }))}
+                  placeholder="https://youtube.com/..."
+                  style={{ width: "100%", boxSizing: "border-box", padding: "10px 14px", background: "rgba(0,0,0,0.4)", border: `1px solid ${C.border2}`, borderRadius: 8, color: "#d4b8ff", fontSize: 12.5, fontFamily: C.raj }}
+                />
               </div>
-              <div style={{ fontSize: 10, color: C.dimMore, fontFamily: C.raj, marginTop: 8 }}>
-                Player gets: <span style={{ color: C.cyan }}>{Math.floor(Number(editRewardRate) * 0.8)} {rewardToken || "ARCADE"}</span> · Creator gets: <span style={{ color: C.purpleL }}>{Math.floor(Number(editRewardRate) * 0.2)} {rewardToken || "ARCADE"}</span>
-              </div>
-              {saveMsg && <div style={{ marginTop: 10, fontSize: 11, color: saveMsg.includes("✓") ? C.green : C.red, fontFamily: C.raj }}>{saveMsg}</div>}
+
+              {helpMsg && <div style={{ marginTop: 10, fontSize: 11, color: helpMsg.includes("✓") ? C.green : C.red, fontFamily: C.raj }}>{helpMsg}</div>}
               <button onClick={async () => {
-                setSaving(true); setSaveMsg("");
+                setSavingHelp(true); setHelpMsg("");
                 try {
-                  const clampMin = isNativeToken ? NATIVE_MIN : ARCADE_MIN;
-                  const clampMax = isNativeToken ? NATIVE_MAX : ARCADE_MAX;
-                  const rawRate = Number(editRewardRate);
-                  const safeRate = Math.max(clampMin, Math.min(clampMax, isNaN(rawRate) ? clampMin : rawRate));
                   const token = localStorage.getItem("arcadex_jwt");
-                  // Only the field for the currently active chain's token type
-                  // gets updated — the other chain's rate is left untouched.
-                  const body = { gameId: game.gameId || game.id };
-                  if (isNativeToken) body.rewardRateNative = safeRate;
-                  else body.rewardRate = safeRate;
                   const res = await fetch("/api/games?action=update-game", {
                     method: "POST",
                     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-                    body: JSON.stringify(body),
+                    body: JSON.stringify({ gameId: game.gameId || game.id, helpContent: helpForm }),
                   });
                   const data = await res.json();
                   if (!res.ok) throw new Error(data.error || "Update failed");
-                  setSaveMsg("✓ Saved!");
-                } catch (e) { setSaveMsg("Error: " + e.message); }
-                finally { setSaving(false); }
-              }} disabled={saving}
-                style={{ marginTop: 14, padding: "10px 24px", background: saving ? "rgba(123,47,255,0.2)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 8, color: saving ? C.dimMore : "#fff", fontSize: 12, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", fontFamily: C.raj, letterSpacing: "1px" }}>
-                {saving ? "Saving..." : "Save Changes"}
+                  setHelpMsg("✓ Saved!");
+                } catch (e) { setHelpMsg("Error: " + e.message); }
+                finally { setSavingHelp(false); }
+              }} disabled={savingHelp}
+                style={{ marginTop: 8, padding: "10px 24px", background: savingHelp ? "rgba(123,47,255,0.2)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 8, color: savingHelp ? C.dimMore : "#fff", fontSize: 12, fontWeight: 700, cursor: savingHelp ? "not-allowed" : "pointer", fontFamily: C.raj, letterSpacing: "1px" }}>
+                {savingHelp ? "Saving..." : "Save How to Play"}
               </button>
             </div>
 
-            <div style={{ background: "rgba(255,68,68,0.04)", border: "1px solid rgba(255,68,68,0.15)", borderRadius: 12, padding: "16px 20px" }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.red, fontFamily: C.raj, marginBottom: 6 }}>⚠ Danger Zone</div>
-              <div style={{ fontSize: 11, color: C.dimMore, fontFamily: C.raj, lineHeight: 1.5 }}>Removing a game requires an on-chain transaction. Contact admin for help.</div>
-            </div>
           </div>
         )}
       </div>

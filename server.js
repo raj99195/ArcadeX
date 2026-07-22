@@ -401,7 +401,7 @@ async function startServer() {
       } catch (err) { return res.status(500).json({ error: err.message }); }
     }
     if (action === "update-game") {
-      const { gameId, rewardRate, rewardRateNative } = req.body;
+      const { gameId, rewardRate, rewardRateNative, helpContent } = req.body;
       try {
         const ref = db.collection("games").doc(String(gameId));
         const game = await ref.get();
@@ -410,32 +410,21 @@ async function startServer() {
         const updates = {};
         if (rewardRate != null) updates.rewardRate = parseInt(rewardRate);
         if (rewardRateNative != null) updates.rewardRateNative = parseInt(rewardRateNative);
+        if (helpContent != null) {
+          // Trim + only keep known fields — avoid storing arbitrary junk keys
+          updates.helpContent = {
+            objective: (helpContent.objective || "").trim(),
+            controls: (helpContent.controls || "").trim(),
+            instructions: (helpContent.instructions || "").trim(),
+            tips: (helpContent.tips || "").trim(),
+            videoUrl: (helpContent.videoUrl || "").trim(),
+          };
+        }
         if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
         await ref.update(updates);
         return res.json({ success: true });
       } catch (err) { return res.status(500).json({ error: err.message }); }
     }
-
-    // ── POST admin-update-reward (admin only — both BOTChain and MST admins allowed) ──
-    if (action === "admin-update-reward") {
-      const MST_ADMIN_ADDR = process.env.VITE_MST_ADMIN_ADDRESS?.toLowerCase();
-      const allowedAdmins = [ADMIN_ADDR, MST_ADMIN_ADDR].filter(Boolean);
-      if (!allowedAdmins.includes(user.address?.toLowerCase())) {
-        return res.status(403).json({ error: "Admin only" });
-      }
-      const { gameId, rewardRateNative } = req.body;
-      if (!gameId || rewardRateNative == null) {
-        return res.status(400).json({ error: "gameId and rewardRateNative required" });
-      }
-      try {
-        const ref = db.collection("games").doc(String(gameId));
-        const snap = await ref.get();
-        if (!snap.exists) return res.status(404).json({ error: "Game not found in Firestore" });
-        await ref.update({ rewardRateNative: Number(rewardRateNative), updatedAt: new Date() });
-        return res.json({ success: true });
-      } catch (err) { return res.status(500).json({ error: err.message }); }
-    }
-
     res.status(400).json({ error: "Invalid action" });
   });
   // ══════════════════════════════════════
