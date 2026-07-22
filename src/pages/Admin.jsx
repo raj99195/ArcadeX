@@ -310,7 +310,7 @@ export default function Admin() {
     setLeaderboardMsg("");
     try {
       const token = localStorage.getItem("arcadex_jwt");
-      const res = await fetch("/api/admin/refresh-badge-leaderboard", {
+      const res = await fetch("/api/admin/games?action=refresh-leaderboard", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
