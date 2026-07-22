@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAppKit } from "@reown/appkit/react";
-import { useAccount } from "wagmi";
+import { useAccount, useConnect } from "wagmi";
+import { injected } from "wagmi/connectors";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useChain } from "../context/ChainContext";
@@ -11,12 +12,13 @@ const LOGO_SIZE = 28;
 export default function Navbar() {
   const { open } = useAppKit();
   const { isConnected, address } = useAccount();
+  const { connectAsync } = useConnect();
   const navigate = useNavigate();
   const location = useLocation();
   const { balance } = useArcadeBalance();
   
   // Need rewardToken to display ARCADE or MSTC dynamically
-  const { chainName, clearChainSelection, rewardToken } = useChain();
+  const { chainName, clearChainSelection, rewardToken, activeChain } = useChain();
   
   const [ddOpen, setDdOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -25,6 +27,63 @@ export default function Navbar() {
   
   const ddRef = useRef(null);
   const menuRef = useRef(null);
+
+  // Connect button click flow:
+  // 1. Agar MetaMask available hai → directly wagmi injected connector use karo
+  //    with correct chainId. AppKit ka open() internally BOTChain (networks[0])
+  //    pe switchChain call karta hai — yeh bypass karta hai woh problem.
+  // 2. Agar MetaMask nahi (mobile/WalletConnect) → AppKit open() fallback.
+  const handleConnect = async () => {
+    if (!activeChain) { open(); return; }
+
+    if (window.ethereum) {
+      const chainIdHex = "0x" + activeChain.chainId.toString(16);
+
+      // Step 1: Pehle MetaMask mein correct chain ensure karo
+      try {
+        await window.ethereum.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: chainIdHex }],
+        });
+      } catch (switchErr) {
+        if (switchErr.code === 4902 || switchErr.code === -32603) {
+          try {
+            await window.ethereum.request({
+              method: "wallet_addEthereumChain",
+              params: [{
+                chainId: chainIdHex,
+                chainName: activeChain.name,
+                rpcUrls: [activeChain.rpcUrl],
+                nativeCurrency: activeChain.nativeCurrency,
+                blockExplorerUrls: activeChain.explorerUrl ? [activeChain.explorerUrl] : [],
+              }],
+            });
+          } catch (_) { open(); return; } // user rejected add → AppKit fallback
+        } else if (switchErr.code === 4001) {
+          return; // user rejected switch → do nothing
+        }
+      }
+
+      // Step 2: Ab wagmi ko directly connect karo injected connector se.
+      // AppKit open() NAHI — woh internally switchChain(BOTChain) karta hai.
+      // wagmi connectAsync with chainId = MetaMask pehle se correct chain pe hai,
+      // toh koi extra switch request nahi aayegi.
+      try {
+        await connectAsync({
+          connector: injected(),
+          chainId: activeChain.chainId,
+        });
+      } catch (connErr) {
+        if (!connErr?.message?.includes("Already connected")) {
+          console.warn("connectAsync failed, falling back to AppKit:", connErr.message);
+          open(); // last resort fallback
+        }
+      }
+    } else {
+      // No MetaMask (mobile browser, WalletConnect etc.) → AppKit handle kare
+      open();
+    }
+  };
 
   const shortAddress = (addr) => addr ? addr.slice(0, 5) + "..." + addr.slice(-3) : "";
   const isActive = (path) => location.pathname === path;
@@ -200,7 +259,7 @@ export default function Navbar() {
               <span style={{ fontFamily: "monospace", fontSize: 10, color: "#b8a8e0" }}>{shortAddress(address)}</span>
             </button>
           ) : (
-            <button onClick={() => open()} style={{ padding: "7px 18px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 12, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", boxShadow: "0 0 16px rgba(123,47,255,0.35)", transition: "all 0.2s" }}
+            <button onClick={handleConnect} style={{ padding: "7px 18px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 12, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", boxShadow: "0 0 16px rgba(123,47,255,0.35)", transition: "all 0.2s" }}
               onMouseEnter={e => { e.currentTarget.style.background = "linear-gradient(135deg,#8f44ff,#6b2fe8)"; e.currentTarget.style.boxShadow = "0 0 24px rgba(123,47,255,0.55)"; }}
               onMouseLeave={e => { e.currentTarget.style.background = "linear-gradient(135deg,#7B2FFF,#5a1fd4)"; e.currentTarget.style.boxShadow = "0 0 16px rgba(123,47,255,0.35)"; }}
             >
@@ -217,7 +276,7 @@ export default function Navbar() {
                 {shortAddress(address)}
               </button>
             ) : (
-              <button onClick={() => open()} style={{ padding: "6px 12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
+              <button onClick={handleConnect} style={{ padding: "6px 12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
                 Connect
               </button>
             )}

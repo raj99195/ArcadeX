@@ -188,17 +188,49 @@ export default function ChainSelector() {
 
   const handleSelect = async (chain) => {
     setError("");
-    if (!isConnected) {
-      setChainKey(chain.key);
-      return;
-    }
     setSwitchingKey(chain.key);
     try {
-      await switchChainAsync({ chainId: chain.chainId });
+      // Always attempt to add/switch the chain in MetaMask first — whether
+      // connected or not. This ensures MetaMask is already on the correct
+      // chain before AppKit's wallet-connect flow runs, preventing AppKit
+      // from defaulting to BOTChain (wagmiNetworks[0]) on first visit.
+      if (window.ethereum) {
+        const chainIdHex = "0x" + chain.chainId.toString(16);
+        try {
+          // Try switching first (works if chain already added)
+          await window.ethereum.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: chainIdHex }],
+          });
+        } catch (switchErr) {
+          // 4902 = chain not added yet — add it
+          if (switchErr.code === 4902 || switchErr.code === -32603) {
+            await window.ethereum.request({
+              method: "wallet_addEthereumChain",
+              params: [{
+                chainId: chainIdHex,
+                chainName: chain.name,
+                rpcUrls: [chain.rpcUrl],
+                nativeCurrency: chain.nativeCurrency,
+                blockExplorerUrls: chain.explorerUrl ? [chain.explorerUrl] : [],
+              }],
+            });
+          } else if (!switchErr.message?.includes("rejected")) {
+            throw switchErr;
+          }
+        }
+      }
+
+      // If already connected via wagmi, also switch through wagmi so
+      // useAccount()/useChainId() hooks update correctly
+      if (isConnected) {
+        await switchChainAsync({ chainId: chain.chainId });
+      }
+
       setChainKey(chain.key);
     } catch (err) {
       setError(
-        err.message?.includes("rejected")
+        err.message?.includes("rejected") || err.code === 4001
           ? "Switch cancelled — try again when you're ready."
           : `Couldn't switch to ${chain.name}. Add the network in your wallet and try again.`
       );

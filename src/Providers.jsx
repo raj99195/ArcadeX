@@ -7,11 +7,6 @@ import { ChainProvider } from "./context/ChainContext";
 import { CHAIN_LIST } from "./config/chains";
 import { useAutoAuth } from "./hooks/useAutoAuth";
 
-// ── Build wagmi network list dynamically from the chain registry ──────────
-// Only chains with a real chainId + rpcUrl get registered with wagmi —
-// "coming_soon" chains with chainId: null (like MST before launch) are
-// skipped automatically. The moment MST's chainId/rpcUrl are filled in and
-// flipped to "live", it appears here with zero code changes needed.
 const wagmiNetworks = CHAIN_LIST
   .filter(c => c.chainId && c.rpcUrl)
   .map(c =>
@@ -26,9 +21,6 @@ const wagmiNetworks = CHAIN_LIST
     })
   );
 
-// Fallback safety: wagmi/Reown require at least one network. This should
-// never trigger in practice since BOTChain is always live, but guards
-// against a misconfigured registry breaking the entire app on boot.
 if (wagmiNetworks.length === 0) {
   throw new Error(
     "No chains with a valid chainId+rpcUrl found in chains.js — check that at least one chain has status 'live' with chainId and rpcUrl set."
@@ -38,17 +30,40 @@ if (wagmiNetworks.length === 0) {
 const projectId = import.meta.env.VITE_REOWN_PROJECT_ID;
 const queryClient = new QueryClient();
 
+// Read selected chain from localStorage
+const savedChainKey = (() => {
+  try { return window.localStorage.getItem("arcadex_selected_chain"); } catch { return null; }
+})();
+const savedNetwork = savedChainKey
+  ? wagmiNetworks.find(n => {
+      const chain = CHAIN_LIST.find(c => c.key === savedChainKey);
+      return chain && n.id === chain.chainId;
+    })
+  : null;
+
+const defaultNetwork = savedNetwork ?? wagmiNetworks[0];
+
+// KEY FIX: AppKit internally tries to add/connect networks[0] when user clicks
+// "Connect Wallet" — defaultNetwork sirf UI default set karta hai, actual
+// chain request networks array ki FIRST entry se aati hai.
+// Isliye selected chain ko array mein PEHLE rakho — baaki chains baad mein.
+// wagmiAdapter ke paas sab chains rehti hain (chain-switching ke liye),
+// AppKit ko selected-first order milta hai.
+const appKitNetworks = savedNetwork
+  ? [savedNetwork, ...wagmiNetworks.filter(n => n.id !== savedNetwork.id)]
+  : wagmiNetworks;
+
 const wagmiAdapter = new WagmiAdapter({
-  networks: wagmiNetworks,
+  networks: wagmiNetworks, // wagmi ke paas sab chains (switching support)
   projectId,
   ssr: false,
 });
 
 createAppKit({
   adapters: [wagmiAdapter],
-  networks: wagmiNetworks,
+  networks: appKitNetworks, // selected chain PEHLE — yahi fix hai
   projectId,
-  defaultNetwork: wagmiNetworks[0],
+  defaultNetwork,
   metadata: {
     name: "ArcadeX",
     description: "Play. Earn. Build — On Any Chain.",
@@ -71,19 +86,6 @@ createAppKit({
 
 export { wagmiAdapter };
 
-// NOTE: The old exported constants (ARCADE_TOKEN_ADDRESS, PLATFORM_ADDRESS,
-// CHAIN_ID, etc.) are intentionally removed. Every page should now pull
-// these from useChain() (see src/context/ChainContext.jsx) instead of
-// importing them from here — that's the whole point of the registry.
-// If you see an import error for one of these old names somewhere, that
-// file still needs to be refactored to use useChain().
-
-// Tiny wrapper so useAutoAuth() (a hook) can run inside the WagmiProvider
-// tree, where useAccount()/useWalletClient() are actually available.
-// It renders nothing — purely a side-effect mount point. Without this,
-// arcadex_jwt never gets set and every JWT-gated route (comments, likes,
-// score submission, admin actions, badge claims) silently fails with
-// "Unauthorized".
 function AutoAuth() {
   useAutoAuth();
   return null;
