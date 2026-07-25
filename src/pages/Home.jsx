@@ -335,7 +335,7 @@ export default function Home() {
                       : isEnter
                         ? "cardSlideIn 0.4s cubic-bezier(0.4,0,0.2,1) forwards"
                         : "activeGlow 2.5s ease-in-out infinite",
-                  }} onClick={() => navigate(`/games/${games[ci]?.id}`)}>
+                  }} onClick={() => navigate(`/play/${games[ci]?.id}`)}>
                     {/* Gloss */}
                     <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "44%", background: "linear-gradient(180deg,rgba(255,255,255,0.05) 0%,transparent 100%)", borderRadius: "14px 14px 0 0", pointerEvents: "none", zIndex: 6 }} />
                     {/* Icon badge */}

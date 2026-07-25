@@ -30,12 +30,12 @@ const ERC20_ABI = [
 
 // ── ClashPot Escrow ABI ────────────────────────────────────────────────────
 const CLASHPOT_ESCROW_ABI = [
-  { 
-    name: "join", 
-    type: "function", 
-    stateMutability: "payable", 
-    inputs: [{ name: "matchId", type: "bytes32" }], 
-    outputs: [] 
+  {
+    name: "join",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [{ name: "matchId", type: "bytes32" }],
+    outputs: []
   }
 ];
 
@@ -106,7 +106,7 @@ export default function GamePlay() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [txHash, setTxHash] = useState("");
-  const [submitError, setSubmitError] = useState("");
+  const [submitError, setSubmitError] = useState(null); // null | { type, icon, title, msg }
   const [gameLoading, setGameLoading] = useState(true);
   const [tokensEarned, setTokensEarned] = useState(0);
   const [totalPlays, setTotalPlays] = useState(0);
@@ -114,7 +114,7 @@ export default function GamePlay() {
   const [creatorProfile, setCreatorProfile] = useState(null);
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
-  const [playerSplit, setPlayerSplit] = useState(80); // default 80% until on-chain value loads
+  const [playerSplit, setPlayerSplit] = useState(80);
   const [creatorSplit, setCreatorSplit] = useState(20);
   const [comments, setComments] = useState([]);
   const [commentText, setCommentText] = useState("");
@@ -124,6 +124,7 @@ export default function GamePlay() {
   const iframeRef = useRef(null);
   const submittingRef = useRef(false);
   const { balance } = useArcadeBalance();
+
   useEffect(() => {
     const h = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener("resize", h);
@@ -187,8 +188,6 @@ export default function GamePlay() {
     fetchCreator();
   }, [game?.creator]);
 
-  // Comments fetched with stats above
-
   // Track play via API
   useEffect(() => {
     if (!game || !address || gameLoading) return;
@@ -211,9 +210,62 @@ export default function GamePlay() {
     iframeRef.current?.contentWindow?.postMessage({ type, _platform: true, ...payload }, "*");
   };
 
+  // ── Contract error → professional message mapper ──────────────────────────
+  // Maps Platform.sol require() strings + wallet errors to clean user-facing
+  // objects. NEVER shows raw blockchain error text to the player.
+  // type: "soft" errors are shown in gold (player can fix), "hard" in red (admin issue).
+  const parseContractError = (err) => {
+    const raw = (err?.shortMessage || err?.message || "").toLowerCase();
+
+    // Player cancelled wallet prompt
+    if (/user rejected|user denied|cancelled|rejected the request/i.test(raw))
+      return { type: "cancelled", soft: true, icon: "✕", title: "Transaction Cancelled", msg: "You cancelled the wallet request. Hit Submit Score again whenever you're ready." };
+
+    // Platform.sol: minSecondsBetweenPlays throttle
+    if (raw.includes("playing too fast"))
+      return { type: "cooldown", soft: true, icon: "⏱", title: "Slow Down!", msg: "You're submitting scores too quickly. Wait a moment before trying again." };
+
+    // Platform.sol: per-player daily cap
+    if (raw.includes("daily player cap reached"))
+      return { type: "cap", soft: true, icon: "🏆", title: "Daily Earning Limit Reached", msg: `You've earned the maximum ${rewardSymbol} allowed for today. Come back tomorrow to keep playing!` };
+
+    // Platform.sol: chain-wide daily cap
+    if (raw.includes("daily chain cap reached"))
+      return { type: "cap", soft: true, icon: "🌐", title: "Platform Daily Cap Reached", msg: "The platform's daily reward pool has been exhausted. Rewards will reset tomorrow — your score still counts!" };
+
+    // Platform.sol: gameMinScore check
+    if (raw.includes("score below minimum"))
+      return { type: "minscore", soft: true, icon: "📊", title: "Score Too Low", msg: "Your score didn't meet the minimum requirement for this game. Play again and aim higher!" };
+
+    // Platform.sol: nonce replay protection
+    if (raw.includes("score proof already used"))
+      return { type: "duplicate", soft: true, icon: "⚠️", title: "Already Submitted", msg: "This score has already been recorded on-chain. Play a new round to earn more rewards." };
+
+    // Platform.sol: ECDSA signature mismatch
+    if (raw.includes("invalid score proof"))
+      return { type: "proof", soft: false, icon: "🔐", title: "Score Verification Failed", msg: "We couldn't verify your score with our servers. Please try again in a moment." };
+
+    // Platform.sol: emergency pause
+    if (raw.includes("platform paused"))
+      return { type: "paused", soft: false, icon: "🔧", title: "Platform Under Maintenance", msg: "ArcadeX is temporarily paused for maintenance. Please check back shortly." };
+
+    // Platform.sol: game not active on-chain
+    if (raw.includes("game not active"))
+      return { type: "inactive", soft: false, icon: "🎮", title: "Game Unavailable", msg: "This game is currently inactive on-chain. Please contact support if this seems wrong." };
+
+    // Platform.sol: native-token reward pool drained (MST)
+    if (raw.includes("pool insufficient"))
+      return { type: "pool", soft: false, icon: "💰", title: "Reward Pool Refilling", msg: "The reward pool is temporarily low. Please try again in a little while." };
+
+    // Frontend pre-check: game not registered
+    if (raw.includes("game not registered"))
+      return { type: "noreg", soft: false, icon: "🎮", title: "Not Registered On-Chain", msg: "This game hasn't been registered on-chain yet. Please contact the creator." };
+
+    // Generic fallback — raw error never shown
+    return { type: "error", soft: false, icon: "✕", title: "Submission Failed", msg: "Something went wrong while submitting your score. Please try again." };
+  };
+
   // ── ArcadeX SDK: PURCHASE_SKIN ──────────────────────────────
-  // Pay + mint an ERC-1155 NFT for a permanent skin. No registration step —
-  // the game supplies gameId/skinIndex/name/imageURI/price on every call.
   const handlePurchaseSkin = async ({ gameId, skinIndex, name, imageURI, price }) => {
     if (!address || !GAME_ITEMS_ADDRESS) return;
     console.log("[PURCHASE_SKIN] isNativeToken:", isNativeToken, "| chainId:", CHAIN_ID, "| GAME_ITEMS_ADDRESS:", GAME_ITEMS_ADDRESS);
@@ -257,7 +309,6 @@ export default function GamePlay() {
   };
 
   // ── ArcadeX SDK: PURCHASE_POWERUP ───────────────────────────
-  // Pay only, no NFT minted. Unlock/ownership state stays on the game side.
   const handlePurchasePowerUp = async ({ gameId, powerUpId, price }) => {
     if (!address || !GAME_ITEMS_ADDRESS) return;
     console.log("[PURCHASE_POWERUP] isNativeToken:", isNativeToken, "| chainId:", CHAIN_ID, "| GAME_ITEMS_ADDRESS:", GAME_ITEMS_ADDRESS);
@@ -340,7 +391,6 @@ export default function GamePlay() {
       return;
     }
 
-    // stakeWei game se aata hai - validate karo
     let value;
     try {
       value = BigInt(stakeWei);
@@ -352,15 +402,13 @@ export default function GamePlay() {
     }
 
     try {
-      // viem - ethers dynamic import hata diya (project me ethers nahi hai)
       const matchId = keccak256(toHex(matchKey));
 
       console.log("[CLASHPOT_JOIN] Depositing stake...", {
         matchKey, matchId, stakeWei: value.toString(), escrowAddress,
       });
 
-      // MST pe chainId NAHI bhejte - warna wallet ka chain-switch popup
-      // hang ho jaata hai. Wallet already MST pe connected hai.
+      // MST pe chainId NAHI bhejte - warna wallet ka chain-switch popup hang ho jaata hai.
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: escrowAddress,
         abi: CLASHPOT_ESCROW_ABI,
@@ -376,8 +424,6 @@ export default function GamePlay() {
       const receipt = await pollReceipt(hash);
 
       if (!receipt) {
-        // Receipt nahi mila par tx shayad chali gayi - server isFunded() se
-        // khud verify kar lega, isliye success maan ke aage badho.
         console.warn("[CLASHPOT_JOIN] Receipt timeout - server verify karega");
         sendToGame("CLASHPOT_JOIN_SUCCESS", { txHash: hash });
         return;
@@ -421,38 +467,28 @@ export default function GamePlay() {
     const handleMessage = (event) => {
       if (!event.data?._sdk && !event.data?.type) return;
       if (event.data?.type === "SCORE_UPDATE") {
-        if (submitted) { setSubmitted(false); setTxHash(""); setSubmitError(""); submittingRef.current = false; }
+        if (submitted) { setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false; }
         setScore(event.data.score);
       }
       if (event.data?.type === "GAME_OVER") {
-        setScore(event.data.score); setSubmitted(false); setTxHash(""); setSubmitError(""); submittingRef.current = false;
+        setScore(event.data.score); setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false;
         submitScore(event.data.score);
       }
       if (event.data?.type === "GET_PLAYER_INFO") {
         iframeRef.current?.contentWindow?.postMessage({
-            type: "PLAYER_INFO",
-            _platform: true,
-            player: {
-                address: address || "",
-                balance: Number(balance)
-            }
+          type: "PLAYER_INFO",
+          _platform: true,
+          player: {
+            address: address || "",
+            balance: Number(balance)
+          }
         }, "*");
       }
-      if (event.data?.type === "PURCHASE_SKIN") {
-        handlePurchaseSkin(event.data);
-      }
-      if (event.data?.type === "PURCHASE_POWERUP") {
-        handlePurchasePowerUp(event.data);
-      }
-      if (event.data?.type === "RECORD_GAME_TIME") {
-        handleRecordGameTime(event.data);
-      }
-      if (event.data?.type === "GAME_EVENT") {
-        handleGameEvent(event.data);
-      }
-      if (event.data?.type === "CLASHPOT_JOIN") {
-        handleClashPotJoin(event.data);
-      }
+      if (event.data?.type === "PURCHASE_SKIN") handlePurchaseSkin(event.data);
+      if (event.data?.type === "PURCHASE_POWERUP") handlePurchasePowerUp(event.data);
+      if (event.data?.type === "RECORD_GAME_TIME") handleRecordGameTime(event.data);
+      if (event.data?.type === "GAME_EVENT") handleGameEvent(event.data);
+      if (event.data?.type === "CLASHPOT_JOIN") handleClashPotJoin(event.data);
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
@@ -495,7 +531,7 @@ export default function GamePlay() {
   const submitScore = async (finalScore) => {
     if (submittingRef.current || !address || !game) return;
     submittingRef.current = true;
-    setSubmitting(true); setSubmitError("");
+    setSubmitting(true); setSubmitError(null);
     try {
       const onChainGameId = game.gameId;
       if (!onChainGameId) throw new Error("Game not registered on-chain");
@@ -505,12 +541,9 @@ export default function GamePlay() {
       // small native-token amounts still show up.
       const playerReward = Math.round(rewardRate * playerSplit / 100 * 100) / 100;
 
-      // Ask the backend to sign this (player, gameId, score) attestation —
-      // Platform.sol's recordPlayAndEarn() requires this once a chain has
-      // scoreSigner configured. If the chain hasn't enabled that feature
-      // yet (or the request fails for any reason), fall back to an empty
-      // signature — the contract simply skips verification when
-      // scoreSigner is unset, so this stays backward compatible.
+      // Ask the backend to sign this (player, gameId, score) attestation.
+      // Falls back to nonce=0/sig="0x" if signing not configured — safe when
+      // scoreSigner is address(0) on-chain (contract skips verification).
       let nonce = 0n;
       let signature = "0x";
       try {
@@ -518,7 +551,7 @@ export default function GamePlay() {
         const sigRes = await fetch("/api/games?action=sign-score", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-          body: JSON.stringify({ gameId: onChainGameId, score: finalScore, chain: chainKey }),
+          body: JSON.stringify({ gameId: onChainGameId, score: finalScore, chain: chainKey, player: address }),
         });
         if (sigRes.ok) {
           const sigData = await sigRes.json();
@@ -549,7 +582,7 @@ export default function GamePlay() {
           await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash: tHash });
         } catch (tErr) {
           if (tErr.message?.includes("not active") || tErr.message?.includes("Outside tournament")) {
-            setSubmitError("⚠️ Tournament has ended — score not counted.");
+            setSubmitError({ type: "tournament", soft: true, icon: "🏆", title: "Tournament Ended", msg: "This tournament has ended — your score wasn't counted for the tournament, but your on-chain reward was still paid." });
           }
         }
       }
@@ -559,8 +592,9 @@ export default function GamePlay() {
       setTxHash(hash); setSubmitted(true);
       iframeRef.current?.contentWindow?.postMessage({ type: "TRANSACTION_SUCCESS", _platform: true, txHash: hash }, "*");
     } catch (err) {
-      setSubmitError(err.message || "Transaction failed");
-      iframeRef.current?.contentWindow?.postMessage({ type: "TRANSACTION_FAILED", _platform: true, error: err.message }, "*");
+      const parsed = parseContractError(err);
+      setSubmitError(parsed);
+      iframeRef.current?.contentWindow?.postMessage({ type: "TRANSACTION_FAILED", _platform: true, error: parsed.msg }, "*");
     } finally { setSubmitting(false); submittingRef.current = false; }
   };
 
@@ -578,13 +612,42 @@ export default function GamePlay() {
   );
 
   const rewardRate = (isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50);
-  // Round to 2 decimals instead of flooring — flooring zeroed out native
-  // chain amounts (rate 1-2), e.g. Math.floor(0.8) = 0.
   const playerReward = Math.round(rewardRate * playerSplit / 100 * 100) / 100;
   const creatorReward = Math.round(rewardRate * creatorSplit / 100 * 100) / 100;
   const shortAddr = (a) => a ? a.slice(0, 6) + "..." + a.slice(-4) : "?";
   const thumbnail = game.thumbnailUrl || game.thumbnail || game.image || null;
   const hasHelpContent = !!(game.helpContent && Object.values(game.helpContent).some(v => v && v.trim()));
+
+  // ── Error card helper — called in JSX ────────────────────────────────────
+  const renderErrorCard = () => {
+    if (!submitError) return null;
+    const isSoft = submitError.soft;
+    const borderColor = isSoft ? "rgba(255,183,0,0.25)" : "rgba(255,68,68,0.2)";
+    const bgColor     = isSoft ? "rgba(255,183,0,0.05)"  : "rgba(255,68,68,0.06)";
+    const titleColor  = isSoft ? C.gold                   : "#ff4444";
+    // Cap + duplicate: no retry makes sense (must wait). Others: show Try Again.
+    const showRetry   = !["cap", "duplicate", "paused"].includes(submitError.type);
+    return (
+      <div style={{ background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 10, padding: "14px 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <span style={{ fontSize: 16, lineHeight: 1 }}>{submitError.icon}</span>
+          <span style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 12, color: titleColor, letterSpacing: "0.3px" }}>
+            {submitError.title}
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: "#9977cc", fontFamily: C.raj, lineHeight: 1.6 }}>
+          {submitError.msg}
+        </div>
+        {showRetry && (
+          <button
+            onClick={() => setSubmitError(null)}
+            style={{ marginTop: 10, fontSize: 10, color: C.purpleL, background: "transparent", border: `1px solid ${C.border2}`, borderRadius: 6, padding: "4px 14px", cursor: "pointer", fontFamily: C.raj, fontWeight: 700, letterSpacing: "0.5px" }}>
+            Try Again
+          </button>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{ minHeight: "calc(100vh - 54px)", background: C.bg }}>
@@ -606,7 +669,6 @@ export default function GamePlay() {
 
       {/* ── GAME HEADER with thumbnail bg ── */}
       <div style={{ position: "relative", overflow: "hidden", borderBottom: `1px solid ${C.border}` }}>
-        {/* Blurred thumbnail background */}
         {thumbnail && (
           <>
             <div style={{ position: "absolute", inset: 0, backgroundImage: `url(${thumbnail})`, backgroundSize: "cover", backgroundPosition: "center", filter: "blur(18px) brightness(0.22)", transform: "scale(1.1)" }} />
@@ -685,7 +747,7 @@ export default function GamePlay() {
               </div>
             )}
 
-            {/* BOTCHAIN tags bar */}
+            {/* Chain tags bar */}
             <div style={{ padding: "8px 14px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 8, background: "rgba(0,0,0,0.3)" }}>
               {[chainName?.toUpperCase() || "ON-CHAIN", "ARCADE X"].map((t, i) => (
                 <span key={i} style={{ fontSize: 9, padding: "3px 8px", background: i === 2 ? "rgba(123,47,255,0.15)" : "rgba(0,0,0,0.4)", border: `1px solid ${i === 2 ? C.border2 : C.border}`, borderRadius: 4, color: i === 2 ? C.purpleL : C.dimMore, fontFamily: C.raj, fontWeight: 700, letterSpacing: "1px" }}>{t}</span>
@@ -757,12 +819,10 @@ export default function GamePlay() {
                 <div style={{ fontSize: 10, color: C.dimMore, fontFamily: C.raj }}>Approve in your wallet</div>
               </div>
             )}
-            {submitError && (
-              <div style={{ background: "rgba(255,68,68,0.06)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 10, padding: "12px 16px" }}>
-                <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 11, color: "#ff4444", marginBottom: 4 }}>Submission failed</div>
-                <div style={{ fontSize: 10, color: C.dimMore, wordBreak: "break-all", fontFamily: "monospace" }}>{submitError}</div>
-              </div>
-            )}
+
+            {/* ── Professional error card ── */}
+            {renderErrorCard()}
+
             {submitted && txHash && (
               <div style={{ background: "rgba(0,255,136,0.05)", border: "1px solid rgba(0,255,136,0.15)", borderRadius: 10, padding: "14px 16px" }}>
                 <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 12, color: C.green, marginBottom: 5 }}>✓ Score submitted on-chain!</div>
