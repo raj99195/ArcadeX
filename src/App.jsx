@@ -1,4 +1,5 @@
 import { Routes, Route } from "react-router-dom";
+import ChainLanding from "./pages/ChainLanding";
 import Navbar from "./components/Navbar";
 import Home from "./pages/Home";
 import GameLibrary from "./pages/GameLibrary";
@@ -40,6 +41,8 @@ export default function App() {
         <Route path="/admin" element={<Admin />} />
         <Route path="/publish" element={<Creator />} />
         <Route path="/sdk" element={<SDK />} />
+        <Route path="/mstblockchain" element={<ChainLanding chainKey="mst" />} />
+<Route path="/botchain" element={<ChainLanding chainKey="botchain" />} />
         <Route path="/tournaments" element={<Tournaments />} />
         <Route path="/marketplace" element={<Marketplace />} />
         <Route path="/community" element={<Community />} />
