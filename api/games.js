@@ -268,7 +268,7 @@ export default async function handler(req, res) {
       const gameRef = db.collection("games").doc(String(gameId));
       const game = await gameRef.get();
       if (!game.exists) return res.status(404).json({ error: "Game not found" });
-      if (game.data().creator !== user.address) return res.status(403).json({ error: "Not your game" });
+      if (game.data().creator?.toLowerCase() !== user.address?.toLowerCase()) return res.status(403).json({ error: "Not your game" });
       const updates = {};
       if (rewardRate != null) updates.rewardRate = parseInt(rewardRate);
       if (rewardRateNative != null) updates.rewardRateNative = parseInt(rewardRateNative);
