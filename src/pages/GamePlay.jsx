@@ -911,41 +911,101 @@ export default function GamePlay() {
       </div>
 
       {showHelpModal && (
-        <div onClick={() => setShowHelpModal(false)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: C.card || "#0d0b1a", border: `1px solid ${C.border2}`, borderRadius: 16, padding: 28, width: "100%", maxWidth: 480, maxHeight: "80vh", overflowY: "auto", position: "relative" }}>
-            <button onClick={() => setShowHelpModal(false)} style={{ position: "absolute", top: 14, right: 14, background: "rgba(123,47,255,0.08)", border: `1px solid ${C.border2}`, borderRadius: 6, color: "#a67fff", fontSize: 12, padding: "4px 10px", cursor: "pointer", fontFamily: C.raj, fontWeight: 700 }}>✕ Close</button>
-            <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 18, color: "#fff", marginBottom: 18 }}>❓ How to Play</div>
+        <div onClick={() => setShowHelpModal(false)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.88)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, animation: "fadeIn 0.18s ease" }}>
+          <style>{`
+            @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+            @keyframes modalSlide { from { opacity: 0; transform: translateY(18px) scale(0.97) } to { opacity: 1; transform: translateY(0) scale(1) } }
+            @keyframes headerGlow { 0%,100% { opacity: 1 } 50% { opacity: 0.7 } }
+            .help-section:not(:last-child) { border-bottom: 1px solid rgba(123,47,255,0.1); margin-bottom: 0; padding-bottom: 16px; }
+          `}</style>
 
-            {game.helpContent?.objective && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>🎯 Objective</div>
-                <div style={{ fontSize: 13, color: "#c4a0ff", fontFamily: C.raj, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{game.helpContent.objective}</div>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: "linear-gradient(160deg, #0f0d20 0%, #0a0815 100%)",
+            border: `1px solid rgba(123,47,255,0.35)`,
+            borderRadius: 18,
+            width: "100%", maxWidth: 500,
+            maxHeight: "82vh", overflowY: "auto",
+            position: "relative",
+            animation: "modalSlide 0.22s cubic-bezier(0.34,1.56,0.64,1)",
+            boxShadow: "0 0 60px rgba(123,47,255,0.25), 0 24px 80px rgba(0,0,0,0.8)",
+          }}>
+
+            {/* Top accent bar — animated gradient */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, borderRadius: "18px 18px 0 0", background: "linear-gradient(90deg, #7B2FFF, #00D4FF, #00FF88, #7B2FFF)", backgroundSize: "200% 100%", animation: "gradientShift 3s linear infinite" }} />
+            <style>{`@keyframes gradientShift { 0%{background-position:0% 0%} 100%{background-position:200% 0%} }`}</style>
+
+            {/* Glow orb top-right */}
+            <div style={{ position: "absolute", top: -40, right: -40, width: 160, height: 160, background: "radial-gradient(circle, rgba(123,47,255,0.18) 0%, transparent 70%)", borderRadius: "50%", pointerEvents: "none" }} />
+
+            {/* Header */}
+            <div style={{ padding: "22px 24px 16px", borderBottom: `1px solid rgba(123,47,255,0.15)`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(123,47,255,0.18)", border: "1px solid rgba(123,47,255,0.3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>❓</div>
+                <div>
+                  <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 17, color: "#fff", lineHeight: 1 }}>How to Play</div>
+                  <div style={{ fontFamily: C.raj, fontSize: 10, color: C.dimMore, marginTop: 2, letterSpacing: "0.5px" }}>{game.name}</div>
+                </div>
               </div>
-            )}
-            {game.helpContent?.controls && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>🎮 Controls</div>
-                <div style={{ fontSize: 13, color: "#c4a0ff", fontFamily: C.raj, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{game.helpContent.controls}</div>
-              </div>
-            )}
-            {game.helpContent?.instructions && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>📝 Instructions</div>
-                <div style={{ fontSize: 13, color: "#c4a0ff", fontFamily: C.raj, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{game.helpContent.instructions}</div>
-              </div>
-            )}
-            {game.helpContent?.tips && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>💡 Tips</div>
-                <div style={{ fontSize: 13, color: "#c4a0ff", fontFamily: C.raj, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{game.helpContent.tips}</div>
-              </div>
-            )}
-            {game.helpContent?.videoUrl && (
-              <div>
-                <div style={{ fontSize: 10.5, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>▶️ Tutorial Video</div>
-                <a href={game.helpContent.videoUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: C.cyan, fontFamily: C.raj, wordBreak: "break-all" }}>{game.helpContent.videoUrl}</a>
-              </div>
-            )}
+              <button onClick={() => setShowHelpModal(false)} style={{ background: "rgba(255,255,255,0.05)", border: `1px solid rgba(123,47,255,0.2)`, borderRadius: 8, color: C.dimMore, fontSize: 18, width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s", fontFamily: C.raj }}>✕</button>
+            </div>
+
+            {/* Sections */}
+            <div style={{ padding: "18px 24px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
+
+              {game.helpContent?.objective && (
+                <div className="help-section">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                    <div style={{ width: 3, height: 18, borderRadius: 2, background: C.cyan, flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, color: C.cyan, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "2px" }}>🎯 Objective</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: "#e8deff", fontFamily: C.raj, lineHeight: 1.7, whiteSpace: "pre-wrap", paddingLeft: 11 }}>{game.helpContent.objective}</div>
+                </div>
+              )}
+
+              {game.helpContent?.controls && (
+                <div className="help-section">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                    <div style={{ width: 3, height: 18, borderRadius: 2, background: C.green, flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, color: C.green, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "2px" }}>🎮 Controls</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: "#e8deff", fontFamily: C.raj, lineHeight: 1.7, whiteSpace: "pre-wrap", paddingLeft: 11 }}>{game.helpContent.controls}</div>
+                </div>
+              )}
+
+              {game.helpContent?.instructions && (
+                <div className="help-section">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                    <div style={{ width: 3, height: 18, borderRadius: 2, background: C.gold, flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, color: C.gold, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "2px" }}>📋 Instructions</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: "#e8deff", fontFamily: C.raj, lineHeight: 1.7, whiteSpace: "pre-wrap", paddingLeft: 11 }}>{game.helpContent.instructions}</div>
+                </div>
+              )}
+
+              {game.helpContent?.tips && (
+                <div className="help-section">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                    <div style={{ width: 3, height: 18, borderRadius: 2, background: C.purpleL, flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, color: C.purpleL, fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "2px" }}>💡 Tips</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: "#e8deff", fontFamily: C.raj, lineHeight: 1.7, whiteSpace: "pre-wrap", paddingLeft: 11 }}>{game.helpContent.tips}</div>
+                </div>
+              )}
+
+              {game.helpContent?.videoUrl && (
+                <div className="help-section">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                    <div style={{ width: 3, height: 18, borderRadius: 2, background: "#FF6B6B", flexShrink: 0 }} />
+                    <span style={{ fontSize: 10, color: "#FF6B6B", fontFamily: C.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "2px" }}>▶️ Tutorial</span>
+                  </div>
+                  <a href={game.helpContent.videoUrl} target="_blank" rel="noreferrer"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px", background: "rgba(255,107,107,0.08)", border: "1px solid rgba(255,107,107,0.2)", borderRadius: 8, color: "#FF6B6B", fontSize: 12, fontFamily: C.raj, fontWeight: 700, textDecoration: "none", marginLeft: 11 }}>
+                    ▶ Watch Tutorial →
+                  </a>
+                </div>
+              )}
+
+            </div>
           </div>
         </div>
       )}
