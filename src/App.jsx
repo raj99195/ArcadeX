@@ -1,15 +1,37 @@
+import { Routes, Route } from "react-router-dom";
+import { useChain } from "./context/ChainContext";  // ← YE CRITICAL HAI
+import ChainSelector from "./pages/ChainSelector";
+import ChainLanding from "./pages/ChainLanding";
+import Navbar from "./components/Navbar";
+import Home from "./pages/Home";
+import GameLibrary from "./pages/GameLibrary";
+import GamePlay from "./pages/GamePlay";
+import Leaderboard from "./pages/Leaderboard";
+import Admin from "./pages/Admin";
+import Creator from "./pages/Creator";
+import SDK from "./pages/SDK";
+import Tournaments from "./pages/Tournaments";
+import Marketplace from "./pages/Marketplace";
+import Community from "./pages/Community";
+import CreatorGameDetail from "./pages/CreatorGameDetail";
+import Support from "./pages/Support";
+import CampaignLanding from "./pages/CampaignLanding";
+import Campaign from "./pages/Campaign";
+import CampaignDashboard from "./pages/CampaignDashboard";
+import CampaignLeaderboard from "./pages/CampaignLeaderboard";
+import CampaignAdmin from "./pages/CampaignAdmin";
+import AdminMST from "./pages/AdminMST";
+
 export default function App() {
   const { hasSelectedChain } = useChain();
 
-  // ChainLanding routes — BEFORE the hasSelectedChain gate
-  // Inhe hamesha render karo taaki direct links kaam karein
   return (
     <Routes>
-      {/* Ye routes seedha chain set karke / pe bhejte hain */}
+      {/* Direct chain links — hasSelectedChain gate se bahar */}
       <Route path="/mstblockchain" element={<ChainLanding chainKey="mst" />} />
       <Route path="/botchain" element={<ChainLanding chainKey="botchain" />} />
 
-      {/* Baaki sab hasSelectedChain ke baad */}
+      {/* Baaki sab */}
       <Route path="*" element={
         !hasSelectedChain ? (
           <ChainSelector />
