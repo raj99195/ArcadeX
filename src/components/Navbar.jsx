@@ -18,13 +18,17 @@ export default function Navbar() {
   const { balance } = useArcadeBalance();
   
   // Need rewardToken to display ARCADE or MSTC dynamically
-  const { chainName, clearChainSelection, rewardToken, activeChain } = useChain();
+  const { chainName, clearChainSelection, rewardToken, activeChain, chainKey } = useChain();
   
   const [ddOpen, setDdOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [avatarStyle, setAvatarStyle] = useState("bottts");
-  
+  const [earningsOpen, setEarningsOpen] = useState(false);
+  const [earningsData, setEarningsData] = useState([]);
+  const [earningsLoading, setEarningsLoading] = useState(false);
+  const [gameMap, setGameMap] = useState({}); // gameId → { thumbnail, name }
+
   const ddRef = useRef(null);
   const menuRef = useRef(null);
 
@@ -118,6 +122,65 @@ export default function Navbar() {
 
   useEffect(() => { setMenuOpen(false); }, [location.pathname]);
 
+  // ── Earnings fetch ───────────────────────────────────────────────────
+  const fetchEarnings = async () => {
+    if (!address) return;
+    setEarningsLoading(true);
+    try {
+      const [scoresRes, gamesRes] = await Promise.all([
+        fetch(`/api/games?action=scores`),
+        fetch(`/api/games?action=list`),
+      ]);
+      const scoresData = await scoresRes.json();
+      const gamesData = await gamesRes.json();
+
+      // Build gameId → { thumbnail, name, rewardRate, rewardRateNative } map
+      const map = {};
+      (gamesData.games || []).forEach(g => {
+        map[g.gameId || g.id] = {
+          thumbnail: g.thumbnailUrl || g.thumbnail || g.image || null,
+          name: g.name,
+          rewardRate: g.rewardRate || 50,
+          rewardRateNative: g.rewardRateNative || 1,
+        };
+      });
+      setGameMap(map);
+
+      // Filter only this player's scores
+      const mine = (scoresData.scores || [])
+        .filter(s => s.player?.toLowerCase() === address.toLowerCase())
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      setEarningsData(mine);
+    } catch (e) {
+      setEarningsData([]);
+    } finally {
+      setEarningsLoading(false);
+    }
+  };
+
+  const handleEarningsOpen = () => {
+    setEarningsOpen(true);
+    fetchEarnings();
+  };
+
+  // Group scores by date
+  const groupByDay = (scores) => {
+    const groups = {};
+    scores.forEach(s => {
+      const d = s.createdAt ? new Date(s.createdAt) : null;
+      const key = d ? d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "Unknown";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(s);
+    });
+    return groups;
+  };
+
+  // Only show plays for the currently selected chain
+  const chainFiltered = earningsData.filter(
+    s => (s.chain || "botchain").toLowerCase() === (chainKey || "botchain").toLowerCase()
+  );
+  const isCurrentMst = (chainKey || "botchain").toLowerCase() === "mst";
+
   const navLinks = [
     { label: "Home", path: "/" },
     { label: "Games", path: "/games" },
@@ -129,6 +192,7 @@ export default function Navbar() {
   ];
 
   return (
+    <>
     <nav style={{
       position: "sticky", top: 0, zIndex: 100,
       display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -232,9 +296,15 @@ export default function Navbar() {
           </button>
         )}
 
-        {/* 2. REWARD BALANCE FIX - Avatar + Balance + Symbol */}
+        {/* 2. REWARD BALANCE — clickable → earnings panel */}
         {isConnected && balance !== null && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: isMobile ? "0 8px" : "0 12px", height: LOGO_SIZE + 8, borderRadius: (LOGO_SIZE + 8) / 2, background: "rgba(123,47,255,0.1)", border: "1px solid rgba(123,47,255,0.25)", boxShadow: "0 0 14px rgba(123,47,255,0.12)" }}>
+          <div
+            onClick={handleEarningsOpen}
+            title="View earning history"
+            style={{ display: "flex", alignItems: "center", gap: 6, padding: isMobile ? "0 8px" : "0 12px", height: LOGO_SIZE + 8, borderRadius: (LOGO_SIZE + 8) / 2, background: "rgba(123,47,255,0.1)", border: "1px solid rgba(123,47,255,0.25)", boxShadow: "0 0 14px rgba(123,47,255,0.12)", cursor: "pointer", transition: "all 0.2s" }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(123,47,255,0.18)"; e.currentTarget.style.borderColor = "rgba(123,47,255,0.5)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "rgba(123,47,255,0.1)"; e.currentTarget.style.borderColor = "rgba(123,47,255,0.25)"; }}
+          >
             <div style={{ width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(123,47,255,0.5)", flexShrink: 0, background: "#0e0c1a" }}>
               <img src={avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${address}`} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             </div>
@@ -246,6 +316,7 @@ export default function Navbar() {
                 {rewardToken || "ARCADE"}
               </span>
             </div>
+            <span style={{ fontSize: 9, color: "rgba(123,47,255,0.6)", marginLeft: 2 }}>▾</span>
           </div>
         )}
 
@@ -308,5 +379,234 @@ export default function Navbar() {
         )}
       </div>
     </nav>
+
+      {/* ── EARNINGS PANEL — Premium Design ──────────────────────── */}
+      {earningsOpen && (
+        <>
+          <style>{`
+            @keyframes slideInRight  { from{opacity:0;transform:translateX(32px)} to{opacity:1;transform:translateX(0)} }
+            @keyframes fadeInBg      { from{opacity:0} to{opacity:1} }
+            @keyframes rowIn         { from{opacity:0;transform:translateX(16px)} to{opacity:1;transform:translateX(0)} }
+            @keyframes shimmer       { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
+            @keyframes spinLoad      { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+            @keyframes gradPulse     { 0%,100%{opacity:1} 50%{opacity:0.6} }
+            .earn-row { transition: background 0.15s, transform 0.15s !important; }
+            .earn-row:hover { background: rgba(123,47,255,0.1) !important; transform: translateX(3px) !important; }
+            .close-btn:hover { background: rgba(255,68,68,0.15) !important; border-color: rgba(255,68,68,0.4) !important; color: #ff6b6b !important; }
+            .tx-link:hover { color: #00d4ff !important; }
+          `}</style>
+
+          {/* Backdrop */}
+          <div onClick={() => setEarningsOpen(false)}
+            style={{ position:"fixed", inset:0, zIndex:998, background:"rgba(0,0,0,0.7)", backdropFilter:"blur(8px)", animation:"fadeInBg 0.2s ease" }} />
+
+          {/* Panel */}
+          <div style={{
+            position:"fixed", top:0, right:0, bottom:0, zIndex:999,
+            width: isMobile ? "100vw" : 400,
+            background: "linear-gradient(180deg, #0c0a1e 0%, #08070f 100%)",
+            borderLeft: "1px solid rgba(123,47,255,0.2)",
+            boxShadow: "-40px 0 100px rgba(0,0,0,0.9), -1px 0 0 rgba(123,47,255,0.15)",
+            animation: "slideInRight 0.3s cubic-bezier(0.34,1.4,0.64,1)",
+            display: "flex", flexDirection: "column", overflow: "hidden",
+          }}>
+
+            {/* Animated rainbow top bar */}
+            <div style={{ height:3, flexShrink:0, background:"linear-gradient(90deg,#7B2FFF,#00d4ff,#00FF88,#FFB700,#7B2FFF)", backgroundSize:"300% 100%", animation:"gradPulse 3s ease infinite" }} />
+
+            {/* Ambient glow orbs */}
+            <div style={{ position:"absolute", top:-80, right:-80, width:240, height:240, background:"radial-gradient(circle,rgba(123,47,255,0.12) 0%,transparent 65%)", borderRadius:"50%", pointerEvents:"none" }} />
+            <div style={{ position:"absolute", bottom:-60, left:-60, width:180, height:180, background:"radial-gradient(circle,rgba(0,212,255,0.07) 0%,transparent 65%)", borderRadius:"50%", pointerEvents:"none" }} />
+
+            {/* ── HEADER ── */}
+            <div style={{ padding:"20px 22px 16px", borderBottom:"1px solid rgba(255,255,255,0.05)", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0, position:"relative" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <div style={{ width:38, height:38, borderRadius:12, background:"linear-gradient(135deg,rgba(123,47,255,0.3),rgba(0,212,255,0.15))", border:"1px solid rgba(123,47,255,0.4)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, boxShadow:"0 0 20px rgba(123,47,255,0.2)" }}>
+                  📊
+                </div>
+                <div>
+                  <div style={{ fontFamily:"'Orbitron',sans-serif", fontWeight:700, fontSize:14, color:"#fff", letterSpacing:"0.5px" }}>Earning History</div>
+                  <div style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:11, color:"rgba(123,47,255,0.7)", marginTop:1, letterSpacing:"1px" }}>
+                    {address?.slice(0,6)}...{address?.slice(-4)} · {rewardToken||"ARCADE"}
+                  </div>
+                </div>
+              </div>
+              <button className="close-btn" onClick={() => setEarningsOpen(false)}
+                style={{ width:32, height:32, background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"rgba(255,255,255,0.5)", fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"all 0.2s" }}>
+                ✕
+              </button>
+            </div>
+
+                {/* ── TOTAL BALANCE CARD ── */}
+            <div style={{ margin:"16px 16px 0", flexShrink:0 }}>
+              {(() => {
+                // Total earned — only current chain's plays
+                const totalEarned = chainFiltered.reduce((sum, s) => {
+                  const g = gameMap[s.gameId] || {};
+                  const rate = isCurrentMst ? (g.rewardRateNative || 1) : (g.rewardRate || 50);
+                  const share = isCurrentMst ? 50 : 80;
+                  return sum + Math.round(rate * share / 100 * 100) / 100;
+                }, 0);
+                const earnSymbol = rewardToken || "ARCADE";
+                const earnColor  = isCurrentMst ? "#ff2f5e" : "#00d4ff";
+                return (
+              <div style={{ borderRadius:16, padding:"18px 20px", position:"relative", overflow:"hidden", background:"linear-gradient(135deg,rgba(123,47,255,0.18) 0%,rgba(0,212,255,0.06) 100%)", border:"1px solid rgba(123,47,255,0.25)", boxShadow:"0 8px 32px rgba(123,47,255,0.12), inset 0 1px 0 rgba(255,255,255,0.05)" }}>
+                <div style={{ position:"absolute", top:0, left:0, right:0, height:"50%", background:"linear-gradient(180deg,rgba(255,255,255,0.03) 0%,transparent 100%)", borderRadius:"16px 16px 0 0", pointerEvents:"none" }} />
+
+                {/* Current Balance */}
+                <div style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:10, color:"rgba(0,212,255,0.7)", textTransform:"uppercase", letterSpacing:"2px", marginBottom:6, fontWeight:700 }}>Current Balance</div>
+                <div style={{ display:"flex", alignItems:"flex-end", gap:8, marginBottom:14 }}>
+                  <span style={{ fontFamily:"'Orbitron',sans-serif", fontWeight:700, fontSize:34, color:"#fff", lineHeight:1, textShadow:"0 0 30px rgba(123,47,255,0.5)" }}>
+                    {Number(balance).toLocaleString()}
+                  </span>
+                  <span style={{ fontFamily:"'Rajdhani',sans-serif", fontWeight:700, fontSize:14, color:"rgba(0,212,255,0.8)", marginBottom:4 }}>{earnSymbol}</span>
+                </div>
+
+                {/* Total Earned — current chain only */}
+                <div style={{ borderTop:"1px solid rgba(255,255,255,0.07)", paddingTop:12, marginBottom:14 }}>
+                  <div style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:10, color:"rgba(255,255,255,0.3)", textTransform:"uppercase", letterSpacing:"1.5px", marginBottom:8, fontWeight:700 }}>Total Earned (Est.)</div>
+                  {earningsLoading ? (
+                    <div style={{ height:32, borderRadius:20, background:"rgba(255,255,255,0.05)", width:120, animation:"shimmer 1.4s infinite" }} />
+                  ) : (
+                    <div style={{ display:"inline-flex", alignItems:"baseline", gap:6, padding:"6px 14px", background:`${earnColor}10`, border:`1px solid ${earnColor}30`, borderRadius:20 }}>
+                      <span style={{ fontFamily:"'Orbitron',sans-serif", fontWeight:700, fontSize:16, color: earnColor }}>
+                        {isCurrentMst ? totalEarned.toFixed(2) : totalEarned.toLocaleString()}
+                      </span>
+                      <span style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:11, color:`${earnColor}80`, fontWeight:700 }}>{earnSymbol}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Stats row */}
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
+                  {[
+                    { label:"Plays", val: earningsLoading ? "—" : chainFiltered.length, color:"#00FF88" },
+                    { label:"Games", val: earningsLoading ? "—" : new Set(chainFiltered.map(s=>s.gameId)).size, color:"#00d4ff" },
+                    { label:"Days", val: earningsLoading ? "—" : Object.keys(groupByDay(chainFiltered)).length, color:"#FFB700" },
+                  ].map(({ label, val, color }) => (
+                    <div key={label} style={{ background:"rgba(0,0,0,0.25)", borderRadius:10, padding:"8px 10px", textAlign:"center", border:"1px solid rgba(255,255,255,0.05)" }}>
+                      <div style={{ fontFamily:"'Orbitron',sans-serif", fontWeight:700, fontSize:18, color, lineHeight:1, marginBottom:4 }}>{val}</div>
+                      <div style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:9, color:"rgba(255,255,255,0.35)", textTransform:"uppercase", letterSpacing:"0.5px" }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+                );
+              })()}
+            </div>
+
+            {/* ── DAY-WISE LIST ── */}
+            <div style={{ flex:1, overflowY:"auto", padding:"14px 0 8px", scrollbarWidth:"none" }}>
+              {earningsLoading ? (
+                // Skeleton shimmer
+                <div style={{ padding:"0 16px", display:"flex", flexDirection:"column", gap:10 }}>
+                  {[1,2,3,4].map(i => (
+                    <div key={i} style={{ height:64, borderRadius:14, background:"linear-gradient(90deg,rgba(123,47,255,0.06) 25%,rgba(123,47,255,0.12) 50%,rgba(123,47,255,0.06) 75%)", backgroundSize:"400px 100%", animation:"shimmer 1.4s infinite", animationDelay:`${i*0.1}s` }} />
+                  ))}
+                </div>
+              ) : chainFiltered.length === 0 ? (
+                <div style={{ textAlign:"center", padding:"50px 24px" }}>
+                  <div style={{ fontSize:48, marginBottom:14, filter:"drop-shadow(0 0 20px rgba(123,47,255,0.4))" }}>🎮</div>
+                  <div style={{ fontFamily:"'Orbitron',sans-serif", fontWeight:700, fontSize:13, color:"rgba(255,255,255,0.4)", letterSpacing:"0.5px" }}>No plays yet</div>
+                  <div style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:12, color:"rgba(123,47,255,0.5)", marginTop:6 }}>Start playing to earn {rewardToken||"ARCADE"}</div>
+                </div>
+              ) : (
+                Object.entries(groupByDay(chainFiltered)).map(([date, plays], dayIdx) => (
+                  <div key={date} style={{ marginBottom:4 }}>
+
+                    {/* Day header chip */}
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 20px 6px" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <div style={{ width:3, height:14, borderRadius:2, background:"linear-gradient(180deg,#7B2FFF,#00d4ff)" }} />
+                        <span style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:11, fontWeight:700, color:"rgba(255,255,255,0.7)", textTransform:"uppercase", letterSpacing:"1.5px" }}>{date}</span>
+                      </div>
+                      <span style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:10, color:"rgba(123,47,255,0.6)", background:"rgba(123,47,255,0.1)", padding:"2px 8px", borderRadius:20, border:"1px solid rgba(123,47,255,0.2)" }}>
+                        {plays.length} play{plays.length > 1 ? "s" : ""}
+                      </span>
+                    </div>
+
+                    {/* Play rows */}
+                    <div style={{ padding:"0 12px", display:"flex", flexDirection:"column", gap:4 }}>
+                      {plays.map((play, i) => {
+                        const gInfo = gameMap[play.gameId] || {};
+                        const thumb = gInfo.thumbnail;
+                        const time = play.createdAt ? new Date(play.createdAt).toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit", hour12:true }) : "";
+                        // Earned amount — use the chain THIS play was on, not current chain
+                        const playChain = (play.chain || "botchain").toLowerCase();
+                        const isMstPlay = playChain === "mst";
+                        const rate = isMstPlay ? (gInfo.rewardRateNative || 1) : (gInfo.rewardRate || 50);
+                        const playerShare = isMstPlay ? 50 : 80;
+                        const earned = Math.round(rate * playerShare / 100 * 100) / 100;
+                        const earnedSymbol = isMstPlay ? "MSTC" : "ARCADE";
+                        // Chain color
+                        const chainColor = playChain === "mst" ? "#ff2f5e" : playChain === "botchain" ? "#00d4ff" : "#FFB700";
+                        return (
+                          <div key={play.id || i} className="earn-row"
+                            onClick={() => play.txHash && window.open(`${activeChain?.explorerUrl||"https://scan.botchain.ai"}/tx/${play.txHash}`, "_blank")}
+                            style={{
+                              display:"flex", alignItems:"center", gap:12,
+                              padding:"10px 12px", borderRadius:12, cursor: play.txHash ? "pointer" : "default",
+                              background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.04)",
+                              animation:`rowIn 0.3s ease both`, animationDelay:`${(dayIdx*3 + i) * 0.04}s`,
+                            }}>
+
+                            {/* Game thumbnail */}
+                            <div style={{ width:44, height:44, borderRadius:10, overflow:"hidden", border:"1px solid rgba(123,47,255,0.25)", flexShrink:0, background:"linear-gradient(135deg,rgba(123,47,255,0.2),rgba(0,212,255,0.1))", position:"relative" }}>
+                              {thumb ? (
+                                <img src={thumb} alt={play.gameName} style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} onError={e => { e.target.style.display="none"; }} />
+                              ) : (
+                                <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>🎮</div>
+                              )}
+                              {/* Shimmer on thumbnail */}
+                              <div style={{ position:"absolute", inset:0, background:"linear-gradient(135deg,transparent 40%,rgba(255,255,255,0.06) 50%,transparent 60%)" }} />
+                            </div>
+
+                            {/* Info */}
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ fontFamily:"'Rajdhani',sans-serif", fontWeight:700, fontSize:13, color:"#e8deff", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginBottom:3 }}>
+                                {play.gameName || gInfo.name || `Game #${play.gameId}`}
+                              </div>
+                              <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                                <span style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:10, color:"rgba(255,255,255,0.3)" }}>Score</span>
+                                <span style={{ fontFamily:"'Orbitron',sans-serif", fontSize:10, color:"#9977CC", fontWeight:700 }}>{Number(play.score||0).toLocaleString()}</span>
+                                {time && <span style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:9, color:"rgba(255,255,255,0.2)" }}>· {time}</span>}
+                                {play.chain && (
+                                  <span style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:9, fontWeight:700, color: chainColor, background: `${chainColor}18`, padding:"1px 6px", borderRadius:4, border:`1px solid ${chainColor}40`, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                                    {play.chain}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Earned + TX */}
+                            <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:3, flexShrink:0 }}>
+                              <div style={{ display:"flex", alignItems:"baseline", gap:3 }}>
+                                <span style={{ fontFamily:"'Orbitron',sans-serif", fontSize:11, fontWeight:700, color:"#00FF88" }}>+{earned}</span>
+                                <span style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:9, color:"rgba(0,255,136,0.6)", fontWeight:700 }}>{earnedSymbol}</span>
+                              </div>
+                              {play.txHash && (
+                                <span className="tx-link" style={{ fontFamily:"monospace", fontSize:8, color:"rgba(255,255,255,0.2)", transition:"color 0.15s" }}>
+                                  {play.txHash.slice(0,6)}...↗
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* ── FOOTER ── */}
+            <div style={{ padding:"12px 20px", borderTop:"1px solid rgba(255,255,255,0.06)", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+              <span style={{ fontSize:11 }}>⚡</span>
+              <span style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:11, color:"rgba(176,136,255,0.6)", letterSpacing:"0.8px" }}>Powered by ArcadeX · On-Chain Gaming</span>
+            </div>
+          </div>
+        </>
+      )}
+    </>
   );
 }
