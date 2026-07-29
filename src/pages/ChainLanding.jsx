@@ -1,26 +1,32 @@
 // src/pages/ChainLanding.jsx
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useChain } from "../context/ChainContext";
 
 export default function ChainLanding({ chainKey }) {
   const { setChainKey, allChains } = useChain();
   const navigate = useNavigate();
+  const ran = useRef(false);
 
   useEffect(() => {
+    if (ran.current) return;
+    ran.current = true;
+
     const chain = allChains.find(c => c.key === chainKey);
     if (chain && chain.status === "live") {
-      setChainKey(chainKey);      // MST set karo
+      setChainKey(chainKey); // Ye hasSelectedChain = true kar dega
     }
-    navigate("/", { replace: true }); // Home pe bhejo
+    navigate("/", { replace: true });
   }, []);
 
-  // Loading flash
   return (
-    <div style={{ minHeight: "100vh", background: "#08070f", display: "flex",
-      alignItems: "center", justifyContent: "center", color: "#7B2FFF",
-      fontFamily: "'Rajdhani', sans-serif", fontSize: 14, letterSpacing: "2px" }}>
-      Entering MST Blockchain...
+    <div style={{
+      minHeight: "100vh", background: "#08070f",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      color: "#7B2FFF", fontFamily: "'Rajdhani', sans-serif",
+      fontSize: 14, letterSpacing: "2px"
+    }}>
+      Entering {chainKey === "mst" ? "MST Blockchain" : "BOTChain"}...
     </div>
   );
 }
