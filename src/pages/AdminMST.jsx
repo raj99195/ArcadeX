@@ -287,7 +287,8 @@ export default function AdminMST() {
         setSettings({ playerPct, creatorPct, playerCap, chainCap, resetPeriod, isPaused, cooldown });
         setForm({
           playerPercent: playerPct.toString(), creatorPercent: creatorPct.toString(),
-          playerCap: playerCap.toString(), chainCap: chainCap.toString(),
+          playerCap: playerCap > 0n ? (Number(playerCap) / 1e18).toString() : "0",
+          chainCap: chainCap > 0n ? (Number(chainCap) / 1e18).toString() : "0",
           resetHours: (Number(resetPeriod) / 3600).toString(),
           cooldownSeconds: cooldown.toString(),
         });
@@ -494,7 +495,14 @@ try {
   // ── Derived data for Player Activity ──
   // MST chain pe rewardRateNative use karo — rewardRate BOTChain (ARCADE) ka hai
   const gameRateMap = Object.fromEntries(
-    games.map(g => [g.id, Number(g.rewardRateNative ?? g.rewardRate ?? 1)])
+    games.map(g => {
+      // rewardRateNative = Firestore value in MSTC (e.g. 0.5)
+      // rewardRate = on-chain value in wei (e.g. 500000000000000000) → divide by 1e18
+      const rate = g.rewardRateNative != null
+        ? Number(g.rewardRateNative)
+        : Number(g.rewardRate) / 1e18;
+      return [g.id, rate];
+    })
   );
   const playerAgg = {};
   const dayAgg = {};
@@ -670,7 +678,7 @@ try {
               {settings && <div style={{ ...hintStyle, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${P.border}` }}>Current: {settings.playerPct.toString()}% player / {settings.creatorPct.toString()}% creator</div>}
             </SettingCard>
 
-            <SettingCard icon="🛡" accent={P.cyan} title="Daily Earning Caps" desc="Whole-token units, e.g. 10 = 10 MSTC. Set to 0 to disable a cap.">
+            <SettingCard icon="🛡" accent={P.cyan} title="Daily Earning Caps" desc="Enter values in MSTC — e.g. 10 = 10 MSTC cap. Set to 0 to disable.">
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
                 <Field label="Per-player cap"><input style={inputStyle} type="number" value={form.playerCap} onChange={e => setForm(f => ({ ...f, playerCap: e.target.value }))} placeholder="e.g. 10" /></Field>
                 <Field label="Chain-wide cap"><input style={inputStyle} type="number" value={form.chainCap} onChange={e => setForm(f => ({ ...f, chainCap: e.target.value }))} placeholder="0 = off" /></Field>
@@ -680,9 +688,9 @@ try {
                 <Btn busy={busy === "caps"} onClick={async () => {
                   setBusy("caps");
                   try {
-                    const h1 = await writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setPlayerDailyCap", args: [BigInt(form.playerCap)], chainId, account: address });
+                    const h1 = await writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setPlayerDailyCap", args: [BigInt(Math.round(parseFloat(form.playerCap || "0") * 1e18))], chainId, account: address });
                     await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash: h1 });
-                    const h2 = await writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setChainDailyCap", args: [BigInt(form.chainCap)], chainId, account: address });
+                    const h2 = await writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setChainDailyCap", args: [BigInt(Math.round(parseFloat(form.chainCap || "0") * 1e18))], chainId, account: address });
                     await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash: h2 });
                     const seconds = BigInt(Math.round(Number(form.resetHours) * 3600));
                     const h3 = await writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setCapResetPeriod", args: [seconds], chainId, account: address });
@@ -692,7 +700,7 @@ try {
                   finally { setBusy(""); }
                 }}>Save all</Btn>
               </div>
-              {settings && <div style={{ ...hintStyle, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${P.border}` }}>Current: player {settings.playerCap.toString()} · chain {settings.chainCap.toString()} · every {(Number(settings.resetPeriod) / 3600).toFixed(1)}h</div>}
+              {settings && <div style={{ ...hintStyle, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${P.border}` }}>Current: player {settings.playerCap > 0n ? (Number(settings.playerCap) / 1e18).toFixed(2) : "0"} · chain {settings.chainCap > 0n ? (Number(settings.chainCap) / 1e18).toFixed(2) : "0"} · every {(Number(settings.resetPeriod) / 3600).toFixed(1)}h</div>}
             </SettingCard>
 
             <SettingCard icon="🤖" accent={P.cyan} title="Anti-Bot Throttle" desc="Minimum seconds a player must wait between plays. 0 disables it.">
