@@ -394,12 +394,15 @@ try {
     const newRate = rewardRateInputs[gameId];
     if (!newRate || isNaN(Number(newRate))) return;
 
-    // Float ko integer mein convert karo — BigInt("0.5") crash karta hai
-    const rateInt = Math.round(parseFloat(newRate));
-    if (rateInt < 1) {
-      showMsg("Minimum reward rate is 1 MSTC. Decimal values require contract redeploy.", false);
+    const parsed = parseFloat(newRate);
+    if (parsed <= 0 || isNaN(parsed)) {
+      showMsg("Invalid rate — enter a positive number (e.g. 0.5 or 1)", false);
       return;
     }
+
+    // Convert to wei — new Platform stores rewardRate in wei directly
+    // e.g. 0.5 MSTC = 500000000000000000
+    const rateWei = BigInt(Math.round(parsed * 1e18));
 
     const key = `rewardrate-${gameId}`;
     setBusy(key);
@@ -408,7 +411,7 @@ try {
       const hash = await writeWithGas(publicClient, {
         address: PLATFORM, abi: PLATFORM_ABI,
         functionName: "updateGameRewardRate",
-        args: [BigInt(gameId), BigInt(rateInt)],
+        args: [BigInt(gameId), rateWei],
         chainId, account: address,
       });
       // MST RPC slow hai — explicit timeout + polling
@@ -419,13 +422,13 @@ try {
       });
       console.log("[handleSaveRewardRate] on-chain done, hash:", hash);
 
-      // 2. Firestore sync
+      // 2. Firestore sync — store human-readable value (0.5 not wei)
       const token = localStorage.getItem("arcadex_jwt");
       if (!token) { console.warn("[handleSaveRewardRate] No JWT token found in localStorage"); }
       const res = await fetch("/api/games?action=admin-update-reward", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ gameId: String(gameId), rewardRateNative: rateInt }),
+        body: JSON.stringify({ gameId: String(gameId), rewardRateNative: parsed }),
       });
       const resJson = await res.json();
       if (!res.ok) {
@@ -433,8 +436,8 @@ try {
         showMsg(`On-chain ✓ but Firestore failed: ${resJson.error}`, false);
       } else {
         console.log("[handleSaveRewardRate] Firestore updated successfully");
-        showMsg(`Reward rate updated to ${rateInt} MSTC ✓`, true);
-        setGames(prev => prev.map(g => g.id === gameId ? { ...g, rewardRateNative: rateInt } : g));
+        showMsg(`Reward rate updated to ${parsed} MSTC ✓`, true);
+        setGames(prev => prev.map(g => g.id === gameId ? { ...g, rewardRateNative: parsed } : g));
       }
     } catch (err) {
       console.error("[handleSaveRewardRate] error:", err);
