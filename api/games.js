@@ -2,6 +2,7 @@
 
 import jwt from "jsonwebtoken";
 import admin from "firebase-admin";
+import { ethers } from "ethers";
 
 function verifyToken(req) {
   const auth = req.headers.authorization;
@@ -118,7 +119,6 @@ export default async function handler(req, res) {
     const { address: claimAddr } = req.query;
     if (!claimAddr) return res.status(400).json({ error: "address required" });
     try {
-      const { ethers } = await import("ethers");
       const provider = new ethers.JsonRpcProvider(process.env.MST_RPC_URL);
       const faucet   = new ethers.Contract(
         process.env.MST_FAUCET_ADDRESS,
@@ -318,8 +318,6 @@ export default async function handler(req, res) {
       return res.status(429).json({ error: "Too many requests" });
 
     try {
-      const { ethers } = await import("ethers");
-
       const rpcUrl     = process.env.MST_RPC_URL;
       const pk         = process.env.PRIVATE_KEY;        // admin wallet (owner of faucet)
       const faucetAddr = process.env.MST_FAUCET_ADDRESS;
