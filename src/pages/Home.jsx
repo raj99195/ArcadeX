@@ -35,7 +35,7 @@ export default function Home() {
   const [upcomingTournaments, setUpcomingTournaments] = useState([]);
   const [tournamentsLoaded, setTournamentsLoaded] = useState(false);
 
-  const CARDS_PER_PAGE = isMobile ? 1 : 3;
+  const CARDS_PER_PAGE = isMobile ? 1 : 6;
   const featured = games;
   const totalPages = Math.max(1, Math.ceil(featured.length / CARDS_PER_PAGE));
   const currentCards = featured.slice(page * CARDS_PER_PAGE, page * CARDS_PER_PAGE + CARDS_PER_PAGE);
