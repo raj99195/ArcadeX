@@ -205,6 +205,9 @@ export default function AdminMST() {
 
   const [settings, setSettings] = useState(null);
   const [poolBalance, setPoolBalance] = useState(null);
+  const [faucetBalance, setFaucetBalance] = useState(null);
+  const [faucetClaims, setFaucetClaims] = useState(null);
+  const [copied, setCopied] = useState(false); // "pool" | "faucet" | false
   const [form, setForm] = useState({ playerPercent: "80", creatorPercent: "20", playerCap: "0", chainCap: "0", resetHours: "24", cooldownSeconds: "0" });
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState({ text: "", ok: true });
@@ -262,6 +265,25 @@ export default function AdminMST() {
 
         const bal = await publicClient.getBalance({ address: PLATFORM });
         setPoolBalance(bal);
+
+        // Faucet balance + remaining claims
+        const FAUCET_ADDRESS = contracts?.faucet;
+        if (FAUCET_ADDRESS) {
+          try {
+            const fBal = await publicClient.getBalance({ address: FAUCET_ADDRESS });
+            setFaucetBalance(fBal);
+            const FAUCET_ABI = [
+              { name: "remainingClaims", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+            ];
+            const remaining = await readContract(wagmiAdapter.wagmiConfig, {
+              address: FAUCET_ADDRESS, abi: FAUCET_ABI,
+              functionName: "remainingClaims", chainId,
+            });
+            setFaucetClaims(Number(remaining));
+          } catch (e) {
+            console.warn("Faucet balance fetch failed:", e.message);
+          }
+        }
         setSettings({ playerPct, creatorPct, playerCap, chainCap, resetPeriod, isPaused, cooldown });
         setForm({
           playerPercent: playerPct.toString(), creatorPercent: creatorPct.toString(),
@@ -300,7 +322,7 @@ try {
         const initialMinScores = {};
         gameList.forEach(g => { initialMinScores[g.id] = g.minScore; });
         const initialRewardRates = {};
-        gameList.forEach(g => { initialRewardRates[g.id] = g.rewardRate?.toString() ?? ""; });
+        gameList.forEach(g => { initialRewardRates[g.id] = g.rewardRate ? (Number(g.rewardRate) / 1e18).toString() : ""; });
         setRewardRateInputs(initialRewardRates);
         setMinScoreInputs(initialMinScores);
       } catch (err) {
@@ -523,6 +545,7 @@ try {
               <div style={{ fontFamily: P.raj, fontSize: 11.5, color: P.dimMore }}>{address?.slice(0, 8)}...{address?.slice(-6)}</div>
             </div>
           </div>
+          {/* Reward Pool card */}
           <div style={{
             padding: "10px 18px", borderRadius: 12, background: P.card, border: `1px solid ${poolLow ? "rgba(255,170,0,0.35)" : P.border2}`,
             display: "flex", alignItems: "center", gap: 10,
@@ -530,9 +553,66 @@ try {
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: poolLow ? P.amber : P.green, boxShadow: `0 0 8px ${poolLow ? P.amber : P.green}` }} />
             <div>
               <div style={{ fontFamily: P.raj, fontSize: 9.5, color: P.dimMore, textTransform: "uppercase", letterSpacing: "0.8px" }}>Reward Pool</div>
-              <div style={{ fontFamily: P.orb, fontSize: 15, color: poolLow ? P.amber : "#fff" }}>{poolBalance !== null ? (Number(poolBalance) / 1e18).toFixed(2) : "..."} MSTC</div>
+              <div style={{ fontFamily: P.orb, fontSize: 15, color: poolLow ? P.amber : "#fff" }}>{poolBalance !== null ? (Number(poolBalance) / 1e18).toFixed(4) : "..."} MSTC</div>
             </div>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(PLATFORM);
+                setCopied("pool");
+                setTimeout(() => setCopied(false), 2000);
+              }}
+              title="Copy Platform address to fund reward pool"
+              style={{
+                marginLeft: 6, padding: "4px 10px", borderRadius: 7,
+                background: copied === "pool" ? "rgba(0,255,136,0.1)" : "rgba(0,255,136,0.06)",
+                border: `1px solid ${copied === "pool" ? "rgba(0,255,136,0.4)" : "rgba(0,255,136,0.2)"}`,
+                color: copied === "pool" ? P.green : "rgba(0,255,136,0.7)",
+                fontFamily: P.raj, fontSize: 10, fontWeight: 700,
+                cursor: "pointer", transition: "all 0.2s", whiteSpace: "nowrap",
+              }}
+            >
+              {copied === "pool" ? "✓ Copied!" : "⎘ Copy Address"}
+            </button>
           </div>
+
+          {/* Faucet card */}
+          {contracts?.faucet && (
+            <div style={{
+              padding: "10px 18px", borderRadius: 12, background: P.card,
+              border: `1px solid ${faucetClaims !== null && faucetClaims < 10 ? "rgba(255,170,0,0.35)" : "rgba(0,212,255,0.25)"}`,
+              display: "flex", alignItems: "center", gap: 10,
+            }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: faucetClaims !== null && faucetClaims < 10 ? P.amber : P.cyan, boxShadow: `0 0 8px ${faucetClaims !== null && faucetClaims < 10 ? P.amber : P.cyan}` }} />
+              <div>
+                <div style={{ fontFamily: P.raj, fontSize: 9.5, color: P.dimMore, textTransform: "uppercase", letterSpacing: "0.8px" }}>Gas Faucet</div>
+                <div style={{ fontFamily: P.orb, fontSize: 15, color: faucetClaims !== null && faucetClaims < 10 ? P.amber : P.cyan }}>
+                  {faucetBalance !== null ? (Number(faucetBalance) / 1e18).toFixed(2) : "..."} MSTC
+                </div>
+                <div style={{ fontFamily: P.raj, fontSize: 9.5, color: P.dimMore, marginTop: 2 }}>
+                  {faucetClaims !== null ? `${faucetClaims} claims left` : "..."}
+                </div>
+              </div>
+              {/* Copy address button */}
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(contracts.faucet);
+                  setCopied("faucet");
+                  setTimeout(() => setCopied(false), 2000);
+                }}
+                title="Copy faucet address to fund it"
+                style={{
+                  marginLeft: 6, padding: "4px 10px", borderRadius: 7,
+                  background: copied === "faucet" ? "rgba(0,212,255,0.1)" : "rgba(0,212,255,0.08)",
+                  border: `1px solid ${copied === "faucet" ? "rgba(0,212,255,0.4)" : "rgba(0,212,255,0.25)"}`,
+                  color: copied === "faucet" ? P.cyan : P.cyan,
+                  fontFamily: P.raj, fontSize: 10, fontWeight: 700,
+                  cursor: "pointer", transition: "all 0.2s", whiteSpace: "nowrap",
+                }}
+              >
+                {copied === "faucet" ? "✓ Copied!" : "⎘ Copy Address"}
+              </button>
+            </div>
+          )}
         </div>
 
         {msg.text && (
@@ -645,7 +725,7 @@ try {
                         <div style={{ fontFamily: P.raj, fontSize: 10.5, color: P.dimMore, marginTop: 2 }}>Game #{g.id} · {g.totalPlays.toString()} plays</div>
                       </div>
                       <div style={{ textAlign: "right" }}>
-                        <div style={{ fontFamily: P.orb, fontSize: 12, color: P.cyan }}>On-chain: {g.rewardRate.toString()} MSTC</div>
+                        <div style={{ fontFamily: P.orb, fontSize: 12, color: P.cyan }}>On-chain: {g.rewardRate ? (Number(g.rewardRate) / 1e18).toFixed(2) : "0"} MSTC</div>
                         <div style={{ fontFamily: P.raj, fontSize: 10, color: P.dimMore }}>Firestore: {g.rewardRateNative ?? "?"} MSTC</div>
                       </div>
                     </div>

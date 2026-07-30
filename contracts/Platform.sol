@@ -60,8 +60,8 @@ contract Platform is AccessControl, ReentrancyGuard {
     uint256 public creatorSharePercent = 20;
 
     // ── Fair-play caps (all 0 = disabled, matches old unrestricted behavior) ──
-    uint256 public playerDailyCap;   // whole-token units, same convention as rewardRate
-    uint256 public chainDailyCap;    // whole-token units — total payout cap across ALL players
+    uint256 public playerDailyCap;   // in wei — e.g. 5 MSTC = 5e18
+    uint256 public chainDailyCap;    // in wei — total payout cap across ALL players
     uint256 public capResetPeriod = 1 days; // admin can widen to e.g. 2 days
 
     mapping(address => uint256) public playerCapWindowStart;
@@ -279,23 +279,25 @@ contract Platform is AccessControl, ReentrancyGuard {
         }
         lastPlayTimestamp[player] = block.timestamp;
 
-        uint256 rate          = games[gameId].rewardRate * 1e18;
+        // rewardRate is now stored in wei directly (e.g. 0.5 MSTC = 5e17).
+        // Previously was whole-token units multiplied here by 1e18.
+        uint256 rate          = games[gameId].rewardRate;
         uint256 playerReward  = (rate * playerSharePercent) / 100;
         uint256 creatorReward = (rate * creatorSharePercent) / 100;
 
         // ── Per-player daily cap ──
         if (playerDailyCap > 0) {
             _refreshPlayerWindow(player);
-            uint256 capWei = playerDailyCap * 1e18;
-            require(playerEarnedInWindow[player] + playerReward <= capWei, "Daily player cap reached");
+            // playerDailyCap is now stored in wei
+            require(playerEarnedInWindow[player] + playerReward <= playerDailyCap, "Daily player cap reached");
             playerEarnedInWindow[player] += playerReward;
         }
 
         // ── Chain-wide daily payout cap ──
         if (chainDailyCap > 0) {
             _refreshChainWindow();
-            uint256 chainCapWei = chainDailyCap * 1e18;
-            require(chainEarnedInWindow + playerReward + creatorReward <= chainCapWei, "Daily chain cap reached");
+            // chainDailyCap is now stored in wei
+            require(chainEarnedInWindow + playerReward + creatorReward <= chainDailyCap, "Daily chain cap reached");
             chainEarnedInWindow += playerReward + creatorReward;
         }
 

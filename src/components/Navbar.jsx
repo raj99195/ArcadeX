@@ -28,11 +28,47 @@ export default function Navbar() {
   const [earningsData, setEarningsData] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [gameMap, setGameMap] = useState({}); // gameId → { thumbnail, name }
+  const [faucetClaimed, setFaucetClaimed] = useState(false);
+  const [faucetLoading, setFaucetLoading] = useState(false);
 
   const ddRef = useRef(null);
   const menuRef = useRef(null);
 
-  // Connect button click flow:
+  // ── Faucet: check if already claimed on MST connect ──────────────
+  useEffect(() => {
+    if (!isConnected || !address || chainKey !== "mst") return;
+    (async () => {
+      try {
+        const res = await fetch(`/api/games?action=check-gas-claim&address=${address}`);
+        const data = await res.json();
+        if (data.claimed) setFaucetClaimed(true);
+      } catch (e) { /* silent fail */ }
+    })();
+  }, [isConnected, address, chainKey]);
+
+  const handleClaimGas = async () => {
+    if (!address || faucetLoading) return;
+    setFaucetLoading(true);
+    try {
+      const res = await fetch("/api/games?action=claim-gas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address }),
+      });
+      const data = await res.json();
+      if (data.already || data.success) {
+        setFaucetClaimed(true);
+        if (data.success) {
+          // Small toast — optional
+          console.log("✅ 0.1 MSTC claimed:", data.txHash);
+        }
+      }
+    } catch (e) {
+      console.error("Faucet claim failed:", e);
+    } finally {
+      setFaucetLoading(false);
+    }
+  };
   // 1. Agar MetaMask available hai → directly wagmi injected connector use karo
   //    with correct chainId. AppKit ka open() internally BOTChain (networks[0])
   //    pe switchChain call karta hai — yeh bypass karta hai woh problem.
@@ -318,6 +354,39 @@ export default function Navbar() {
             </div>
             <span style={{ fontSize: 9, color: "rgba(123,47,255,0.6)", marginLeft: 2 }}>▾</span>
           </div>
+        )}
+
+        {/* ⛽ FAUCET — MST only, balance 0, not claimed */}
+        {isConnected && chainKey === "mst" &&
+         !faucetClaimed && Number(balance) === 0 && (
+          <button
+            onClick={handleClaimGas}
+            disabled={faucetLoading}
+            title="Claim free MSTC for gas fees"
+            style={{
+              padding: isMobile ? "5px 10px" : "6px 14px",
+              background: faucetLoading
+                ? "rgba(255,47,94,0.1)"
+                : "linear-gradient(135deg,#ff2f5e,#ff6b35)",
+              border: "none",
+              borderRadius: 20,
+              color: "#fff",
+              fontFamily: "'Rajdhani',sans-serif",
+              fontWeight: 700,
+              fontSize: isMobile ? 10 : 12,
+              cursor: faucetLoading ? "not-allowed" : "pointer",
+              display: "flex", alignItems: "center", gap: 5,
+              boxShadow: faucetLoading ? "none" : "0 0 18px rgba(255,47,94,0.35)",
+              opacity: faucetLoading ? 0.7 : 1,
+              transition: "all 0.2s",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {faucetLoading
+              ? <><span style={{ width: 10, height: 10, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", animation: "chainSpin 0.7s linear infinite", display: "inline-block" }} /> Claiming...</>
+              : <>⛽ {isMobile ? "0.1 MSTC" : "Claim 0.1 MSTC"}</>
+            }
+          </button>
         )}
 
         {/* Wallet button */}

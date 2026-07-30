@@ -14,16 +14,18 @@
   },
   "mst": {
     "token": "0x066aefBf67D73F8439440fD6ae6adaFCEa88b2D5",
-    "platform": "0xB784bECdD891b629979B342F27F3CF95B0C096BC",
-    "tournament": "0x27e8e13F8Dd4858Ffd34Ea4aCCa18463B0D032D4",
+    "platform": "0xd9181c86f9E1D5825E47ED80Ae9E76B4dF18c0B8",
+    "tournament": "0x4f5533FdC677005Baca470Bd318FD20E93f0EEdF",
     "creatorNft": "0x1bDDAE8d8D2CEE71f1a7E6427c6B75DeBC7D4be7",
     "marketplace": "0x7c73fA62c52dA3A39D42372DE0Bc867CB0e97f45",
     "leaderboard": "0x605D07c2E6C5a1dcf553FBC37b6206fD53667EF7",
     "campaignBadge": "0x8ec1a5753c28DBF5677c029Dc094DE20DDB06814",
-    "deployedAt": "2026-07-13T16:32:14.042Z",
+    "deployedAt": "2026-07-30T14:53:03.289Z",
     "gameItems": "0xD62aB3b6cfa298637E525c9B15724b939f7935c7",
     "achievementNft": "0x32204805cc53318F63d9aD023EC85c76Eac74693",
-    "rewardPool": "0xeecD96e5684f1B49C2775fAdbE5De6Ecb012F2cB"
+    "rewardPool": "0xeecD96e5684f1B49C2775fAdbE5De6Ecb012F2cB",
+    "faucet": "0xea62cE5B7b611A1924D62Ce18E79B7a2fd6aD4f8",
+    "faucetAmount": "0.1"
   },
   "somnia": {
     "token": "0xcf035621bC1FD5732839823a637f9Be4dA582354",

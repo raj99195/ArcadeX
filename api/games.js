@@ -113,6 +113,23 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
+  // ── GET check-gas-claim (public — check if wallet already claimed) ──
+  if (req.method === "GET" && action === "check-gas-claim") {
+    const { address: claimAddr } = req.query;
+    if (!claimAddr) return res.status(400).json({ error: "address required" });
+    try {
+      const { ethers } = await import("ethers");
+      const provider = new ethers.JsonRpcProvider(process.env.MST_RPC_URL);
+      const faucet   = new ethers.Contract(
+        process.env.MST_FAUCET_ADDRESS,
+        ["function hasClaimed(address) view returns (bool)"],
+        provider
+      );
+      const claimed = await faucet.hasClaimed(claimAddr);
+      return res.status(200).json({ claimed });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
   // ── GET scores (public) ──
   if (req.method === "GET" && action === "scores") {
     try {
@@ -285,6 +302,67 @@ export default async function handler(req, res) {
       await gameRef.update(updates);
       return res.status(200).json({ success: true });
     } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST claim-gas (MST Faucet v2 — fully on-chain) ──────────────────
+  // Amount is decided by MSTFaucet.sol on-chain (FAUCET_AMOUNT immutable).
+  // Backend just calls faucet.claimGas(user) — no amount passed.
+  // Contract handles: check claimed → send MSTC → mark claimed (all atomic).
+  if (req.method === "POST" && action === "claim-gas") {
+    const { address: claimAddress } = req.body;
+    if (!claimAddress) return res.status(400).json({ error: "address required" });
+
+    // IP rate limit — prevent spam
+    const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
+    if (!rateLimit(`faucet:${ip}`, 3))
+      return res.status(429).json({ error: "Too many requests" });
+
+    try {
+      const { ethers } = await import("ethers");
+
+      const rpcUrl     = process.env.MST_RPC_URL;
+      const pk         = process.env.PRIVATE_KEY;        // admin wallet (owner of faucet)
+      const faucetAddr = process.env.MST_FAUCET_ADDRESS;
+
+      if (!rpcUrl || !pk || !faucetAddr)
+        return res.status(503).json({ error: "Faucet not configured" });
+
+      const provider   = new ethers.JsonRpcProvider(rpcUrl);
+      const adminWallet = new ethers.Wallet(pk, provider);
+
+      const faucetABI = [
+        "function claimGas(address payable user) external",
+        "function hasClaimed(address) view returns (bool)",
+        "function balance() view returns (uint256)",
+        "function FAUCET_AMOUNT() view returns (uint256)",
+      ];
+      const faucet = new ethers.Contract(faucetAddr, faucetABI, adminWallet);
+
+      // On-chain check — hasClaimed() reads from contract mapping
+      if (await faucet.hasClaimed(claimAddress))
+        return res.status(200).json({ already: true, msg: "Already claimed" });
+
+      // Balance check — remainingClaims > 0?
+      const bal = await faucet.balance();
+      const amt = await faucet.FAUCET_AMOUNT();
+      if (bal < amt)
+        return res.status(503).json({ error: "Faucet empty — refill pending" });
+
+      // One call — contract handles everything atomically
+      const tx = await faucet.claimGas(claimAddress, { gasLimit: 120_000 });
+      await tx.wait();
+
+      return res.status(200).json({ success: true, txHash: tx.hash });
+    } catch (err) {
+      console.error("[claim-gas]", err);
+      // Contract revert messages — forward cleanly to frontend
+      const msg = err.shortMessage || err.message || "Claim failed";
+      if (msg.includes("Already claimed"))
+        return res.status(200).json({ already: true });
+      if (msg.includes("Faucet empty"))
+        return res.status(503).json({ error: "Faucet empty — refill pending" });
+      return res.status(500).json({ error: msg });
+    }
   }
 
   // ── POST admin-update-reward (AdminMST — sync on-chain rate to Firestore) ──
