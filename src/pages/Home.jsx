@@ -3,10 +3,123 @@ import { useAccount, usePublicClient } from "wagmi";
 import { useAppKit } from "@reown/appkit/react";
 import { useGames } from "../hooks/useGames";
 import GameCard from "../components/GameCard";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { getScores } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { useChain } from "../context/ChainContext";
+
+// ── Full-screen Snake Animation ───────────────────────────────────────────────
+function SnakeCanvas() {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const resize = () => {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+    resize();
+    window.addEventListener("resize", resize);
+
+    const ctx = canvas.getContext("2d");
+
+    const SNAKES = [
+      { color: "#7B2FFF", glow: "#7B2FFF", width: 5,   length: 180, speed: 0.0018 },
+      { color: "#00D4FF", glow: "#00D4FF", width: 4,   length: 150, speed: 0.0015 },
+      { color: "#00FF88", glow: "#00FF88", width: 3.5, length: 130, speed: 0.0022 },
+      { color: "#FFB700", glow: "#FFB700", width: 3,   length: 120, speed: 0.0013 },
+      { color: "#FF2F5E", glow: "#FF2F5E", width: 3,   length: 110, speed: 0.002  },
+    ];
+
+    // Get point along a looping path that covers the screen
+    const getPoint = (t) => {
+      const W = canvas.width;
+      const H = canvas.height;
+      // Lissajous-style figure-8 that fills screen nicely
+      const angle = t * Math.PI * 2;
+      const x = W / 2 + (W / 2.2) * Math.sin(angle);
+      const y = H / 2 + (H / 2.4) * Math.sin(angle * 2 + Math.PI / 4);
+      return { x, y };
+    };
+
+    let currentSnake = 0;
+    let progress     = 0;       // 0 → 1 = one full loop
+    let animId;
+    let lastTime     = 0;
+
+    const draw = (timestamp) => {
+      const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+      lastTime = timestamp;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const snake = SNAKES[currentSnake];
+      progress += snake.speed * dt * 60;
+
+      // Draw trail
+      const segCount = snake.length;
+      for (let i = segCount; i >= 0; i--) {
+        const t = ((progress - i * 0.002) + 10) % 1;
+        const pt = getPoint(t);
+        const ratio = 1 - i / segCount;
+        const alpha = ratio * 0.9;
+        const r     = snake.width * (0.3 + ratio * 0.7);
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.shadowBlur  = i < 8 ? 22 : 6;
+        ctx.shadowColor = snake.glow;
+        ctx.fillStyle   = snake.color;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Head glow
+      const head = getPoint(progress % 1);
+      ctx.save();
+      ctx.shadowBlur  = 35;
+      ctx.shadowColor = snake.glow;
+      ctx.fillStyle   = "#ffffff";
+      ctx.globalAlpha = 0.95;
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, snake.width * 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // After one full loop switch to next snake
+      if (progress >= 1) {
+        progress     = 0;
+        currentSnake = (currentSnake + 1) % SNAKES.length;
+      }
+
+      animId = requestAnimationFrame(draw);
+    };
+
+    animId = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener("resize", resize);
+    };
+  }, []);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        position: "fixed",
+        top: 0, left: 0,
+        width: "100vw", height: "100vh",
+        zIndex: 0,
+        pointerEvents: "none",
+        opacity: 0.35,
+      }}
+    />
+  );
+}
 
 
 const TOURNAMENT_ABI = [
@@ -35,7 +148,7 @@ export default function Home() {
   const [upcomingTournaments, setUpcomingTournaments] = useState([]);
   const [tournamentsLoaded, setTournamentsLoaded] = useState(false);
 
-  const CARDS_PER_PAGE = isMobile ? 1 : 6;
+  const CARDS_PER_PAGE = isMobile ? 1 : 5;
   const featured = games;
   const totalPages = Math.max(1, Math.ceil(featured.length / CARDS_PER_PAGE));
   const currentCards = featured.slice(page * CARDS_PER_PAGE, page * CARDS_PER_PAGE + CARDS_PER_PAGE);
@@ -117,6 +230,8 @@ export default function Home() {
       height: isMobile ? "auto" : "calc(100vh - 54px)",
       position: "relative",
     }}>
+      {/* Full-screen snake background — one snake at a time */}
+      {!isMobile && <SnakeCanvas />}
 
       <style>{`
         @keyframes tagFloat  { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-7px)} }
@@ -448,6 +563,7 @@ export default function Home() {
             padding: isMobile ? "12px 16px" : "8px 36px 10px",
             marginTop: 0,
             borderTop: "1px solid rgba(123,47,255,0.1)",
+            overflow: "hidden",
           }}
             onWheel={e => { if (!isMobile) { e.preventDefault(); if (e.deltaY > 0) goTo(page + 1); else goTo(page - 1); } }}
           >
@@ -482,7 +598,7 @@ export default function Home() {
 
             <div style={{
               display: "grid",
-              gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 250px)",
+              gridTemplateColumns: isMobile ? "1fr" : "repeat(5, 300px)",
               gap: 6,
               opacity: visible ? 1 : 0,
               transform: visible ? "translateY(0px)" : "translateY(12px)",
