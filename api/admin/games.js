@@ -154,24 +154,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // ── admin-update-reward (AdminMST.jsx — sync on-chain rate to Firestore) ──
-    if (action === "admin-update-reward") {
-      const { gameId, rewardRate, rewardRateNative } = req.body;
-      if (!gameId) return res.status(400).json({ error: "gameId required" });
-      try {
-        const updates = { updatedAt: new Date() };
-        if (rewardRate != null)       updates.rewardRate       = Number(rewardRate);
-        if (rewardRateNative != null) updates.rewardRateNative = Number(rewardRateNative);
-        if (Object.keys(updates).length === 1)
-          return res.status(400).json({ error: "Nothing to update" });
-        await db.collection("games").doc(String(gameId)).update(updates);
-        return res.status(200).json({ success: true });
-      } catch (err) {
-        return res.status(500).json({ error: err.message });
-      }
-    }
-
-    return res.status(400).json({ error: "action must be: approve | reject | refresh-leaderboard | admin-update-reward" });
+    return res.status(400).json({ error: "action must be: approve | reject | refresh-leaderboard" });
   }
 
   return res.status(405).json({ error: "Method not allowed" });
