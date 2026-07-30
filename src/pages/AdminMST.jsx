@@ -395,13 +395,12 @@ try {
     if (!newRate || isNaN(Number(newRate))) return;
 
     const parsed = parseFloat(newRate);
-    if (parsed <= 0 || isNaN(parsed)) {
-      showMsg("Invalid rate — enter a positive number (e.g. 0.5 or 1)", false);
+    if (parsed <= 0) {
+      showMsg("Rate must be greater than 0", false);
       return;
     }
 
-    // Convert to wei — new Platform stores rewardRate in wei directly
-    // e.g. 0.5 MSTC = 500000000000000000
+    // Platform stores rewardRate in wei — 0.5 MSTC = 500000000000000000
     const rateWei = BigInt(Math.round(parsed * 1e18));
 
     const key = `rewardrate-${gameId}`;
@@ -422,7 +421,7 @@ try {
       });
       console.log("[handleSaveRewardRate] on-chain done, hash:", hash);
 
-      // 2. Firestore sync — store human-readable value (0.5 not wei)
+      // 2. Firestore sync
       const token = localStorage.getItem("arcadex_jwt");
       if (!token) { console.warn("[handleSaveRewardRate] No JWT token found in localStorage"); }
       const res = await fetch("/api/games?action=admin-update-reward", {
