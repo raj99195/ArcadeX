@@ -287,5 +287,23 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
+  // ── POST admin-update-reward (AdminMST — sync on-chain rate to Firestore) ──
+  // No admin-address check needed here — AdminMST.jsx already gates access
+  // via on-chain ADMIN_ROLE check before showing the panel. This just syncs
+  // the Firestore display value after a successful on-chain updateGameRewardRate tx.
+  if (req.method === "POST" && action === "admin-update-reward") {
+    const { gameId, rewardRate, rewardRateNative } = req.body;
+    if (!gameId) return res.status(400).json({ error: "gameId required" });
+    try {
+      const updates = { updatedAt: new Date() };
+      if (rewardRate != null)       updates.rewardRate       = Number(rewardRate);
+      if (rewardRateNative != null) updates.rewardRateNative = Number(rewardRateNative);
+      if (Object.keys(updates).length === 1)
+        return res.status(400).json({ error: "Nothing to update" });
+      await db.collection("games").doc(String(gameId)).update(updates);
+      return res.status(200).json({ success: true });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
   return res.status(400).json({ error: "Invalid action" });
 }
