@@ -371,6 +371,14 @@ try {
   const handleSaveRewardRate = async (gameId) => {
     const newRate = rewardRateInputs[gameId];
     if (!newRate || isNaN(Number(newRate))) return;
+
+    // Float ko integer mein convert karo — BigInt("0.5") crash karta hai
+    const rateInt = Math.round(parseFloat(newRate));
+    if (rateInt < 1) {
+      showMsg("Minimum reward rate is 1 MSTC. Decimal values require contract redeploy.", false);
+      return;
+    }
+
     const key = `rewardrate-${gameId}`;
     setBusy(key);
     try {
@@ -378,19 +386,24 @@ try {
       const hash = await writeWithGas(publicClient, {
         address: PLATFORM, abi: PLATFORM_ABI,
         functionName: "updateGameRewardRate",
-        args: [BigInt(gameId), BigInt(newRate)],
+        args: [BigInt(gameId), BigInt(rateInt)],
         chainId, account: address,
       });
-      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      // MST RPC slow hai — explicit timeout + polling
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, {
+        hash,
+        timeout: 45_000,
+        pollingInterval: 2_000,
+      });
       console.log("[handleSaveRewardRate] on-chain done, hash:", hash);
 
-      // 2. Firestore update — token key is "arcadex_jwt"
+      // 2. Firestore sync
       const token = localStorage.getItem("arcadex_jwt");
       if (!token) { console.warn("[handleSaveRewardRate] No JWT token found in localStorage"); }
       const res = await fetch("/api/games?action=admin-update-reward", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ gameId: String(gameId), rewardRateNative: Number(newRate) }),
+        body: JSON.stringify({ gameId: String(gameId), rewardRateNative: rateInt }),
       });
       const resJson = await res.json();
       if (!res.ok) {
@@ -398,9 +411,8 @@ try {
         showMsg(`On-chain ✓ but Firestore failed: ${resJson.error}`, false);
       } else {
         console.log("[handleSaveRewardRate] Firestore updated successfully");
-        showMsg(`Reward rate updated to ${newRate} MSTC ✓`, true);
-        // Update local rewardRateNative display without full reload
-        setGames(prev => prev.map(g => g.id === gameId ? { ...g, rewardRateNative: Number(newRate) } : g));
+        showMsg(`Reward rate updated to ${rateInt} MSTC ✓`, true);
+        setGames(prev => prev.map(g => g.id === gameId ? { ...g, rewardRateNative: rateInt } : g));
       }
     } catch (err) {
       console.error("[handleSaveRewardRate] error:", err);
@@ -456,7 +468,10 @@ try {
   };
 
   // ── Derived data for Player Activity ──
-  const gameRateMap = Object.fromEntries(games.map(g => [g.id, Number(g.rewardRate)]));
+  // MST chain pe rewardRateNative use karo — rewardRate BOTChain (ARCADE) ka hai
+  const gameRateMap = Object.fromEntries(
+    games.map(g => [g.id, Number(g.rewardRateNative ?? g.rewardRate ?? 1)])
+  );
   const playerAgg = {};
   const dayAgg = {};
   for (const s of scores) {
