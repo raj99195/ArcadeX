@@ -1,22 +1,18 @@
 // api/games.js
-
 import jwt from "jsonwebtoken";
 import admin from "firebase-admin";
 import { ethers } from "ethers";
-
 function verifyToken(req) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith("Bearer ")) return null;
   try { return jwt.verify(auth.split(" ")[1], process.env.JWT_SECRET); }
   catch { return null; }
 }
-
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
-
 function getDb() {
   if (!admin.apps.length) {
     admin.initializeApp({
@@ -29,15 +25,7 @@ function getDb() {
   }
   return admin.firestore();
 }
-
-// NOTE: was used (FV.increment) further down but never defined — that made
-// the "play" and "like" actions throw ReferenceError in production.
 const FV = admin.firestore.FieldValue;
-
-
-
-
-// Rate limiter
 const rateLimits = new Map();
 function rateLimit(key, max = 10) {
   const now = Date.now();
@@ -47,10 +35,19 @@ function rateLimit(key, max = 10) {
   return true;
 }
 
+// ── Score Signer Config ───────────────────────────────────────────────────────
+const PLATFORM_ADDRESSES = {
+  botchain: "0x2Ca0C74C1ee7e65e5f96c469cef840B62Ba6cFB4",
+  mst:      "0xd9181c86f9E1D5825E47ED80Ae9E76B4dF18c0B8",
+};
+const CHAIN_IDS = {
+  botchain: 677n,
+  mst:      4646n,
+};
+
 export default async function handler(req, res) {
   cors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
-
   const { action } = req.query;
   const db = getDb();
 
@@ -85,28 +82,17 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── GET creator-games (all statuses — pending/approved/rejected) ──
+  // ── GET creator-games ──
   if (req.method === "GET" && action === "creator-games") {
     const user = verifyToken(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     try {
-      // FIX: Firestore mein creator address 3 formats mein save ho sakta hai:
-      // 1. lowercase:  0xb6d0c5...  (JWT format)
-      // 2. checksum:   0xB6D0C5...  (MetaMask default)
-      // 3. mixed:      0xB6d0C5...  (koi bhi variant)
-      // Teeno formats try karo — sab approved/pending/rejected games milenge
       const lowerAddress = user.address.toLowerCase();
-      
-      // Checksum format manually banao (every other char uppercase pattern se nahi,
-      // Ethereum EIP-55 checksum use karo — simple approach: sab known variants try karo)
-      // Yahan hum Firestore se SAB games fetch karke JS mein filter karte hain —
-      // yeh guaranteed sab games dikhayega chahe address kisi bhi format mein ho
       const allGamesSnap = await db.collection("games").get();
       const uniqueDocs = allGamesSnap.docs.filter(d => {
         const creator = d.data().creator;
         return creator && creator.toLowerCase() === lowerAddress;
       });
-
       const games = uniqueDocs
         .map(d => ({ id: d.data().gameId || d.id, ...d.data() }))
         .sort((a, b) => (b.gameId || 0) - (a.gameId || 0));
@@ -114,7 +100,7 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── GET check-gas-claim (public — check if wallet already claimed) ──
+  // ── GET check-gas-claim (public) ──
   if (req.method === "GET" && action === "check-gas-claim") {
     const { address: claimAddr } = req.query;
     if (!claimAddr) return res.status(400).json({ error: "address required" });
@@ -134,8 +120,6 @@ export default async function handler(req, res) {
   if (req.method === "GET" && action === "scores") {
     try {
       const { chain } = req.query;
-      // Sort in JS instead of combining where()+orderBy() in the same query —
-      // that combo needs a Firestore composite index, this doesn't.
       const ref = chain ? db.collection("scores").where("chain", "==", chain) : db.collection("scores");
       const snap = await ref.get();
       const scores = snap.docs
@@ -145,13 +129,16 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── POST record-time (no auth — off-chain analytics, matches what
-  //     GamePlay.jsx actually sends: no Authorization header) ──
+  // ── POST record-time (SH0008: JWT required) ──
   if (req.method === "POST" && action === "record-time") {
-    const { gameId, player, seconds, timestamp, chainId } = req.body;
-    if (!gameId || !player || seconds == null) {
+    const rtUser = verifyToken(req);
+    if (!rtUser) return res.status(401).json({ error: "Unauthorized" });
+    const { gameId, seconds, timestamp, chainId } = req.body;
+    if (!gameId || seconds == null) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+    // player JWT token se lo — client-supplied player address trust mat karo
+    const player = rtUser.address;
     if (!rateLimit(`record-time:${player}`, 60)) {
       return res.status(429).json({ error: "Too many requests" });
     }
@@ -166,12 +153,16 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── POST record-event (no auth — off-chain analytics) ──
+  // ── POST record-event (SH0008: JWT required) ──
   if (req.method === "POST" && action === "record-event") {
-    const { gameId, player, eventType, value, timestamp, chainId } = req.body;
-    if (!gameId || !player || !eventType) {
+    const reUser = verifyToken(req);
+    if (!reUser) return res.status(401).json({ error: "Unauthorized" });
+    const { gameId, eventType, value, timestamp, chainId } = req.body;
+    if (!gameId || !eventType) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+    // player JWT token se lo — client-supplied player address trust mat karo
+    const player = reUser.address;
     if (!rateLimit(`record-event:${player}`, 60)) {
       return res.status(429).json({ error: "Too many requests" });
     }
@@ -187,28 +178,21 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── POST claim-gas (MST Faucet v2 — PUBLIC, no JWT needed) ──────────────
-  // New users won't have a JWT yet — this must stay BEFORE the JWT check.
-  // Amount decided by MSTFaucet.sol on-chain (FAUCET_AMOUNT immutable).
+  // ── POST claim-gas (PUBLIC — no JWT, new users won't have token) ──────────
   if (req.method === "POST" && action === "claim-gas") {
     const { address: claimAddress } = req.body;
     if (!claimAddress) return res.status(400).json({ error: "address required" });
-
     const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
     if (!rateLimit(`faucet:${ip}`, 3))
       return res.status(429).json({ error: "Too many requests" });
-
     try {
       const rpcUrl     = process.env.MST_RPC_URL;
       const pk         = process.env.PRIVATE_KEY;
       const faucetAddr = process.env.MST_FAUCET_ADDRESS;
-
       if (!rpcUrl || !pk || !faucetAddr)
         return res.status(503).json({ error: "Faucet not configured" });
-
       const provider    = new ethers.JsonRpcProvider(rpcUrl);
       const adminWallet = new ethers.Wallet(pk, provider);
-
       const faucetABI = [
         "function claimGas(address payable user) external",
         "function hasClaimed(address) view returns (bool)",
@@ -216,25 +200,97 @@ export default async function handler(req, res) {
         "function FAUCET_AMOUNT() view returns (uint256)",
       ];
       const faucet = new ethers.Contract(faucetAddr, faucetABI, adminWallet);
-
       if (await faucet.hasClaimed(claimAddress))
         return res.status(200).json({ already: true, msg: "Already claimed" });
-
       const bal = await faucet.balance();
       const amt = await faucet.FAUCET_AMOUNT();
       if (bal < amt)
         return res.status(503).json({ error: "Faucet empty — refill pending" });
-
       const tx = await faucet.claimGas(claimAddress, { gasLimit: 120_000 });
       await tx.wait();
-
       return res.status(200).json({ success: true, txHash: tx.hash });
     } catch (err) {
-      console.error("[claim-gas]", err);
       const msg = err.shortMessage || err.message || "Claim failed";
       if (msg.includes("Already claimed")) return res.status(200).json({ already: true });
-      if (msg.includes("Faucet empty")) return res.status(503).json({ error: "Faucet empty — refill pending" });
+      if (msg.includes("Faucet empty")) return res.status(503).json({ error: "Faucet empty" });
       return res.status(500).json({ error: msg });
+    }
+  }
+
+  // ── POST verify-item-price (SH0006: server-side price gate for in-game purchases) ──
+  // GamePlay.jsx calls this BEFORE constructing the on-chain tx so the contract
+  // receives the price that the backend authorised, not whatever the iframe sent.
+  // Returns a short-lived signed price token the frontend embeds in the tx value.
+  //
+  // Flow:
+  //   1. Game iframe sends PURCHASE_SKIN { gameId, skinIndex, price: X }
+  //   2. GamePlay.jsx calls /api/games?action=verify-item-price (JWT required)
+  //   3. Backend looks up the canonical price in Firestore (games/{gameId}/items/{itemKey})
+  //   4. Returns { canonicalPrice, approved: true/false }
+  //   5. GamePlay.jsx uses canonicalPrice for the tx — ignores iframe-supplied price
+  if (req.method === "POST" && action === "verify-item-price") {
+    const vpUser = verifyToken(req);
+    if (!vpUser) return res.status(401).json({ error: "Unauthorized" });
+    const { gameId, itemType, itemKey } = req.body;
+    // itemType: "skin" | "powerup"  |  itemKey: skinIndex or powerUpId
+    if (!gameId || !itemType || itemKey == null) {
+      return res.status(400).json({ error: "gameId, itemType, itemKey required" });
+    }
+    try {
+      const itemDoc = await db
+        .collection("games").doc(String(gameId))
+        .collection("items").doc(`${itemType}_${itemKey}`)
+        .get();
+      if (!itemDoc.exists) {
+        // Item not registered in DB — deny purchase
+        return res.status(404).json({ error: "Item not found", approved: false });
+      }
+      const { price, active } = itemDoc.data();
+      if (!active) return res.status(403).json({ error: "Item not available", approved: false });
+      return res.status(200).json({ canonicalPrice: price, approved: true });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST sign-score (PUBLIC — sign before JWT check, player might not have token yet) ──
+  // Signs the score with SCORE_SIGNER_PRIVATE_KEY so Platform.sol can verify
+  // it came from our backend (not a forged console call).
+  // Message format matches Platform.sol exactly:
+  //   keccak256(abi.encodePacked(player, gameId, score, nonce, address(this), block.chainid))
+  if (req.method === "POST" && action === "sign-score") {
+    const { gameId, score, chain, player } = req.body;
+    if (!gameId || score == null || !chain || !player)
+      return res.status(400).json({ error: "gameId, score, chain, player required" });
+
+    const pk = process.env.SCORE_SIGNER_PRIVATE_KEY;
+    if (!pk) return res.status(503).json({ error: "Score signing not configured" });
+
+    const platformAddr = PLATFORM_ADDRESSES[chain];
+    const chainId      = CHAIN_IDS[chain];
+    if (!platformAddr || !chainId)
+      return res.status(400).json({ error: `Unknown chain: ${chain}` });
+
+    // Rate limit — 1 signing per player per second (anti-spam)
+    if (!rateLimit(`sign:${player.toLowerCase()}:${gameId}`, 30))
+      return res.status(429).json({ error: "Too many sign requests" });
+
+    try {
+      const signerWallet = new ethers.Wallet(pk);
+      const nonce        = BigInt(Date.now());
+
+      // Exact same encoding as Platform.sol verifyScore()
+      const messageHash = ethers.solidityPackedKeccak256(
+        ["address", "uint256", "uint256", "uint256", "address", "uint256"],
+        [player, BigInt(gameId), BigInt(score), nonce, platformAddr, chainId]
+      );
+
+      // signMessage adds Ethereum prefix "\x19Ethereum Signed Message:\n32"
+      // matching toEthSignedMessageHash in Platform.sol
+      const signature = await signerWallet.signMessage(ethers.getBytes(messageHash));
+
+      return res.status(200).json({ nonce: nonce.toString(), signature });
+    } catch (err) {
+      console.error("[sign-score]", err);
+      return res.status(500).json({ error: err.message });
     }
   }
 
@@ -308,7 +364,6 @@ export default async function handler(req, res) {
       const gameRef = db.collection("games").doc(String(gameId));
       const existing = await gameRef.get();
       if (existing.exists) {
-        // Already exists — update (contract re-registered same ID)
         await gameRef.update({
           name, description, iframeUrl,
           thumbnailUrl: thumbnailUrl || existing.data().thumbnailUrl || "",
@@ -357,10 +412,7 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── POST admin-update-reward (AdminMST — sync on-chain rate to Firestore) ──
-  // No admin-address check needed here — AdminMST.jsx already gates access
-  // via on-chain ADMIN_ROLE check before showing the panel. This just syncs
-  // the Firestore display value after a successful on-chain updateGameRewardRate tx.
+  // ── POST admin-update-reward ──
   if (req.method === "POST" && action === "admin-update-reward") {
     const { gameId, rewardRate, rewardRateNative } = req.body;
     if (!gameId) return res.status(400).json({ error: "gameId required" });

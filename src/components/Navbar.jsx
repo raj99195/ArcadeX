@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAppKit } from "@reown/appkit/react";
-import { useAccount, useConnect } from "wagmi";
+import { useAccount, useConnect, usePublicClient } from "wagmi";
 import { injected } from "wagmi/connectors";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
@@ -18,7 +18,8 @@ export default function Navbar() {
   const { balance } = useArcadeBalance();
   
   // Need rewardToken to display ARCADE or MSTC dynamically
-  const { chainName, clearChainSelection, rewardToken, activeChain, chainKey } = useChain();
+  const { chainName, clearChainSelection, rewardToken, activeChain, chainKey, contracts } = useChain();
+  const publicClient = usePublicClient();
   
   const [ddOpen, setDdOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -28,6 +29,7 @@ export default function Navbar() {
   const [earningsData, setEarningsData] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [gameMap, setGameMap] = useState({}); // gameId → { thumbnail, name }
+  const [playerShareForEarnings, setPlayerShareForEarnings] = useState(80); // on-chain playerSharePercent
   const [faucetClaimed, setFaucetClaimed] = useState(false);
   const [faucetLoading, setFaucetLoading] = useState(false);
 
@@ -181,6 +183,16 @@ export default function Navbar() {
         };
       });
       setGameMap(map);
+
+      // Fetch on-chain playerSharePercent — fallback for plays without saved earned
+      try {
+        const SHARE_ABI = [{ name: "playerSharePercent", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }];
+        const platformAddr = contracts?.platform;
+        if (platformAddr && publicClient) {
+          const share = await publicClient.readContract({ address: platformAddr, abi: SHARE_ABI, functionName: "playerSharePercent" });
+          setPlayerShareForEarnings(Number(share));
+        }
+      } catch (e) { /* keep default 80 */ }
 
       // Filter only this player's scores
       const mine = (scoresData.scores || [])
@@ -511,10 +523,11 @@ export default function Navbar() {
               {(() => {
                 // Total earned — only current chain's plays
                 const totalEarned = chainFiltered.reduce((sum, s) => {
+                  // Use actual saved earned if > 0, else fallback with on-chain playerShare
+                  if (s.earned != null && Number(s.earned) > 0) return sum + Number(s.earned);
                   const g = gameMap[s.gameId] || {};
                   const rate = isCurrentMst ? (g.rewardRateNative || 1) : (g.rewardRate || 50);
-                  const share = isCurrentMst ? 50 : 80;
-                  return sum + Math.round(rate * share / 100 * 100) / 100;
+                  return sum + Math.round(rate * playerShareForEarnings / 100 * 100) / 100;
                 }, 0);
                 const earnSymbol = rewardToken || "ARCADE";
                 const earnColor  = isCurrentMst ? "#ff2f5e" : "#00d4ff";
@@ -604,13 +617,12 @@ export default function Navbar() {
                         const playChain = (play.chain || "botchain").toLowerCase();
                         const isMstPlay = playChain === "mst";
                         const rate = isMstPlay ? (gInfo.rewardRateNative || 1) : (gInfo.rewardRate || 50);
-                        const playerShare = isMstPlay ? 50 : 80;
-                        // Use actual saved earned if available (new plays)
-                        // Fallback to calculation for old plays that don't have earned field
-                        const earned = play.earned != null
+                        // Use actual saved earned ONLY if > 0 (0 = save failed, use fallback)
+                        const earned = (play.earned != null && Number(play.earned) > 0)
                           ? Number(play.earned)
-                          : Math.round(rate * playerShare / 100 * 100) / 100;
-                        const earnedSymbol = play.earnedSymbol || (isMstPlay ? "MSTC" : "ARCADE");
+                          : Math.round(rate * playerShareForEarnings / 100 * 100) / 100;
+                        // Always override symbol based on chain — ignore wrong "ARCADE" on MST
+                        const earnedSymbol = isMstPlay ? "MSTC" : (play.earnedSymbol || "ARCADE");
                         // Chain color
                         const chainColor = playChain === "mst" ? "#ff2f5e" : playChain === "botchain" ? "#00d4ff" : "#FFB700";
                         return (

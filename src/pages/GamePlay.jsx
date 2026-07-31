@@ -103,6 +103,7 @@ export default function GamePlay() {
 
   const [score, setScore] = useState(0);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [isFakeFullscreen, setIsFakeFullscreen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [txHash, setTxHash] = useState("");
@@ -130,6 +131,14 @@ export default function GamePlay() {
     window.addEventListener("resize", h);
     return () => window.removeEventListener("resize", h);
   }, []);
+
+  // SH0003: ESC exits fake fullscreen (desktop convenience)
+  useEffect(() => {
+    if (!isFakeFullscreen) return;
+    const onKey = (e) => { if (e.key === "Escape") setIsFakeFullscreen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isFakeFullscreen]);
 
   useEffect(() => {
     if (games.length > 0) setGameLoading(false);
@@ -206,8 +215,10 @@ export default function GamePlay() {
   }, [game?.id, address, gameLoading]);
 
   // ── ArcadeX SDK: postMessage helper (GamePlay -> game iframe) ──
+  // SH0005: targetOrigin = game's actual origin, not wildcard "*"
+  const getGameOrigin = () => game?.iframeUrl ? new URL(game.iframeUrl).origin : "*";
   const sendToGame = (type, payload) => {
-    iframeRef.current?.contentWindow?.postMessage({ type, _platform: true, ...payload }, "*");
+    iframeRef.current?.contentWindow?.postMessage({ type, _platform: true, ...payload }, getGameOrigin());
   };
 
   // ── Contract error → professional message mapper ──────────────────────────
@@ -266,12 +277,35 @@ export default function GamePlay() {
   };
 
   // ── ArcadeX SDK: PURCHASE_SKIN ──────────────────────────────
-  const handlePurchaseSkin = async ({ gameId, skinIndex, name, imageURI, price }) => {
+  const handlePurchaseSkin = async ({ gameId, skinIndex, name, imageURI }) => {
+    // SH0006: price client se nahi aata — server se canonical price fetch karo
     if (!address || !GAME_ITEMS_ADDRESS) return;
     console.log("[PURCHASE_SKIN] isNativeToken:", isNativeToken, "| chainId:", CHAIN_ID, "| GAME_ITEMS_ADDRESS:", GAME_ITEMS_ADDRESS);
     const config = wagmiAdapter.wagmiConfig;
     const creatorAddress = game?.creator || address;
-    const priceWei = BigInt(Math.round(Number(price) || 0)) * 10n ** 18n;
+
+    // Server se approved price lo — iframe-supplied price ignore
+    let canonicalPrice;
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const priceRes = await fetch("/api/games?action=verify-item-price", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ gameId, itemType: "skin", itemKey: skinIndex }),
+      });
+      const priceData = await priceRes.json();
+      if (!priceData.approved) {
+        sendToGame("PURCHASE_FAILED", { kind: "skin", skinIndex, error: priceData.error || "Item not available" });
+        return;
+      }
+      canonicalPrice = priceData.canonicalPrice;
+    } catch (err) {
+      console.error("[PURCHASE_SKIN] price verify failed:", err);
+      sendToGame("PURCHASE_FAILED", { kind: "skin", skinIndex, error: "Could not verify item price" });
+      return;
+    }
+
+    const priceWei = BigInt(Math.round(Number(canonicalPrice) || 0)) * 10n ** 18n;
     const args = [BigInt(gameId), BigInt(skinIndex), name, imageURI, priceWei, creatorAddress];
 
     try {
@@ -309,12 +343,35 @@ export default function GamePlay() {
   };
 
   // ── ArcadeX SDK: PURCHASE_POWERUP ───────────────────────────
-  const handlePurchasePowerUp = async ({ gameId, powerUpId, price }) => {
+  const handlePurchasePowerUp = async ({ gameId, powerUpId }) => {
+    // SH0006: price client se nahi aata — server se canonical price fetch karo
     if (!address || !GAME_ITEMS_ADDRESS) return;
     console.log("[PURCHASE_POWERUP] isNativeToken:", isNativeToken, "| chainId:", CHAIN_ID, "| GAME_ITEMS_ADDRESS:", GAME_ITEMS_ADDRESS);
     const config = wagmiAdapter.wagmiConfig;
     const creatorAddress = game?.creator || address;
-    const priceWei = BigInt(Math.round(Number(price) || 0)) * 10n ** 18n;
+
+    // Server se approved price lo — iframe-supplied price ignore
+    let canonicalPrice;
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const priceRes = await fetch("/api/games?action=verify-item-price", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ gameId, itemType: "powerup", itemKey: powerUpId }),
+      });
+      const priceData = await priceRes.json();
+      if (!priceData.approved) {
+        sendToGame("PURCHASE_FAILED", { kind: "powerup", powerUpId, error: priceData.error || "Item not available" });
+        return;
+      }
+      canonicalPrice = priceData.canonicalPrice;
+    } catch (err) {
+      console.error("[PURCHASE_POWERUP] price verify failed:", err);
+      sendToGame("PURCHASE_FAILED", { kind: "powerup", powerUpId, error: "Could not verify item price" });
+      return;
+    }
+
+    const priceWei = BigInt(Math.round(Number(canonicalPrice) || 0)) * 10n ** 18n;
     const args = [BigInt(gameId), powerUpId, priceWei, creatorAddress];
 
     try {
@@ -351,19 +408,27 @@ export default function GamePlay() {
 
   // ── ArcadeX SDK: RECORD_GAME_TIME / GAME_EVENT (off-chain, Firestore) ──
   const handleRecordGameTime = async ({ gameId, seconds, timestamp }) => {
+    // SH0008: JWT required — player address backend JWT se lega, client se nahi
     try {
+      const token = localStorage.getItem("arcadex_jwt");
+      if (!token) return; // silently skip if not authenticated
       await fetch("/api/games?action=record-time", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gameId, player: address, seconds, timestamp, chainId: CHAIN_ID }),
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ gameId, seconds, timestamp, chainId: CHAIN_ID }),
       });
     } catch (err) { console.error("[RECORD_GAME_TIME] failed:", err); }
   };
 
   const handleGameEvent = async ({ gameId, eventType, value, timestamp }) => {
+    // SH0008: JWT required — player address backend JWT se lega, client se nahi
     try {
+      const token = localStorage.getItem("arcadex_jwt");
+      if (!token) return; // silently skip if not authenticated
       await fetch("/api/games?action=record-event", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gameId, player: address, eventType, value, timestamp, chainId: CHAIN_ID }),
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ gameId, eventType, value, timestamp, chainId: CHAIN_ID }),
       });
     } catch (err) { console.error("[GAME_EVENT] failed:", err); }
   };
@@ -464,7 +529,13 @@ export default function GamePlay() {
 
   // SDK messages
   useEffect(() => {
+    // SH0005: origin allowlist — only accept postMessages from the game iframe.
+    // game.iframeUrl se origin extract karte hain (protocol + host, no path).
+    // Agar origin match nahi kiya toh silently drop karo.
+    const allowedOrigin = game?.iframeUrl ? new URL(game.iframeUrl).origin : null;
+
     const handleMessage = (event) => {
+      if (allowedOrigin && event.origin !== allowedOrigin) return;
       if (!event.data?._sdk && !event.data?.type) return;
       if (event.data?.type === "SCORE_UPDATE") {
         if (submitted) { setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false; }
@@ -482,7 +553,7 @@ export default function GamePlay() {
             address: address || "",
             balance: Number(balance)
           }
-        }, "*");
+        }, allowedOrigin || "*");
       }
       if (event.data?.type === "PURCHASE_SKIN") handlePurchaseSkin(event.data);
       if (event.data?.type === "PURCHASE_POWERUP") handlePurchasePowerUp(event.data);
@@ -590,11 +661,11 @@ export default function GamePlay() {
       setTokensEarned(playerReward);
       await saveScore({ player: address, score: finalScore, gameId: game.id, gameName: game.name, txHash: hash, chain: chainKey, earned: playerReward, earnedSymbol: rewardSymbol });
       setTxHash(hash); setSubmitted(true);
-      iframeRef.current?.contentWindow?.postMessage({ type: "TRANSACTION_SUCCESS", _platform: true, txHash: hash }, "*");
+      sendToGame("TRANSACTION_SUCCESS", { txHash: hash });
     } catch (err) {
       const parsed = parseContractError(err);
       setSubmitError(parsed);
-      iframeRef.current?.contentWindow?.postMessage({ type: "TRANSACTION_FAILED", _platform: true, error: parsed.msg }, "*");
+      sendToGame("TRANSACTION_FAILED", { error: parsed.msg });
     } finally { setSubmitting(false); submittingRef.current = false; }
   };
 
@@ -728,13 +799,38 @@ export default function GamePlay() {
                 <iframe ref={iframeRef} src={game.iframeUrl}
                   style={{ width: "100%", height: isMobile ? "75vw" : "calc(100vh - 54px - 160px)", minHeight: isMobile ? 300 : 480, border: "none", display: "block" }}
                   allow="fullscreen" allowFullScreen title={game.name} />
+                {/* SH0003: iOS Safari blocks iframe.requestFullscreen entirely.
+                    Fake fullscreen: fixed-position overlay covering full viewport.
+                    Works on iOS, Android, and desktop. ESC key also exits on desktop. */}
                 <button onClick={() => {
                   const iframe = iframeRef.current;
-                  if (iframe.requestFullscreen) iframe.requestFullscreen();
-                  else if (iframe.webkitRequestFullscreen) iframe.webkitRequestFullscreen();
+                  // Try native fullscreen first (desktop Chrome/Firefox/Edge)
+                  const nativeFS = iframe?.requestFullscreen || iframe?.webkitRequestFullscreen;
+                  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+                  if (!isIOS && nativeFS) {
+                    try {
+                      nativeFS.call(iframe);
+                      return;
+                    } catch (e) { /* fallthrough to fake fullscreen */ }
+                  }
+                  // iOS / native FS unavailable → CSS fake fullscreen
+                  setIsFakeFullscreen(fs => !fs);
                 }} style={{ position: "absolute", bottom: 10, right: 10, padding: "6px 12px", background: "rgba(0,0,0,0.8)", border: `1px solid ${C.border2}`, borderRadius: 7, color: "#a67fff", fontSize: 11, cursor: "pointer", fontFamily: C.raj, fontWeight: 700, backdropFilter: "blur(8px)", display: "flex", alignItems: "center", gap: 5 }}>
-                  <span>⛶</span> Fullscreen
+                  <span>{isFakeFullscreen ? "✕" : "⛶"}</span> {isFakeFullscreen ? "Exit" : "Fullscreen"}
                 </button>
+
+                {/* Fake fullscreen overlay — fixed, full viewport, highest z-index */}
+                {isFakeFullscreen && (
+                  <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "#000", display: "flex", flexDirection: "column" }}>
+                    <iframe src={game.iframeUrl}
+                      style={{ flex: 1, width: "100%", border: "none", display: "block" }}
+                      allow="fullscreen" allowFullScreen title={game.name} />
+                    <button onClick={() => setIsFakeFullscreen(false)}
+                      style={{ position: "absolute", top: 12, right: 12, padding: "6px 14px", background: "rgba(0,0,0,0.85)", border: `1px solid ${C.border2}`, borderRadius: 7, color: "#a67fff", fontSize: 12, cursor: "pointer", fontFamily: C.raj, fontWeight: 700, zIndex: 10000 }}>
+                      ✕ Exit
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <div style={{ height: isMobile ? "75vw" : "calc(100vh - 54px - 160px)", minHeight: isMobile ? 300 : 480, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
