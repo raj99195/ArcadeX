@@ -251,15 +251,41 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── POST sign-score (PUBLIC — sign before JWT check, player might not have token yet) ──
-  // Signs the score with SCORE_SIGNER_PRIVATE_KEY so Platform.sol can verify
-  // it came from our backend (not a forged console call).
-  // Message format matches Platform.sol exactly:
-  //   keccak256(abi.encodePacked(player, gameId, score, nonce, address(this), block.chainid))
+  // ── POST start-session (SH0009: JWT required) ────────────────────────────────
+  // Game open hone pe GamePlay.jsx call karta hai.
+  // Ek one-time sessionToken generate hota hai — sign-score tabhi milega jab yeh token ho.
+  if (req.method === "POST" && action === "start-session") {
+    const ssUser = verifyToken(req);
+    if (!ssUser) return res.status(401).json({ error: "Unauthorized" });
+    const { gameId, chain } = req.body;
+    if (!gameId || !chain) return res.status(400).json({ error: "gameId and chain required" });
+    if (!rateLimit(`session:${ssUser.address}:${gameId}`, 10))
+      return res.status(429).json({ error: "Too many session requests" });
+    try {
+      const { randomUUID } = await import("crypto");
+      const sessionToken = randomUUID();
+      await db.collection("gameSessions").add({
+        sessionToken,
+        player:    ssUser.address.toLowerCase(),
+        gameId:    String(gameId),
+        chain,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+        used:      false,
+      });
+      return res.status(200).json({ sessionToken });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST sign-score (SH0009: JWT + sessionToken required) ───────────────────
+  // Bina valid gameplay session ke sign nahi milega — no fallback.
   if (req.method === "POST" && action === "sign-score") {
-    const { gameId, score, chain, player } = req.body;
-    if (!gameId || score == null || !chain || !player)
-      return res.status(400).json({ error: "gameId, score, chain, player required" });
+    const signUser = verifyToken(req);
+    if (!signUser) return res.status(401).json({ error: "Unauthorized" });
+
+    const { gameId, score, chain, sessionToken } = req.body;
+    if (!gameId || score == null || !chain || !sessionToken)
+      return res.status(400).json({ error: "gameId, score, chain, sessionToken required" });
 
     const pk = process.env.SCORE_SIGNER_PRIVATE_KEY;
     if (!pk) return res.status(503).json({ error: "Score signing not configured" });
@@ -269,25 +295,46 @@ export default async function handler(req, res) {
     if (!platformAddr || !chainId)
       return res.status(400).json({ error: `Unknown chain: ${chain}` });
 
-    // Rate limit — 1 signing per player per second (anti-spam)
-    if (!rateLimit(`sign:${player.toLowerCase()}:${gameId}`, 30))
+    if (!rateLimit(`sign:${signUser.address.toLowerCase()}:${gameId}`, 30))
       return res.status(429).json({ error: "Too many sign requests" });
 
     try {
+      // Session validate + burn
+      const sessSnap = await db.collection("gameSessions")
+        .where("sessionToken", "==", sessionToken)
+        .where("player",       "==", signUser.address.toLowerCase())
+        .where("gameId",       "==", String(gameId))
+        .where("used",         "==", false)
+        .limit(1)
+        .get();
+
+      if (sessSnap.empty)
+        return res.status(403).json({ error: "Invalid or expired session. Open the game page and play first." });
+
+      const sessDoc  = sessSnap.docs[0];
+      const expiresAt = sessDoc.data().expiresAt?.toDate?.() || new Date(sessDoc.data().expiresAt);
+      if (expiresAt < new Date())
+        return res.status(403).json({ error: "Session expired. Reload the game page." });
+
+      if (sessDoc.data().chain !== chain)
+        return res.status(403).json({ error: "Session chain mismatch." });
+
+      // Burn — one-time use
+      await sessDoc.ref.update({ used: true, usedAt: new Date() });
+
+      // player JWT se lo — body se nahi (SH0009)
+      const player       = signUser.address;
       const signerWallet = new ethers.Wallet(pk);
       const nonce        = BigInt(Date.now());
 
-      // Exact same encoding as Platform.sol verifyScore()
       const messageHash = ethers.solidityPackedKeccak256(
         ["address", "uint256", "uint256", "uint256", "address", "uint256"],
         [player, BigInt(gameId), BigInt(score), nonce, platformAddr, chainId]
       );
 
-      // signMessage adds Ethereum prefix "\x19Ethereum Signed Message:\n32"
-      // matching toEthSignedMessageHash in Platform.sol
       const signature = await signerWallet.signMessage(ethers.getBytes(messageHash));
-
       return res.status(200).json({ nonce: nonce.toString(), signature });
+
     } catch (err) {
       console.error("[sign-score]", err);
       return res.status(500).json({ error: err.message });
