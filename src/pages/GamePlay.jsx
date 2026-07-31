@@ -588,7 +588,7 @@ export default function GamePlay() {
       }
 
       setTokensEarned(playerReward);
-      await saveScore({ player: address, score: finalScore, gameId: game.id, gameName: game.name, txHash: hash, chain: chainKey });
+      await saveScore({ player: address, score: finalScore, gameId: game.id, gameName: game.name, txHash: hash, chain: chainKey, earned: playerReward, earnedSymbol: rewardSymbol });
       setTxHash(hash); setSubmitted(true);
       iframeRef.current?.contentWindow?.postMessage({ type: "TRANSACTION_SUCCESS", _platform: true, txHash: hash }, "*");
     } catch (err) {
