@@ -26,6 +26,7 @@ export default function Navbar() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [avatarStyle, setAvatarStyle] = useState("bottts");
   const [earningsOpen, setEarningsOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [earningsData, setEarningsData] = useState([]);
   const [earningsLoading, setEarningsLoading] = useState(false);
   const [gameMap, setGameMap] = useState({}); // gameId → { thumbnail, name }
@@ -209,6 +210,21 @@ export default function Navbar() {
   const handleEarningsOpen = () => {
     setEarningsOpen(true);
     fetchEarnings();
+  };
+
+  const copyAddress = () => {
+    if (!address) return;
+    navigator.clipboard.writeText(address).catch(() => {
+      // fallback for older browsers
+      const el = document.createElement("textarea");
+      el.value = address;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+    });
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
   };
 
   // Group scores by date
@@ -404,11 +420,31 @@ export default function Navbar() {
         {/* Wallet button */}
         {!isMobile && (
           isConnected ? (
-            <button onClick={() => open({ view: "Account" })} style={{ padding: "6px 13px", background: "rgba(123,47,255,0.1)", border: "1px solid rgba(123,47,255,0.28)", borderRadius: 6, color: "#a67fff", fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 7, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, transition: "all 0.2s" }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(123,47,255,0.55)"; e.currentTarget.style.boxShadow = "0 0 14px rgba(123,47,255,0.25)"; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(123,47,255,0.28)"; e.currentTarget.style.boxShadow = "none"; }}
+            <button
+              onClick={copyAddress}
+              title={copied ? "Copied!" : "Click to copy address"}
+              style={{
+                padding: "6px 13px",
+                background: copied ? "rgba(0,255,136,0.12)" : "rgba(123,47,255,0.1)",
+                border: copied ? "1px solid rgba(0,255,136,0.45)" : "1px solid rgba(123,47,255,0.28)",
+                borderRadius: 6, color: copied ? "#00FF88" : "#a67fff",
+                fontSize: 11, cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 7,
+                fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+                transition: "all 0.2s",
+                boxShadow: copied ? "0 0 14px rgba(0,255,136,0.2)" : "none",
+              }}
+              onMouseEnter={e => { if (!copied) { e.currentTarget.style.borderColor = "rgba(123,47,255,0.55)"; e.currentTarget.style.boxShadow = "0 0 14px rgba(123,47,255,0.25)"; } }}
+              onMouseLeave={e => { if (!copied) { e.currentTarget.style.borderColor = "rgba(123,47,255,0.28)"; e.currentTarget.style.boxShadow = "none"; } }}
             >
-              <span style={{ fontFamily: "monospace", fontSize: 10, color: "#b8a8e0" }}>{shortAddress(address)}</span>
+              {/* copy icon */}
+              {copied
+                ? <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6.5L4.5 9L10 3" stroke="#00FF88" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                : <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="4" y="1" width="7" height="8" rx="1.2" stroke="#a67fff" strokeWidth="1.2"/><rect x="1" y="3.5" width="7" height="8" rx="1.2" stroke="#a67fff" strokeWidth="1.2" fill="rgba(123,47,255,0.08)"/></svg>
+              }
+              <span style={{ fontFamily: "monospace", fontSize: 10, color: copied ? "#00FF88" : "#b8a8e0" }}>
+                {copied ? "Copied!" : shortAddress(address)}
+              </span>
             </button>
           ) : (
             <button onClick={handleConnect} style={{ padding: "7px 18px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 12, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", boxShadow: "0 0 16px rgba(123,47,255,0.35)", transition: "all 0.2s" }}
@@ -424,8 +460,20 @@ export default function Navbar() {
         {isMobile && (
           <>
             {isConnected ? (
-              <button onClick={() => open({ view: "Account" })} style={{ padding: "5px 10px", background: "rgba(123,47,255,0.08)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 6, color: "#a67fff", fontSize: 10, cursor: "pointer", fontFamily: "monospace" }}>
-                {shortAddress(address)}
+              <button
+                onClick={copyAddress}
+                title={copied ? "Copied!" : "Copy address"}
+                style={{
+                  padding: "5px 10px",
+                  background: copied ? "rgba(0,255,136,0.1)" : "rgba(123,47,255,0.08)",
+                  border: copied ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(123,47,255,0.2)",
+                  borderRadius: 6,
+                  color: copied ? "#00FF88" : "#a67fff",
+                  fontSize: 10, cursor: "pointer", fontFamily: "monospace",
+                  transition: "all 0.2s",
+                }}
+              >
+                {copied ? "✓" : shortAddress(address)}
               </button>
             ) : (
               <button onClick={handleConnect} style={{ padding: "6px 12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
