@@ -286,13 +286,15 @@ export default async function handler(req, res) {
 
   // ── POST score ──
   if (req.method === "POST" && action === "score") {
-    const { txHash, score, gameId, gameName, chain } = req.body;
+    const { txHash, score, gameId, gameName, chain, earned, earnedSymbol } = req.body;
     if (!txHash || !score) return res.status(400).json({ error: "Missing fields" });
     try {
       await db.collection("scores").doc(txHash).set({
         player: user.address, score: parseInt(score),
         gameId: parseInt(gameId), gameName: gameName || "Unknown",
         chain: chain || "botchain",
+        earned: Number(earned) || 0,
+        earnedSymbol: earnedSymbol || "ARCADE",
         txHash, createdAt: new Date(),
       });
       return res.status(200).json({ success: true });
