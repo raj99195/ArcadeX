@@ -239,7 +239,8 @@ export default function AdminMST() {
   const [savedCooldown, setSavedCooldown] = useState(false);
   const [savedRates, setSavedRates] = useState({});
   const [savedMinScores, setSavedMinScores] = useState({});
-  const [originalMinScores, setOriginalMinScores] = useState({}); // on-chain values at load time
+  const [originalMinScores, setOriginalMinScores] = useState({});
+  const [originalRewardRates, setOriginalRewardRates] = useState({}); // on-chain snapshot
 
   const showMsg = (text, ok = true) => { setMsg({ text, ok }); setTimeout(() => setMsg({ text: "", ok: true }), 5000); };
 
@@ -339,7 +340,8 @@ try {
         gameList.forEach(g => { initialRewardRates[g.id] = g.rewardRate ? (Number(g.rewardRate) / 1e18).toString() : ""; });
         setRewardRateInputs(initialRewardRates);
         setMinScoreInputs(initialMinScores);
-        setOriginalMinScores(initialMinScores); // snapshot for comparison
+        setOriginalMinScores(initialMinScores);
+        setOriginalRewardRates(initialRewardRates); // snapshot for comparison
       } catch (err) {
         console.error("Failed to load platform settings:", err);
       } finally {
@@ -450,6 +452,7 @@ try {
         console.log("[handleSaveRewardRate] Firestore updated successfully");
         showMsg(`Reward rate updated to ${parsed} MSTC ✓`, true);
         setSavedRates(p => ({ ...p, [gameId]: true }));
+        setOriginalRewardRates(p => ({ ...p, [gameId]: String(parsed) })); // update snapshot
         setGames(prev => prev.map(g => g.id === gameId ? { ...g, rewardRateNative: parsed } : g));
       }
     } catch (err) {
@@ -761,7 +764,7 @@ try {
                     <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr auto", gap: 10, alignItems: "center" }}>
                       <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={rewardRateInputs[g.id] ?? ""} onChange={e => setRewardRateInputs(m => ({ ...m, [g.id]: e.target.value }))} placeholder="Reward rate (MSTC)" />
                       <Btn busy={busy === `rewardrate-${g.id}`}
-                        saved={rewardRateInputs[g.id] != null && g.rewardRateNative != null && parseFloat(rewardRateInputs[g.id]) === parseFloat(g.rewardRateNative)}
+                        saved={String(rewardRateInputs[g.id] ?? "") === String(originalRewardRates[g.id] ?? "")}
                         onClick={() => handleSaveRewardRate(g.id)} style={{ fontSize: 11, padding: "8px 14px" }}>💰 Set Rate</Btn>
                       <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={minScoreInputs[g.id] ?? ""} onChange={e => setMinScoreInputs(m => ({ ...m, [g.id]: e.target.value }))} placeholder="Min score" />
                       <Btn busy={busy === `minscore-${g.id}`}
