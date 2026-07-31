@@ -605,8 +605,12 @@ export default function Navbar() {
                         const isMstPlay = playChain === "mst";
                         const rate = isMstPlay ? (gInfo.rewardRateNative || 1) : (gInfo.rewardRate || 50);
                         const playerShare = isMstPlay ? 50 : 80;
-                        const earned = Math.round(rate * playerShare / 100 * 100) / 100;
-                        const earnedSymbol = isMstPlay ? "MSTC" : "ARCADE";
+                        // Use actual saved earned if available (new plays)
+                        // Fallback to calculation for old plays that don't have earned field
+                        const earned = play.earned != null
+                          ? Number(play.earned)
+                          : Math.round(rate * playerShare / 100 * 100) / 100;
+                        const earnedSymbol = play.earnedSymbol || (isMstPlay ? "MSTC" : "ARCADE");
                         // Chain color
                         const chainColor = playChain === "mst" ? "#ff2f5e" : playChain === "botchain" ? "#00d4ff" : "#FFB700";
                         return (
