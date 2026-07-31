@@ -237,8 +237,9 @@ export default function AdminMST() {
   const [savedSplit, setSavedSplit] = useState(false);
   const [savedCaps, setSavedCaps] = useState(false);
   const [savedCooldown, setSavedCooldown] = useState(false);
-  const [savedRates, setSavedRates] = useState({});      // { [gameId]: true }
-  const [savedMinScores, setSavedMinScores] = useState({}); // { [gameId]: true }
+  const [savedRates, setSavedRates] = useState({});
+  const [savedMinScores, setSavedMinScores] = useState({});
+  const [originalMinScores, setOriginalMinScores] = useState({}); // on-chain values at load time
 
   const showMsg = (text, ok = true) => { setMsg({ text, ok }); setTimeout(() => setMsg({ text: "", ok: true }), 5000); };
 
@@ -338,6 +339,7 @@ try {
         gameList.forEach(g => { initialRewardRates[g.id] = g.rewardRate ? (Number(g.rewardRate) / 1e18).toString() : ""; });
         setRewardRateInputs(initialRewardRates);
         setMinScoreInputs(initialMinScores);
+        setOriginalMinScores(initialMinScores); // snapshot for comparison
       } catch (err) {
         console.error("Failed to load platform settings:", err);
       } finally {
@@ -684,7 +686,7 @@ try {
                 <span style={{ ...hintStyle, color: (Number(form.playerPercent) + Number(form.creatorPercent)) === 100 ? P.green : P.red }}>
                   {(Number(form.playerPercent) + Number(form.creatorPercent)) === 100 ? "✓ Sums to 100" : "✕ Must sum to 100"}
                 </span>
-                <Btn busy={busy === "split"} saved={savedSplit} onClick={() => runTx("split", () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setRewardSplit", args: [BigInt(form.playerPercent), BigInt(form.creatorPercent)], chainId, account: address }), "Reward split updated ✓", () => setSavedSplit(true))}>Save</Btn>
+                <Btn busy={busy === "split"} saved={!!(settings && form.playerPercent === settings.playerPct.toString() && form.creatorPercent === settings.creatorPct.toString())} onClick={() => runTx("split", () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setRewardSplit", args: [BigInt(form.playerPercent), BigInt(form.creatorPercent)], chainId, account: address }), "Reward split updated ✓", () => setSavedSplit(true))}>Save</Btn>
               </div>
               {settings && <div style={{ ...hintStyle, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${P.border}` }}>Current: {settings.playerPct.toString()}% player / {settings.creatorPct.toString()}% creator</div>}
             </SettingCard>
@@ -696,7 +698,11 @@ try {
               </div>
               <Field label="Reset every (hours)"><input style={inputStyle} type="number" value={form.resetHours} onChange={e => { setForm(f => ({ ...f, resetHours: e.target.value })); setSavedCaps(false); }} placeholder="24" /></Field>
               <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-                <Btn busy={busy === "caps"} saved={savedCaps} onClick={async () => {
+                <Btn busy={busy === "caps"} saved={!!(settings &&
+                    parseFloat(form.playerCap) === (settings.playerCap > 0n ? Number(settings.playerCap) / 1e18 : 0) &&
+                    parseFloat(form.chainCap) === (settings.chainCap > 0n ? Number(settings.chainCap) / 1e18 : 0) &&
+                    parseFloat(form.resetHours) === Number(settings.resetPeriod) / 3600
+                  )} onClick={async () => {
                   setBusy("caps");
                   try {
                     const h1 = await writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setPlayerDailyCap", args: [BigInt(Math.round(parseFloat(form.playerCap || "0") * 1e18))], chainId, account: address });
@@ -718,7 +724,7 @@ try {
             <SettingCard icon="🤖" accent={P.cyan} title="Anti-Bot Throttle" desc="Minimum seconds a player must wait between plays. 0 disables it.">
               <div style={{ display: "flex", gap: 12, alignItems: "end" }}>
                 <div style={{ flex: 1 }}><Field label="Seconds between plays"><input style={inputStyle} type="number" value={form.cooldownSeconds} onChange={e => { setForm(f => ({ ...f, cooldownSeconds: e.target.value })); setSavedCooldown(false); }} placeholder="0" /></Field></div>
-                <Btn busy={busy === "cooldown"} saved={savedCooldown} onClick={() => runTx("cooldown", () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setMinSecondsBetweenPlays", args: [BigInt(form.cooldownSeconds)], chainId, account: address }), "Throttle saved ✓", () => setSavedCooldown(true))}>Save</Btn>
+                <Btn busy={busy === "cooldown"} saved={!!(settings && form.cooldownSeconds === settings.cooldown.toString())} onClick={() => runTx("cooldown", () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setMinSecondsBetweenPlays", args: [BigInt(form.cooldownSeconds)], chainId, account: address }), "Throttle saved ✓", () => setSavedCooldown(true))}>Save</Btn>
               </div>
               {settings && <div style={{ ...hintStyle, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${P.border}` }}>Current: {settings.cooldown.toString()}s between plays</div>}
             </SettingCard>
@@ -753,10 +759,14 @@ try {
                     </div>
                     {/* Controls row */}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr auto", gap: 10, alignItems: "center" }}>
-                      <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={rewardRateInputs[g.id] ?? ""} onChange={e => { setRewardRateInputs(m => ({ ...m, [g.id]: e.target.value })); setSavedRates(p => ({ ...p, [g.id]: false })); }} placeholder="Reward rate (MSTC)" />
-                      <Btn busy={busy === `rewardrate-${g.id}`} saved={savedRates[g.id]} onClick={() => handleSaveRewardRate(g.id)} style={{ fontSize: 11, padding: "8px 14px" }}>💰 Set Rate</Btn>
-                      <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={minScoreInputs[g.id] ?? ""} onChange={e => { setMinScoreInputs(m => ({ ...m, [g.id]: e.target.value })); setSavedMinScores(p => ({ ...p, [g.id]: false })); }} placeholder="Min score" />
-                      <Btn busy={busy === `minscore-${g.id}`} saved={savedMinScores[g.id]} onClick={() => runTx(`minscore-${g.id}`, () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setGameMinScore", args: [BigInt(g.id), BigInt(minScoreInputs[g.id] || 0)], chainId, account: address }), "Min score saved ✓", () => setSavedMinScores(p => ({ ...p, [g.id]: true })))} style={{ fontSize: 11, padding: "8px 14px" }}>🎯 Min Score</Btn>
+                      <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={rewardRateInputs[g.id] ?? ""} onChange={e => setRewardRateInputs(m => ({ ...m, [g.id]: e.target.value }))} placeholder="Reward rate (MSTC)" />
+                      <Btn busy={busy === `rewardrate-${g.id}`}
+                        saved={rewardRateInputs[g.id] != null && g.rewardRateNative != null && parseFloat(rewardRateInputs[g.id]) === parseFloat(g.rewardRateNative)}
+                        onClick={() => handleSaveRewardRate(g.id)} style={{ fontSize: 11, padding: "8px 14px" }}>💰 Set Rate</Btn>
+                      <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={minScoreInputs[g.id] ?? ""} onChange={e => setMinScoreInputs(m => ({ ...m, [g.id]: e.target.value }))} placeholder="Min score" />
+                      <Btn busy={busy === `minscore-${g.id}`}
+                        saved={String(minScoreInputs[g.id] ?? "") === String(originalMinScores[g.id] ?? "")}
+                        onClick={() => runTx(`minscore-${g.id}`, () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setGameMinScore", args: [BigInt(g.id), BigInt(minScoreInputs[g.id] || 0)], chainId, account: address }), "Min score saved ✓", () => setOriginalMinScores(p => ({ ...p, [g.id]: minScoreInputs[g.id] })))} style={{ fontSize: 11, padding: "8px 14px" }}>🎯 Min Score</Btn>
                     </div>
                   </div>
                 ))}
