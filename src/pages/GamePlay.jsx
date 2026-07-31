@@ -663,6 +663,24 @@ export default function GamePlay() {
         nonce = BigInt(sigData.nonce);
         signature = sigData.signature;
         sessionTokenRef.current = null; // burn — one-time use
+
+        // Auto-renew session for next game round (background, non-blocking)
+        ;(async () => {
+          try {
+            const t = localStorage.getItem("arcadex_jwt");
+            if (!t) return;
+            const r = await fetch("/api/games?action=start-session", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${t}` },
+              body: JSON.stringify({ gameId: onChainGameId, chain: chainKey }),
+            });
+            if (r.ok) {
+              const { sessionToken: newToken } = await r.json();
+              sessionTokenRef.current = newToken;
+              console.log("[session] renewed:", newToken?.slice(0, 8) + "...");
+            }
+          } catch (e) { console.warn("[session] renew failed:", e); }
+        })();
       } catch (sigErr) {
         setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: "Network error while verifying score. Please try again." });
         setSubmitting(false); submittingRef.current = false; return;
