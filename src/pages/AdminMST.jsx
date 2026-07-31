@@ -115,25 +115,30 @@ const inputStyle = {
 const labelStyle = { display: "block", fontSize: 10.5, fontWeight: 700, color: P.dim, marginBottom: 7, fontFamily: P.raj, textTransform: "uppercase", letterSpacing: "0.6px" };
 const hintStyle = { fontSize: 11.5, color: P.dimMore, fontFamily: P.raj, lineHeight: 1.6 };
 
-function Btn({ children, busy, disabled, onClick, variant = "primary" }) {
+function Btn({ children, busy, disabled, saved, onClick, variant = "primary", style: extraStyle = {} }) {
   const styles = {
-    primary: { background: busy ? "rgba(123,47,255,0.2)" : `linear-gradient(135deg, ${P.purple}, #5a1fd4)`, color: busy ? "#5533aa" : "#fff" },
+    primary: saved
+      ? { background: "rgba(0,255,136,0.12)", color: P.green, border: "1px solid rgba(0,255,136,0.3)" }
+      : busy
+        ? { background: "rgba(123,47,255,0.2)", color: "#5533aa" }
+        : { background: `linear-gradient(135deg, ${P.purple}, #5a1fd4)`, color: "#fff" },
     danger:  { background: busy ? "rgba(255,68,68,0.15)" : "rgba(255,68,68,0.16)", color: P.red, border: `1px solid rgba(255,68,68,0.4)` },
     ghost:   { background: "rgba(255,255,255,0.03)", color: P.dim, border: `1px solid ${P.border2}` },
   };
   return (
     <button
-      onClick={onClick} disabled={busy || disabled}
+      onClick={onClick} disabled={busy || disabled || saved}
       style={{
         padding: "11px 22px", borderRadius: 9, border: "none",
         fontFamily: P.raj, fontWeight: 700, fontSize: 12.5, letterSpacing: "0.4px",
-        textTransform: "uppercase", cursor: (busy || disabled) ? "not-allowed" : "pointer",
-        opacity: disabled && !busy ? 0.5 : 1, whiteSpace: "nowrap",
+        textTransform: "uppercase", cursor: (busy || disabled || saved) ? "not-allowed" : "pointer",
+        opacity: (disabled && !busy && !saved) ? 0.5 : 1, whiteSpace: "nowrap",
         display: "flex", alignItems: "center", gap: 8, justifyContent: "center",
-        ...styles[variant],
+        transition: "all 0.2s",
+        ...styles[variant], ...extraStyle,
       }}
     >
-      {busy ? "Working..." : children}
+      {busy ? "Working..." : saved ? "✓ Saved" : children}
     </button>
   );
 }
@@ -227,6 +232,13 @@ export default function AdminMST() {
 
   const [scores, setScores] = useState([]);
   const [loadingData, setLoadingData] = useState(true);
+
+  // ── Saved state — button goes green after tx, resets when input changes ──
+  const [savedSplit, setSavedSplit] = useState(false);
+  const [savedCaps, setSavedCaps] = useState(false);
+  const [savedCooldown, setSavedCooldown] = useState(false);
+  const [savedRates, setSavedRates] = useState({});      // { [gameId]: true }
+  const [savedMinScores, setSavedMinScores] = useState({}); // { [gameId]: true }
 
   const showMsg = (text, ok = true) => { setMsg({ text, ok }); setTimeout(() => setMsg({ text: "", ok: true }), 5000); };
 
@@ -355,7 +367,7 @@ try {
     if (hasAccess && activeTab === "tournament") fetchMyTournaments();
   }, [hasAccess, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const runTx = async (key, fn, successText = "Saved on-chain") => {
+  const runTx = async (key, fn, successText = "Saved on-chain", onSuccess = null) => {
     console.log(`[runTx] "${key}" starting`);
     setBusy(key);
     try {
@@ -363,9 +375,6 @@ try {
       console.log(`[runTx] "${key}" got hash, waiting for confirmation:`, hash);
       let receipt;
       try {
-        // NOTE: deliberately NOT passing chainId here — Creator.jsx's working
-        // tournament-creation flow calls this with just { hash }, and passing
-        // chainId explicitly was what caused this to hang indefinitely here.
         receipt = await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, {
           hash,
           timeout: 45_000,
@@ -374,13 +383,14 @@ try {
       } catch (waitErr) {
         console.warn(`[runTx] "${key}" waitForTransactionReceipt timed out/failed — tx was still submitted:`, waitErr);
         showMsg(`Submitted (tx: ${hash.slice(0, 10)}...) but confirmation is taking longer than usual. Check the explorer — it likely still went through.`, true);
-        return; // don't treat this as a failure — the tx itself was sent successfully
+        return;
       }
       console.log(`[runTx] "${key}" receipt status:`, receipt.status);
       if (receipt.status !== "success") {
         throw new Error("Transaction reverted on-chain — check the contract's revert reason.");
       }
       showMsg(successText, true);
+      if (onSuccess) onSuccess(); // ← mark button as saved
     } catch (err) {
       console.error(`[runTx] "${key}" FAILED:`, err);
       showMsg(err.shortMessage || err.message, false);
@@ -437,6 +447,7 @@ try {
       } else {
         console.log("[handleSaveRewardRate] Firestore updated successfully");
         showMsg(`Reward rate updated to ${parsed} MSTC ✓`, true);
+        setSavedRates(p => ({ ...p, [gameId]: true }));
         setGames(prev => prev.map(g => g.id === gameId ? { ...g, rewardRateNative: parsed } : g));
       }
     } catch (err) {
@@ -666,26 +677,26 @@ try {
 
             <SettingCard icon="⚖️" accent={P.purple} title="Reward Split" desc="Player % + creator % must sum to 100. Set creator to 0 for a pure play-to-earn model.">
               <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
-                <Field label="Player %"><input style={inputStyle} type="number" value={form.playerPercent} onChange={e => setForm(f => ({ ...f, playerPercent: e.target.value }))} /></Field>
-                <Field label="Creator %"><input style={inputStyle} type="number" value={form.creatorPercent} onChange={e => setForm(f => ({ ...f, creatorPercent: e.target.value }))} /></Field>
+                <Field label="Player %"><input style={inputStyle} type="number" value={form.playerPercent} onChange={e => { setForm(f => ({ ...f, playerPercent: e.target.value })); setSavedSplit(false); }} /></Field>
+                <Field label="Creator %"><input style={inputStyle} type="number" value={form.creatorPercent} onChange={e => { setForm(f => ({ ...f, creatorPercent: e.target.value })); setSavedSplit(false); }} /></Field>
               </div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ ...hintStyle, color: (Number(form.playerPercent) + Number(form.creatorPercent)) === 100 ? P.green : P.red }}>
                   {(Number(form.playerPercent) + Number(form.creatorPercent)) === 100 ? "✓ Sums to 100" : "✕ Must sum to 100"}
                 </span>
-                <Btn busy={busy === "split"} onClick={() => runTx("split", () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setRewardSplit", args: [BigInt(form.playerPercent), BigInt(form.creatorPercent)], chainId, account: address }))}>Save</Btn>
+                <Btn busy={busy === "split"} saved={savedSplit} onClick={() => runTx("split", () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setRewardSplit", args: [BigInt(form.playerPercent), BigInt(form.creatorPercent)], chainId, account: address }), "Reward split updated ✓", () => setSavedSplit(true))}>Save</Btn>
               </div>
               {settings && <div style={{ ...hintStyle, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${P.border}` }}>Current: {settings.playerPct.toString()}% player / {settings.creatorPct.toString()}% creator</div>}
             </SettingCard>
 
             <SettingCard icon="🛡" accent={P.cyan} title="Daily Earning Caps" desc="Enter values in MSTC — e.g. 10 = 10 MSTC cap. Set to 0 to disable.">
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-                <Field label="Per-player cap"><input style={inputStyle} type="number" value={form.playerCap} onChange={e => setForm(f => ({ ...f, playerCap: e.target.value }))} placeholder="e.g. 10" /></Field>
-                <Field label="Chain-wide cap"><input style={inputStyle} type="number" value={form.chainCap} onChange={e => setForm(f => ({ ...f, chainCap: e.target.value }))} placeholder="0 = off" /></Field>
+                <Field label="Per-player cap"><input style={inputStyle} type="number" value={form.playerCap} onChange={e => { setForm(f => ({ ...f, playerCap: e.target.value })); setSavedCaps(false); }} placeholder="e.g. 10" /></Field>
+                <Field label="Chain-wide cap"><input style={inputStyle} type="number" value={form.chainCap} onChange={e => { setForm(f => ({ ...f, chainCap: e.target.value })); setSavedCaps(false); }} placeholder="0 = off" /></Field>
               </div>
-              <Field label="Reset every (hours)"><input style={inputStyle} type="number" value={form.resetHours} onChange={e => setForm(f => ({ ...f, resetHours: e.target.value }))} placeholder="24" /></Field>
+              <Field label="Reset every (hours)"><input style={inputStyle} type="number" value={form.resetHours} onChange={e => { setForm(f => ({ ...f, resetHours: e.target.value })); setSavedCaps(false); }} placeholder="24" /></Field>
               <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-                <Btn busy={busy === "caps"} onClick={async () => {
+                <Btn busy={busy === "caps"} saved={savedCaps} onClick={async () => {
                   setBusy("caps");
                   try {
                     const h1 = await writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setPlayerDailyCap", args: [BigInt(Math.round(parseFloat(form.playerCap || "0") * 1e18))], chainId, account: address });
@@ -696,6 +707,7 @@ try {
                     const h3 = await writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setCapResetPeriod", args: [seconds], chainId, account: address });
                     await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash: h3 });
                     showMsg("Caps saved (3 transactions)", true);
+                    setSavedCaps(true);
                   } catch (err) { showMsg(err.shortMessage || err.message, false); }
                   finally { setBusy(""); }
                 }}>Save all</Btn>
@@ -705,8 +717,8 @@ try {
 
             <SettingCard icon="🤖" accent={P.cyan} title="Anti-Bot Throttle" desc="Minimum seconds a player must wait between plays. 0 disables it.">
               <div style={{ display: "flex", gap: 12, alignItems: "end" }}>
-                <div style={{ flex: 1 }}><Field label="Seconds between plays"><input style={inputStyle} type="number" value={form.cooldownSeconds} onChange={e => setForm(f => ({ ...f, cooldownSeconds: e.target.value }))} placeholder="0" /></Field></div>
-                <Btn busy={busy === "cooldown"} onClick={() => runTx("cooldown", () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setMinSecondsBetweenPlays", args: [BigInt(form.cooldownSeconds)], chainId, account: address }))}>Save</Btn>
+                <div style={{ flex: 1 }}><Field label="Seconds between plays"><input style={inputStyle} type="number" value={form.cooldownSeconds} onChange={e => { setForm(f => ({ ...f, cooldownSeconds: e.target.value })); setSavedCooldown(false); }} placeholder="0" /></Field></div>
+                <Btn busy={busy === "cooldown"} saved={savedCooldown} onClick={() => runTx("cooldown", () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setMinSecondsBetweenPlays", args: [BigInt(form.cooldownSeconds)], chainId, account: address }), "Throttle saved ✓", () => setSavedCooldown(true))}>Save</Btn>
               </div>
               {settings && <div style={{ ...hintStyle, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${P.border}` }}>Current: {settings.cooldown.toString()}s between plays</div>}
             </SettingCard>
@@ -741,10 +753,10 @@ try {
                     </div>
                     {/* Controls row */}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr auto", gap: 10, alignItems: "center" }}>
-                      <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={rewardRateInputs[g.id] ?? ""} onChange={e => setRewardRateInputs(m => ({ ...m, [g.id]: e.target.value }))} placeholder="Reward rate (MSTC)" />
-                      <Btn busy={busy === `rewardrate-${g.id}`} onClick={() => handleSaveRewardRate(g.id)} style={{ fontSize: 11, padding: "8px 14px" }}>💰 Set Rate</Btn>
-                      <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={minScoreInputs[g.id] ?? ""} onChange={e => setMinScoreInputs(m => ({ ...m, [g.id]: e.target.value }))} placeholder="Min score" />
-                      <Btn busy={busy === `minscore-${g.id}`} onClick={() => runTx(`minscore-${g.id}`, () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setGameMinScore", args: [BigInt(g.id), BigInt(minScoreInputs[g.id] || 0)], chainId, account: address }))} style={{ fontSize: 11, padding: "8px 14px" }}>🎯 Min Score</Btn>
+                      <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={rewardRateInputs[g.id] ?? ""} onChange={e => { setRewardRateInputs(m => ({ ...m, [g.id]: e.target.value })); setSavedRates(p => ({ ...p, [g.id]: false })); }} placeholder="Reward rate (MSTC)" />
+                      <Btn busy={busy === `rewardrate-${g.id}`} saved={savedRates[g.id]} onClick={() => handleSaveRewardRate(g.id)} style={{ fontSize: 11, padding: "8px 14px" }}>💰 Set Rate</Btn>
+                      <input style={{ ...inputStyle, fontSize: 12 }} type="number" value={minScoreInputs[g.id] ?? ""} onChange={e => { setMinScoreInputs(m => ({ ...m, [g.id]: e.target.value })); setSavedMinScores(p => ({ ...p, [g.id]: false })); }} placeholder="Min score" />
+                      <Btn busy={busy === `minscore-${g.id}`} saved={savedMinScores[g.id]} onClick={() => runTx(`minscore-${g.id}`, () => writeWithGas(publicClient, { address: PLATFORM, abi: PLATFORM_ABI, functionName: "setGameMinScore", args: [BigInt(g.id), BigInt(minScoreInputs[g.id] || 0)], chainId, account: address }), "Min score saved ✓", () => setSavedMinScores(p => ({ ...p, [g.id]: true })))} style={{ fontSize: 11, padding: "8px 14px" }}>🎯 Min Score</Btn>
                     </div>
                   </div>
                 ))}
