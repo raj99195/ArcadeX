@@ -124,6 +124,7 @@ export default function GamePlay() {
 
   const iframeRef = useRef(null);
   const submittingRef = useRef(false);
+  const sessionTokenRef = useRef(null); // SH0009: gameplay session token
   const { balance } = useArcadeBalance();
 
   useEffect(() => {
@@ -197,7 +198,7 @@ export default function GamePlay() {
     fetchCreator();
   }, [game?.creator]);
 
-  // Track play via API
+  // Track play + start gameplay session (SH0009)
   useEffect(() => {
     if (!game || !address || gameLoading) return;
     const trackPlay = async () => {
@@ -211,7 +212,27 @@ export default function GamePlay() {
         setTotalPlays(p => p + 1);
       } catch (e) {}
     };
+
+    // SH0009: one-time session token — bina is token ke sign-score nahi milega
+    const startSession = async () => {
+      try {
+        const token = localStorage.getItem("arcadex_jwt");
+        if (!token) return;
+        const res = await fetch("/api/games?action=start-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ gameId: game.gameId || game.id, chain: chainKey }),
+        });
+        if (res.ok) {
+          const { sessionToken } = await res.json();
+          sessionTokenRef.current = sessionToken;
+          console.log("[session] started:", sessionToken?.slice(0, 8) + "...");
+        }
+      } catch (e) { console.warn("[session] start failed:", e); }
+    };
+
     trackPlay();
+    startSession();
   }, [game?.id, address, gameLoading]);
 
   // ── ArcadeX SDK: postMessage helper (GamePlay -> game iframe) ──
@@ -612,25 +633,39 @@ export default function GamePlay() {
       // small native-token amounts still show up.
       const playerReward = Math.round(rewardRate * playerSplit / 100 * 100) / 100;
 
-      // Ask the backend to sign this (player, gameId, score) attestation.
-      // Falls back to nonce=0/sig="0x" if signing not configured — safe when
-      // scoreSigner is address(0) on-chain (contract skips verification).
-      let nonce = 0n;
-      let signature = "0x";
+      // SH0009: session token required — no fallback, hard block karo
+      const _jwt = localStorage.getItem("arcadex_jwt");
+      const _session = sessionTokenRef.current;
+
+      if (!_jwt) {
+        setSubmitError({ type: "auth", soft: false, icon: "🔐", title: "Not Signed In", msg: "Please connect your wallet and sign in to submit scores." });
+        setSubmitting(false); submittingRef.current = false; return;
+      }
+      if (!_session) {
+        setSubmitError({ type: "session", soft: true, icon: "🔄", title: "Session Expired", msg: "Your game session has expired. Please reload the page and play again." });
+        setSubmitting(false); submittingRef.current = false; return;
+      }
+
+      let nonce, signature;
       try {
-        const token = localStorage.getItem("arcadex_jwt");
         const sigRes = await fetch("/api/games?action=sign-score", {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-          body: JSON.stringify({ gameId: onChainGameId, score: finalScore, chain: chainKey, player: address }),
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${_jwt}` },
+          // player field nahi — backend JWT se lega (SH0009)
+          body: JSON.stringify({ gameId: onChainGameId, score: finalScore, chain: chainKey, sessionToken: _session }),
         });
-        if (sigRes.ok) {
-          const sigData = await sigRes.json();
-          nonce = BigInt(sigData.nonce);
-          signature = sigData.signature;
+        if (!sigRes.ok) {
+          const errData = await sigRes.json().catch(() => ({}));
+          setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: errData.error || "Could not verify gameplay session. Reload the page and try again." });
+          setSubmitting(false); submittingRef.current = false; return;
         }
+        const sigData = await sigRes.json();
+        nonce = BigInt(sigData.nonce);
+        signature = sigData.signature;
+        sessionTokenRef.current = null; // burn — one-time use
       } catch (sigErr) {
-        console.warn("[submitScore] sign-score request failed, proceeding without signature:", sigErr);
+        setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: "Network error while verifying score. Please try again." });
+        setSubmitting(false); submittingRef.current = false; return;
       }
 
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
