@@ -44,6 +44,14 @@ const CHAIN_IDS = {
   botchain: 677n,
   mst:      4646n,
 };
+const RPC_URLS = {
+  botchain: process.env.BOTCHAIN_RPC_URL,
+  mst:      process.env.MST_RPC_URL,
+};
+// Minimal ABI — sirf PlayRecorded event parse karne ke liye
+const PLATFORM_EVENT_ABI = [
+  "event PlayRecorded(address indexed player, uint256 indexed gameId, uint256 playerReward, uint256 creatorReward)",
+];
 
 export default async function handler(req, res) {
   cors(res);
@@ -287,6 +295,13 @@ export default async function handler(req, res) {
     if (!gameId || score == null || !chain || !sessionToken)
       return res.status(400).json({ error: "gameId, score, chain, sessionToken required" });
 
+    // ── LAYER 3 — soft-ban: 3+ flagged submissions → sign-score refuse ──
+    const flagCount = (await db.collection("flagged")
+      .where("player", "==", signUser.address.toLowerCase())
+      .limit(3).get()).size;
+    if (flagCount >= 3)
+      return res.status(403).json({ error: "Account under review due to suspicious activity." });
+
     const pk = process.env.SCORE_SIGNER_PRIVATE_KEY;
     if (!pk) return res.status(503).json({ error: "Score signing not configured" });
 
@@ -318,6 +333,61 @@ export default async function handler(req, res) {
 
       if (sessDoc.data().chain !== chain)
         return res.status(403).json({ error: "Session chain mismatch." });
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // LAYER 1 — Server-authoritative score validation (anti-cheat gates)
+      // sign-score ab generic oracle nahi — score pe "sochta" hai before signing.
+      // ═══════════════════════════════════════════════════════════════════════
+      const scoreNum   = Number(score);
+      const createdAt  = sessDoc.data().createdAt?.toDate?.() || new Date(sessDoc.data().createdAt);
+      const playSec    = (Date.now() - createdAt.getTime()) / 1000;
+      const rate       = playSec > 0 ? scoreNum / playSec : Infinity;
+
+      const flagAndReject = async (reason, extra = {}) => {
+        await db.collection("flagged").add({
+          player: signUser.address.toLowerCase(),
+          gameId: String(gameId),
+          score: scoreNum, playSec, rate, chain,
+          reason, ...extra, flaggedAt: new Date(),
+        });
+        return res.status(403).json({ error: reason });
+      };
+
+      // GATE 0 — negative / NaN / non-finite score
+      if (!Number.isFinite(scoreNum) || scoreNum < 0)
+        return await flagAndReject("Invalid score value");
+
+      // GATE 1 — minimum play time (bina khelay instant submit block)
+      const MIN_PLAY_SECONDS = 15;
+      if (playSec < MIN_PLAY_SECONDS)
+        return await flagAndReject("Play time too short — actually play the game", { minPlaySeconds: MIN_PLAY_SECONDS });
+
+      // GATE 2 — absolute impossible-rate ceiling (bootstrap safety net)
+      // Koi bhi game realistically 500 pts/sec cross nahi karega.
+      const ABSOLUTE_MAX_RATE = 500;
+      if (rate > ABSOLUTE_MAX_RATE)
+        return await flagAndReject("Impossible score rate", { absoluteMaxRate: ABSOLUTE_MAX_RATE });
+
+      // GATE 3 — self-learning per-game rate (Option B, no manual config)
+      // Har game apna normal rate khud seekhta hai. 20+ samples ke baad
+      // koi bhi submission jo learned-average se 3x zyada ho → flag.
+      const statRef  = db.collection("gameStats").doc(String(gameId));
+      const statSnap = await statRef.get();
+      const { avgRate = null, count = 0 } = statSnap.exists ? statSnap.data() : {};
+
+      if (count >= 20 && avgRate && rate > avgRate * 3)
+        return await flagAndReject("Score anomaly — far above normal for this game", { learnedAvgRate: avgRate });
+
+      // Legit submission → rolling average update (outliers ko average mein mat lo)
+      const withinNormal = !avgRate || rate <= avgRate * 3;
+      if (withinNormal) {
+        const newCount = count + 1;
+        const newAvg   = avgRate ? (avgRate * count + rate) / newCount : rate;
+        await statRef.set({ avgRate: newAvg, count: newCount, lastUpdated: new Date() }, { merge: true });
+      }
+      // ═══════════════════════════════════════════════════════════════════════
+      // END LAYER 1
+      // ═══════════════════════════════════════════════════════════════════════
 
       // Burn — one-time use
       await sessDoc.ref.update({ used: true, usedAt: new Date() });
@@ -387,21 +457,73 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── POST score ──
+  // ── POST score (LAYER 2: on-chain verified before leaderboard) ──
+  // Score tabhi save hota hai jab txHash actually blockchain pe exist kare,
+  // succeed hui ho, aur us player ke liye PlayRecorded event emit kiya ho.
+  // Isse koi bhi fake { txHash, score } bhej ke leaderboard poison nahi kar sakta.
   if (req.method === "POST" && action === "score") {
     const { txHash, score, gameId, gameName, chain, earned, earnedSymbol } = req.body;
-    if (!txHash || !score) return res.status(400).json({ error: "Missing fields" });
+    if (!txHash || score == null) return res.status(400).json({ error: "Missing fields" });
+
+    const chainKey = chain || "botchain";
+    const rpcUrl   = RPC_URLS[chainKey];
+    const platformAddr = PLATFORM_ADDRESSES[chainKey];
+    if (!rpcUrl || !platformAddr)
+      return res.status(400).json({ error: `Unknown chain: ${chainKey}` });
+
     try {
+      // Idempotency — already recorded? (double-submit safe)
+      const existing = await db.collection("scores").doc(txHash).get();
+      if (existing.exists) return res.status(200).json({ success: true, cached: true });
+
+      // 1) Tx blockchain pe fetch karo
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const receipt  = await provider.getTransactionReceipt(txHash);
+      if (!receipt) return res.status(400).json({ error: "Transaction not found on-chain" });
+      if (receipt.status !== 1) return res.status(400).json({ error: "Transaction failed on-chain" });
+
+      // 2) Tx Platform contract ko hi gayi thi?
+      if (receipt.to?.toLowerCase() !== platformAddr.toLowerCase())
+        return res.status(400).json({ error: "Transaction not to Platform contract" });
+
+      // 3) PlayRecorded event parse karo — player match kare?
+      const iface = new ethers.Interface(PLATFORM_EVENT_ABI);
+      let matched = null;
+      for (const log of receipt.logs) {
+        if (log.address.toLowerCase() !== platformAddr.toLowerCase()) continue;
+        try {
+          const parsed = iface.parseLog({ topics: log.topics, data: log.data });
+          if (parsed?.name === "PlayRecorded" &&
+              parsed.args.player.toLowerCase() === user.address.toLowerCase()) {
+            matched = parsed;
+            break;
+          }
+        } catch { /* not this event */ }
+      }
+      if (!matched)
+        return res.status(400).json({ error: "No matching PlayRecorded event for this player" });
+
+      // 4) On-chain se hi values lo — body ke score/earned pe trust nahi
+      const onChainGameId = matched.args.gameId.toString();
+      const onChainReward = Number(ethers.formatEther(matched.args.playerReward));
+
       await db.collection("scores").doc(txHash).set({
-        player: user.address, score: parseInt(score),
-        gameId: parseInt(gameId), gameName: gameName || "Unknown",
-        chain: chain || "botchain",
-        earned: Number(earned) || 0,
+        player:       user.address,
+        score:        parseInt(score),          // display score (game se)
+        gameId:       parseInt(onChainGameId),   // on-chain verified
+        gameName:     gameName || "Unknown",
+        chain:        chainKey,
+        earned:       onChainReward,             // on-chain verified reward
         earnedSymbol: earnedSymbol || "ARCADE",
-        txHash, createdAt: new Date(),
+        txHash,
+        verified:     true,                      // Layer 2 stamp
+        createdAt:    new Date(),
       });
-      return res.status(200).json({ success: true });
-    } catch (err) { return res.status(500).json({ error: err.message }); }
+      return res.status(200).json({ success: true, verified: true });
+    } catch (err) {
+      console.error("[score verify]", err);
+      return res.status(500).json({ error: err.message });
+    }
   }
 
   // ── POST save-game (creator) ──

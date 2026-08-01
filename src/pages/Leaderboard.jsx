@@ -2,9 +2,12 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAccount, usePublicClient } from "wagmi";
 import { useGames } from "../hooks/useGames";
-import { getScores } from "../lib/gameService";
 import { useChain } from "../context/ChainContext";
 
+// ── On-chain leaderboard ABI ──────────────────────────────────────────────
+// Scores ab seedha Leaderboard.sol contract se aate hain — Firestore se nahi.
+// Yeh tamper-proof hai: score sirf recordPlayAndEarn (valid signature) se
+// contract mein aata hai, isliye koi fake score leaderboard poison nahi kar sakta.
 const LEADERBOARD_ABI = [
   {
     name: "getPlayerStats",
@@ -16,6 +19,23 @@ const LEADERBOARD_ABI = [
       { name: "gamesPlayed", type: "uint256" },
       { name: "bestScore", type: "uint256" },
       { name: "lastGameId", type: "uint256" },
+    ],
+  },
+  {
+    name: "getGameScores",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "gameId", type: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple[]",
+        components: [
+          { name: "player", type: "address" },
+          { name: "score", type: "uint256" },
+          { name: "timestamp", type: "uint256" },
+        ],
+      },
     ],
   },
 ];
@@ -81,9 +101,42 @@ export default function Leaderboard() {
   const [myStats, setMyStats] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  // ── On-chain scores fetch ──────────────────────────────────────────────
+  // Har approved game ka getGameScores() parallel me padho, phir ek flat
+  // array banao jisme har entry { player, score, gameId, gameName } ho —
+  // wahi shape jo pehle Firestore deta tha, taaki neeche ki UI same rahe.
   const fetchScores = async () => {
+    if (!publicClient || !LEADERBOARD_ADDRESS || !games?.length) {
+      setScores([]); setLoading(false); return;
+    }
     setLoading(true);
-    try { setScores(await getScores(chainKey)); } catch { }
+    try {
+      const results = await Promise.all(
+        games.map(async (g) => {
+          try {
+            const entries = await publicClient.readContract({
+              address: LEADERBOARD_ADDRESS,
+              abi: LEADERBOARD_ABI,
+              functionName: "getGameScores",
+              args: [BigInt(g.id)],
+            });
+            return entries.map((e) => ({
+              player:    e.player,
+              score:     Number(e.score),
+              gameId:    g.id,
+              gameName:  g.name,
+              timestamp: Number(e.timestamp),
+            }));
+          } catch {
+            return []; // is game ke koi score nahi / call fail
+          }
+        })
+      );
+      // flatten
+      setScores(results.flat());
+    } catch {
+      setScores([]);
+    }
     setLoading(false);
   };
 
@@ -111,7 +164,8 @@ export default function Leaderboard() {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [address, chainKey]);
+    // games/chain change pe re-fetch — scores ab on-chain per-game aate hain
+  }, [address, chainKey, games?.length, LEADERBOARD_ADDRESS]);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -122,15 +176,16 @@ export default function Leaderboard() {
 
   const globalLB = Object.values(
     scores.reduce((acc, s) => {
-      const p = s.player;
-      if (!acc[p]) acc[p] = { player: p, bestScore: 0, totalScore: 0, gamesPlayed: 0, bestGame: "" };
-      acc[p].totalScore += s.score; acc[p].gamesPlayed += 1;
-      if (s.score > acc[p].bestScore) { acc[p].bestScore = s.score; acc[p].bestGame = s.gameName; }
+      const key = s.player?.toLowerCase();          // aggregate case-insensitively
+      if (!key) return acc;
+      if (!acc[key]) acc[key] = { player: s.player, bestScore: 0, totalScore: 0, gamesPlayed: 0, bestGame: "" };
+      acc[key].totalScore += s.score; acc[key].gamesPlayed += 1;
+      if (s.score > acc[key].bestScore) { acc[key].bestScore = s.score; acc[key].bestGame = s.gameName; }
       return acc;
     }, {})
   ).sort((a, b) => b.bestScore - a.bestScore).map((p, i) => ({ ...p, rank: i + 1 }));
 
-  const gameLB = (selectedGame === "all" ? scores : scores.filter(s => s.gameId === parseInt(selectedGame)))
+  const gameLB = (selectedGame === "all" ? scores : scores.filter(s => String(s.gameId) === String(selectedGame)))
     .sort((a, b) => b.score - a.score).map((s, i) => ({ ...s, rank: i + 1 }));
 
   const myRank = globalLB.findIndex(p => p.player?.toLowerCase() === address?.toLowerCase()) + 1;
@@ -361,7 +416,7 @@ export default function Leaderboard() {
                 <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, color: "#c4a0ff", textTransform: "uppercase", letterSpacing: "1px" }}>Top Games</span>
               </div>
               {games.slice(0, 5).map((g, i) => {
-                const cnt = scores.filter(s => s.gameId === g.id).length;
+                const cnt = scores.filter(s => String(s.gameId) === String(g.id)).length;
                 return (
                   <div key={g.id} onClick={() => navigate(`/play/${g.id}`)}
                     style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid rgba(123,47,255,0.05)", cursor: "pointer", transition: "all 0.15s" }}

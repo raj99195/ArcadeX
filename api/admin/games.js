@@ -44,34 +44,42 @@ function verifyAdminToken(req) {
   } catch { return null; }
 }
 
-// Badge leaderboard snapshot rebuild — scores collection se
-// ARCADE earned calculate karke top players rank karo
+// Badge leaderboard snapshot rebuild — LAYER 2 + LAYER 3
+//   • Sirf on-chain VERIFIED scores count hote hain (verified: true)
+//   • 3+ baar flagged players leaderboard se drop kar diye jaate hain
 async function refreshBadgeLeaderboard(db) {
-  const scoresSnap = await db.collection("scores").get();
+  // LAYER 3 — flagged players ka set banao (3+ flags = banned from leaderboard)
+  const flaggedSnap = await db.collection("flagged").get();
+  const flagCounts = {};
+  flaggedSnap.docs.forEach(d => {
+    const w = d.data().player?.toLowerCase();
+    if (w) flagCounts[w] = (flagCounts[w] || 0) + 1;
+  });
+  const banned = new Set(
+    Object.entries(flagCounts).filter(([, c]) => c >= 3).map(([w]) => w)
+  );
 
-  // Wallet ke hisaab se total score aggregate karo
+  // LAYER 2 — sirf verified scores lo (on-chain confirmed)
+  const scoresSnap = await db.collection("scores").where("verified", "==", true).get();
+
   const walletScores = {};
   scoresSnap.docs.forEach(d => {
     const data = d.data();
     const wallet = data.player?.toLowerCase();
     if (!wallet) return;
+    if (banned.has(wallet)) return;                       // flagged → skip
     walletScores[wallet] = (walletScores[wallet] || 0) + (data.score || 0);
   });
 
-  // Sort by total score descending → rank assign karo
   const rankings = Object.entries(walletScores)
     .sort((a, b) => b[1] - a[1])
-    .map(([wallet, totalScore], idx) => ({
-      wallet,
-      totalScore,
-      rank: idx + 1,
-    }));
+    .map(([wallet, totalScore], idx) => ({ wallet, totalScore, rank: idx + 1 }));
 
-  // Firestore mein snapshot save karo
   await db.collection("badgeLeaderboard").doc("snapshot").set({
     rankings,
     updatedAt: new Date(),
     rankedCount: rankings.length,
+    bannedCount: banned.size,
   });
 
   return rankings.length;
