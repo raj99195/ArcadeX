@@ -615,8 +615,8 @@ const submitGame = async () => {
               <span style={{ fontFamily: "Arial Black, sans-serif", fontSize: 11, fontWeight: 900, color: "#7B2FFF" }}>X</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", fontFamily: "Arial, sans-serif" }}>BOT</span>
-              <span style={{ fontSize: 10, color: "#10A37F", fontFamily: "Arial, sans-serif" }}>Chain</span>
+              {/* Dynamic chain name — pehle "BOT Chain" hardcoded tha, ab active chain se */}
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", fontFamily: "Arial, sans-serif" }}>{chainName}</span>
             </div>
           </div>
 

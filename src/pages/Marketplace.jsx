@@ -237,12 +237,24 @@ const arcadeBalance = Number(balance);
     
     setLoading(true);
     try {
-      const [allItems, rate] = await Promise.all([
-        publicClient.readContract({ address: MARKETPLACE_ADDRESS, abi: MARKETPLACE_ABI, functionName: "getAllItems" }),
-        publicClient.readContract({ address: MARKETPLACE_ADDRESS, abi: MARKETPLACE_ABI, functionName: "arcadePerBot" }),
-      ]);
+      // getAllItems zaroori hai — alag fetch taaki arcadePerBot ka revert ise na tode.
+      // (arcadePerBot BOT->ARCADE swap ke liye hai, sirf BOTChain pe exist karta hai;
+      //  MST pe function nahi -> revert -> pehle poora Promise.all fail hota tha,
+      //  jisse items bhi load nahi hote the.)
+      const allItems = await publicClient.readContract({
+        address: MARKETPLACE_ADDRESS, abi: MARKETPLACE_ABI, functionName: "getAllItems",
+      });
       setItems(allItems.filter(i => i.active));
-      setArcadePerBot(Number(rate) / 1e18);
+
+      // arcadePerBot optional — chain pe function na ho toh silently skip
+      try {
+        const rate = await publicClient.readContract({
+          address: MARKETPLACE_ADDRESS, abi: MARKETPLACE_ABI, functionName: "arcadePerBot",
+        });
+        setArcadePerBot(Number(rate) / 1e18);
+      } catch {
+        // BOT swap feature is chain pe available nahi — ignore
+      }
 
       if (address) {
         const owned = await publicClient.readContract({ address: MARKETPLACE_ADDRESS, abi: MARKETPLACE_ABI, functionName: "getUserItems", args: [address] });

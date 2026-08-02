@@ -20,7 +20,7 @@ const S = {
   border: "rgba(123,47,255,0.14)", border2: "rgba(123,47,255,0.28)",
   purple: "#7B2FFF", purpleL: "#B088FF", cyan: "#00D4FF",
   green: "#00FF88", gold: "#FFB700", red: "#FF4444",
-  dim: "#9977CC", dimMore: "#5533AA",
+  dim: "#b39fe0", dimMore: "#8a7fb8",
   raj: "'Rajdhani', sans-serif", orb: "'Orbitron', sans-serif",
 };
 
@@ -158,14 +158,39 @@ export default function Support() {
       <style>{`
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
         @keyframes slideUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
-        .sup-card:hover { border-color: rgba(123,47,255,0.35) !important; transform: translateY(-2px); }
-        .issue-opt:hover { border-color: rgba(123,47,255,0.4) !important; background: rgba(123,47,255,0.08) !important; }
+        @keyframes supFadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes supGradFlow { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
+        @keyframes supFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+        @keyframes supDiamond { 0%,100%{transform:rotate(0);opacity:1} 50%{transform:rotate(180deg);opacity:0.6} }
+        @keyframes supGlow { 0%,100%{box-shadow:0 0 0 0 rgba(123,47,255,0.4)} 50%{box-shadow:0 0 0 6px rgba(123,47,255,0)} }
+
+        .sup-content-anim { animation: supFadeUp 0.45s ease both; }
+
+        .sup-card { transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+        .sup-card:hover { border-color: rgba(123,47,255,0.4) !important; transform: translateY(-4px); box-shadow: 0 10px 34px rgba(123,47,255,0.16); }
+
+        .issue-opt { transition: all 0.18s ease; }
+        .issue-opt:hover { border-color: rgba(123,47,255,0.45) !important; background: rgba(123,47,255,0.08) !important; transform: translateY(-2px); }
+
+        .sup-hero-grad {
+          background: linear-gradient(90deg,#7B2FFF,#00D4FF,#B088FF,#7B2FFF);
+          background-size: 300% auto;
+          -webkit-background-clip: text; background-clip: text;
+          -webkit-text-fill-color: transparent;
+          animation: supGradFlow 6s linear infinite;
+        }
+
+        .sup-tab { transition: all 0.18s ease; }
+        .sup-tab:hover { transform: translateY(-1px); color: #d9c4ff !important; }
+
+        .sup-cta { transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease; }
+        .sup-cta:hover { transform: translateY(-2px); filter: brightness(1.1); }
       `}</style>
 
       {/* BG */}
       <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none" }}>
         <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(123,47,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(123,47,255,0.05) 1px, transparent 1px)", backgroundSize: "50px 50px" }} />
-        <div style={{ position: "absolute", top: "5%", left: "40%", width: 600, height: 400, background: "radial-gradient(circle, rgba(123,47,255,0.1) 0%, transparent 70%)", borderRadius: "50%" }} />
+        <div style={{ position: "absolute", top: "5%", left: "40%", width: 600, height: 400, background: "radial-gradient(circle, rgba(123,47,255,0.1) 0%, transparent 70%)", borderRadius: "50%", animation: "supFloat 9s ease-in-out infinite" }} />
       </div>
 
       <div style={{ position: "relative", zIndex: 1, maxWidth: 1000, margin: "0 auto", padding: "32px 24px" }}>
@@ -173,15 +198,15 @@ export default function Support() {
         {/* Hero */}
         <div style={{ marginBottom: 36 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: S.purpleL, letterSpacing: "3px", textTransform: "uppercase", marginBottom: 16, fontFamily: S.raj, fontWeight: 700 }}>
-            <span style={{ color: S.purple, fontSize: 13 }}>◆</span> Support Center
+            <span style={{ color: S.purple, fontSize: 13, display: "inline-block", animation: "supDiamond 4s ease-in-out infinite" }}>◆</span> Support Center
           </div>
           <h1 style={{ fontFamily: S.raj, fontWeight: 800, fontSize: 46, color: "#fff", textTransform: "uppercase", lineHeight: 1.05, margin: "0 0 14px" }}>
             How can we<br />
-            <span style={{ background: `linear-gradient(90deg,${S.purple},${S.cyan})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+            <span className="sup-hero-grad">
               help you?
             </span>
           </h1>
-          <p style={{ color: S.dimMore, fontSize: 14, fontFamily: S.raj, margin: "0 0 26px", lineHeight: 1.6 }}>
+          <p style={{ color: S.dim, fontSize: 14, fontFamily: S.raj, margin: "0 0 26px", lineHeight: 1.6 }}>
             Join the community or submit a support ticket.
           </p>
 

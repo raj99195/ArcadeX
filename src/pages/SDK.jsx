@@ -7,7 +7,7 @@ const C = {
   purple: "#7B2FFF", purpleDim: "rgba(123,47,255,0.12)",
   cyan: "#00d4ff", green: "#00FF88", gold: "#FFB800",
   red: "#ff4444", orange: "#ff8800", blue: "#4499ff",
-  text: "#fff", muted: "#aaa", dim: "#555",
+  text: "#fff", muted: "#b8b0d0", dim: "#8a7fb0",
   mono: "'Fira Code','Cascadia Code','Courier New',monospace",
   ui: "'Rajdhani',sans-serif", display: "'Orbitron','Rajdhani',sans-serif",
 };
@@ -307,12 +307,12 @@ export default function SDK() {
       case "overview": return (
         <div>
           <div style={{ marginBottom: 36 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 14px", border: `1px solid ${C.border}`, borderRadius: 20, fontSize: 10, color: C.dim, marginBottom: 20, textTransform: "uppercase", letterSpacing: "1px", fontFamily: C.ui, fontWeight: 600, background: C.purpleDim }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.purple, display: "inline-block" }} />
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 14px", border: `1px solid ${C.borderHi}`, borderRadius: 20, fontSize: 10, color: "#c4a0ff", marginBottom: 20, textTransform: "uppercase", letterSpacing: "1px", fontFamily: C.ui, fontWeight: 600, background: C.purpleDim }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.purple, display: "inline-block", animation: "sdkPulse 2s ease-in-out infinite" }} />
               Developer Documentation
             </div>
             <h1 style={{ fontSize: isMobile ? 32 : 46, fontWeight: 700, fontFamily: C.display, letterSpacing: "-1px", lineHeight: 1.1, margin: "0 0 14px" }}>
-              ARCADE<span style={{ background: `linear-gradient(90deg,${C.purple},${C.cyan})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>X</span>{" "}
+              ARCADE<span className="sdk-hero-grad">X</span>{" "}
               <span style={{ color: C.muted, fontWeight: 400 }}>SDK</span>
             </h1>
             <p style={{ color: C.muted, fontSize: 15, maxWidth: 600, lineHeight: 1.8, marginBottom: 32, fontFamily: C.ui }}>
@@ -320,7 +320,7 @@ export default function SDK() {
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {[{ label: "Unity WebGL", color: C.green, icon: "🎮" }, { label: "Godot HTML5", color: C.cyan, icon: "🔵" }, { label: "Phaser.js", color: C.purple, icon: "⚡" }, { label: "Plain JS", color: C.gold, icon: "🌐" }].map(e => (
-                <div key={e.label} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", background: e.color + "11", border: `1px solid ${e.color}33`, borderRadius: 20, fontSize: 11, color: e.color, fontFamily: C.ui, fontWeight: 600 }}>
+                <div key={e.label} className="sdk-chip" style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", background: e.color + "11", border: `1px solid ${e.color}33`, borderRadius: 20, fontSize: 11, color: e.color, fontFamily: C.ui, fontWeight: 600, cursor: "default" }}>
                   <span>{e.icon}</span>{e.label}
                 </div>
               ))}
@@ -337,7 +337,7 @@ export default function SDK() {
               { file: "arcade-sdk-phaser.js",  icon: "⚡", color: C.purple, badge: "Phaser 3",    tag: "project/",         desc: "Phaser 3 SDK — global + optional Scene Plugin", href: "/arcade-sdk-phaser.js" },
               { file: "ArcadeBridge.jslib",    icon: "🔌", color: C.orange, badge: "Unity Plugin", tag: "Assets/Plugins/WebGL/", desc: "Bridges Unity C# DllImport → JavaScript calls", href: "/ArcadeBridge.jslib" },
             ].map(f => (
-              <div key={f.file} style={{ background: C.surface, border: `1px solid ${f.color}33`, borderRadius: 14, padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20, flexWrap: "wrap" }}>
+              <div key={f.file} className="sdk-dl-card" style={{ background: C.surface, border: `1px solid ${f.color}33`, borderRadius: 14, padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20, flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                   <div style={{ width: 42, height: 42, borderRadius: 10, background: f.color + "11", border: `1px solid ${f.color}33`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>{f.icon}</div>
                   <div>
@@ -346,11 +346,11 @@ export default function SDK() {
                       <Badge color={f.color}>{f.badge}</Badge>
                       <Badge color={C.gold}>→ {f.tag}</Badge>
                     </div>
-                    <div style={{ fontSize: 11, color: C.dim, fontFamily: C.ui }}>{f.desc}</div>
+                    <div style={{ fontSize: 11, color: C.muted, fontFamily: C.ui }}>{f.desc}</div>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-                  <a href={f.href} download style={{ padding: "8px 18px", background: `linear-gradient(135deg,${f.color},${f.color}99)`, borderRadius: 8, color: "#040c08", fontSize: 12, fontWeight: 700, textDecoration: "none", fontFamily: C.ui }}>↓ Download</a>
+                  <a href={f.href} download className="sdk-download-btn" style={{ padding: "8px 18px", background: `linear-gradient(135deg,${f.color},${f.color}99)`, borderRadius: 8, color: "#040c08", fontSize: 12, fontWeight: 700, textDecoration: "none", fontFamily: C.ui }}>↓ Download</a>
                   <a href={f.href} target="_blank" rel="noreferrer" style={{ padding: "8px 18px", background: "transparent", border: `1px solid ${f.color}44`, borderRadius: 8, color: f.color, fontSize: 12, fontWeight: 600, textDecoration: "none", fontFamily: C.ui }}>View</a>
                 </div>
               </div>
@@ -366,7 +366,7 @@ export default function SDK() {
               { id: "phaser", icon: "⚡", name: "Phaser.js", desc: "Direct SDK integration", color: C.purple },
               { id: "vanilla", icon: "🌐", name: "Plain JS", desc: "Any HTML5 game", color: C.gold },
             ].map(e => (
-              <div key={e.id} onClick={() => setActiveSection(e.id)} style={{ background: C.surface, border: `1px solid ${e.color}22`, borderRadius: 12, padding: "18px 16px", cursor: "pointer", transition: "all 0.2s" }}
+              <div key={e.id} className="sdk-card" onClick={() => setActiveSection(e.id)} style={{ background: C.surface, border: `1px solid ${e.color}22`, borderRadius: 12, padding: "18px 16px", cursor: "pointer" }}
                 onMouseEnter={el => { el.currentTarget.style.borderColor = e.color + "55"; el.currentTarget.style.background = e.color + "08"; }}
                 onMouseLeave={el => { el.currentTarget.style.borderColor = e.color + "22"; el.currentTarget.style.background = C.surface; }}>
                 <div style={{ fontSize: 28, marginBottom: 10 }}>{e.icon}</div>
@@ -970,7 +970,42 @@ ArcadeSDK.getPlayerProfile();`} />
         ::-webkit-scrollbar { width: 4px; } 
         ::-webkit-scrollbar-track { background: transparent; } 
         ::-webkit-scrollbar-thumb { background: rgba(123,47,255,0.3); border-radius: 2px; }
-        .sdk-nav-item:hover { color: #c4a0ff !important; background: rgba(123,47,255,0.06) !important; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(123,47,255,0.6); }
+
+        @keyframes sdkFadeUp { from { opacity:0; transform: translateY(16px); } to { opacity:1; transform: translateY(0); } }
+        @keyframes sdkGradFlow { 0%{ background-position:0% 50%; } 50%{ background-position:100% 50%; } 100%{ background-position:0% 50%; } }
+        @keyframes sdkPulse { 0%,100%{ opacity:1; box-shadow:0 0 0 0 rgba(123,47,255,0.5); } 50%{ opacity:0.7; box-shadow:0 0 0 5px rgba(123,47,255,0); } }
+        @keyframes sdkFloat { 0%,100%{ transform: translateY(0); } 50%{ transform: translateY(-8px); } }
+        @keyframes sdkShimmer { 0%{ background-position: -200% center; } 100%{ background-position: 200% center; } }
+        @keyframes sdkGlow { 0%,100%{ filter: drop-shadow(0 0 4px rgba(123,47,255,0.4)); } 50%{ filter: drop-shadow(0 0 14px rgba(0,212,255,0.6)); } }
+
+        .sdk-content-anim { animation: sdkFadeUp 0.45s ease both; }
+
+        .sdk-nav-item { transition: all 0.15s ease; }
+        .sdk-nav-item:hover { color: #d9c4ff !important; background: rgba(123,47,255,0.08) !important; transform: translateX(2px); }
+
+        .sdk-hero-grad {
+          background: linear-gradient(90deg,#7B2FFF,#00d4ff,#ff6ec4,#7B2FFF);
+          background-size: 300% auto;
+          -webkit-background-clip: text; background-clip: text;
+          -webkit-text-fill-color: transparent;
+          animation: sdkGradFlow 6s linear infinite;
+        }
+
+        .sdk-card { transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+        .sdk-card:hover { transform: translateY(-3px); box-shadow: 0 8px 30px rgba(123,47,255,0.18); }
+
+        .sdk-dl-card { transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; }
+        .sdk-dl-card:hover { transform: translateX(4px); box-shadow: -4px 0 0 rgba(166,127,255,0.5), 0 6px 24px rgba(0,0,0,0.4); }
+
+        .sdk-chip { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+        .sdk-chip:hover { transform: translateY(-2px) scale(1.04); }
+
+        .sdk-download-btn { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+        .sdk-download-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(123,47,255,0.4); }
+
+        .sdk-copy-btn { transition: all 0.15s ease; }
+        .sdk-copy-btn:hover { background: rgba(123,47,255,0.2) !important; }
       `}</style>
 
       {/* Grid BG */}
@@ -1017,7 +1052,9 @@ ArcadeSDK.getPlayerProfile();`} />
             </div>
           )}
 
-          {renderContent()}
+          <div key={activeSection} className="sdk-content-anim">
+            {renderContent()}
+          </div>
 
           {/* Bottom nav */}
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 48, paddingTop: 24, borderTop: `1px solid ${C.border}` }}>
