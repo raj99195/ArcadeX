@@ -3,6 +3,7 @@
 
 import admin from "firebase-admin";
 import { ethers } from "ethers";
+import jwt from "jsonwebtoken";
 
 // ── Firebase ────────────────────────────────────────────────────
 function getDb() {
@@ -20,13 +21,55 @@ function getDb() {
 
 // ── Constants ───────────────────────────────────────────────────
 // ── Constants (from chains.js + deployedAddresses.json) ─────────
-const BOTCHAIN_RPC = "https://rpc.botchain.ai";
-const PLATFORM_ADDRESS = "0xB784bECdD891b629979B342F27F3CF95B0C096BC";
-const TOURNAMENT_ADDRESS = "0x27e8e13F8Dd4858Ffd34Ea4aCCa18463B0D032D4";
+// ── Constants ───────────────────────────────────────────────────
+// Values from deployedAddresses.json (BOTChain). Pehle PLATFORM_ADDRESS
+// galat tha (0xB784...) jisse verify-transaction hamesha fail hota tha —
+// actual BOTChain platform 0x2Ca0... hai. Env override bhi allowed hai
+// taaki redeploy pe sirf env badalna pade, code nahi.
+const BOTCHAIN_RPC       = process.env.BOTCHAIN_RPC_URL || "https://rpc.botchain.ai";
+const PLATFORM_ADDRESS   = process.env.BOTCHAIN_PLATFORM_ADDRESS   || "0x2Ca0C74C1ee7e65e5f96c469cef840B62Ba6cFB4";
+const TOURNAMENT_ADDRESS = process.env.BOTCHAIN_TOURNAMENT_ADDRESS || "0xdeB296E39c770475EBC771a2D8B3Dc51a8268Ec8";
 
 const PLATFORM_ABI = [
   "function recordPlayAndEarn(uint256 gameId, uint256 score) external",
 ];
+
+// ── Admin address (matches VITE_ADMIN_ADDRESS used across all admin files) ──
+const ADMIN_ADDR = process.env.VITE_ADMIN_ADDRESS?.toLowerCase() || null;
+
+// ── Auth helpers ────────────────────────────────────────────────
+// JWT se caller ka address nikaalo (games.js jaisa hi arcadex_jwt use karta hai)
+function getAuthAddress(req) {
+  const hdr = req.headers.authorization || "";
+  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : null;
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    return decoded.address?.toLowerCase() || null;
+  } catch { return null; }
+}
+
+// Admin hai? — JWT valid + address VITE_ADMIN_ADDRESS se match
+function isAdmin(req) {
+  const addr = getAuthAddress(req);
+  return addr && ADMIN_ADDR && addr === ADMIN_ADDR;
+}
+
+// Wallet ownership proof — user ne is wallet se sign kiya?
+// Frontend bheje: { wallet, signature, timestamp }
+// message = `ArcadeX campaign: ${wallet} @ ${timestamp}`
+// signature 5 min ke andar valid.
+function verifyWalletOwnership(body) {
+  const { wallet, signature, timestamp } = body || {};
+  if (!wallet || !signature || !timestamp) return false;
+  // Replay window — 5 min
+  if (Math.abs(Date.now() - Number(timestamp)) > 5 * 60 * 1000) return false;
+  try {
+    const message = `ArcadeX campaign: ${wallet.toLowerCase()} @ ${timestamp}`;
+    const recovered = ethers.verifyMessage(message, signature);
+    return recovered.toLowerCase() === wallet.toLowerCase();
+  } catch { return false; }
+}
 
 // ── CORS helper ─────────────────────────────────────────────────
 function setCors(res) {
@@ -81,11 +124,21 @@ export default async function handler(req, res) {
         return res.json({ walletAddress: wallet, tasks });
       }
 
-      // ── POST verify-social ────────────────────────────────────
+      // ── POST verify-social (ownership required) ───────────────
       case "verify-social": {
         const { wallet, taskId, username, field } = req.body;
         if (!wallet || !username || !field)
           return res.status(400).json({ error: "Missing fields" });
+
+        // Ownership — caller apni hi wallet ka data likh sakta hai
+        const callerAddr = getAuthAddress(req);
+        if (!callerAddr || callerAddr !== wallet.toLowerCase())
+          return res.status(403).json({ error: "Forbidden — wallet ownership required" });
+
+        // Field allowlist — arbitrary field write mat hone do
+        const ALLOWED_FIELDS = ["twitter", "telegram", "discord"];
+        if (!ALLOWED_FIELDS.includes(field))
+          return res.status(400).json({ error: "Invalid field" });
 
         const db = getDb();
         await db.collection("campaign_participants").doc(wallet.toLowerCase()).set(
@@ -95,11 +148,15 @@ export default async function handler(req, res) {
         return res.json({ success: true });
       }
 
-      // ── POST submit-transaction ───────────────────────────────
+      // ── POST submit-transaction (ownership required) ──────────
       case "submit-transaction": {
         const { wallet, txHash } = req.body;
         if (!wallet || !txHash)
           return res.status(400).json({ error: "Missing wallet or txHash" });
+
+        const callerAddr = getAuthAddress(req);
+        if (!callerAddr || callerAddr !== wallet.toLowerCase())
+          return res.status(403).json({ error: "Forbidden — wallet ownership required" });
 
         const db = getDb();
         await db.collection("campaign_participants").doc(wallet.toLowerCase()).set(
@@ -109,11 +166,15 @@ export default async function handler(req, res) {
         return res.json({ success: true });
       }
 
-      // ── POST verify-transaction ───────────────────────────────
+      // ── POST verify-transaction (ownership required) ──────────
       case "verify-transaction": {
         const { wallet, txHash } = req.body;
         if (!wallet || !txHash)
           return res.status(400).json({ error: "Missing fields" });
+
+        const callerAddr = getAuthAddress(req);
+        if (!callerAddr || callerAddr !== wallet.toLowerCase())
+          return res.status(403).json({ error: "Forbidden — wallet ownership required" });
 
         try {
           const provider = new ethers.JsonRpcProvider(BOTCHAIN_RPC);
@@ -169,7 +230,10 @@ export default async function handler(req, res) {
         }
       }
 
-      // ── GET dashboard ─────────────────────────────────────────
+      // ── GET dashboard (SH0015: IDOR fix) ──────────────────────
+      // Progress data non-sensitive hai (task completion %), lekin txHash
+      // sensitive hai. txHash sirf tabhi full dikhega jab caller wallet ka
+      // owner ho (JWT address match). Warna masked.
       case "dashboard": {
         const wallet = req.query.wallet?.toLowerCase();
         if (!wallet) return res.status(400).json({ error: "Missing wallet" });
@@ -190,12 +254,19 @@ export default async function handler(req, res) {
           data.verificationStatus === "verified",
         ].filter(Boolean).length;
 
+        // Ownership check — caller apna hi dashboard dekh raha hai?
+        const callerAddr = getAuthAddress(req);
+        const isOwner = callerAddr && callerAddr === wallet;
+
+        const rawTx = data.txHash || "";
+        const maskedTx = rawTx ? rawTx.slice(0, 6) + "…" + rawTx.slice(-4) : "—";
+
         return res.json({
           completedTasks: completed,
           totalTasks,
           progressPct: Math.round((completed / totalTasks) * 100),
           gamesPlayed: data.gamePlayed ? 1 : 0,
-          txHash: data.txHash || "—",
+          txHash: isOwner ? (rawTx || "—") : maskedTx,  // full sirf owner ko
           verificationStatus: data.verificationStatus || "pending",
           rewardStatus: data.rewardStatus || "pending",
         });
@@ -228,8 +299,11 @@ export default async function handler(req, res) {
         return res.json({ entries });
       }
 
-      // ── GET admin ─────────────────────────────────────────────
+      // ── GET admin (SH0014: admin-only) ────────────────────────
       case "admin": {
+        if (!isAdmin(req))
+          return res.status(403).json({ error: "Forbidden — admin access required" });
+
         const db = getDb();
         const snap = await db.collection("campaign_participants").get();
         const users = snap.docs.map((d) => ({ wallet: d.id, ...d.data() }));
@@ -245,8 +319,10 @@ export default async function handler(req, res) {
         return res.json({ stats, users });
       }
 
-      // ── POST approve ──────────────────────────────────────────
+      // ── POST approve (admin-only — reward eligibility) ────────
       case "approve": {
+        if (!isAdmin(req))
+          return res.status(403).json({ error: "Forbidden — admin access required" });
         const { wallet } = req.body;
         if (!wallet) return res.status(400).json({ error: "Missing wallet" });
         const db = getDb();
@@ -257,8 +333,10 @@ export default async function handler(req, res) {
         return res.json({ success: true });
       }
 
-      // ── POST reject ───────────────────────────────────────────
+      // ── POST reject (admin-only) ──────────────────────────────
       case "reject": {
+        if (!isAdmin(req))
+          return res.status(403).json({ error: "Forbidden — admin access required" });
         const { wallet, reason } = req.body;
         if (!wallet) return res.status(400).json({ error: "Missing wallet" });
         const db = getDb();

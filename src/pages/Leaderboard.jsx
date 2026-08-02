@@ -73,15 +73,16 @@ function RankMedal({ rank }) {
     3: { bg: "linear-gradient(135deg,#CD7F32,#8B4513)", shadow: "0 0 12px rgba(205,127,50,0.4)", border: "rgba(205,127,50,0.5)", text: "#CD7F32" },
   };
   const m = medals[rank];
-  if (!m) return <span style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 11, color: "#5533aa", minWidth: 28, textAlign: "center" }}>{rank}</span>;
+  if (!m) return <span style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 12, fontWeight: 700, color: "#8b6fd4", minWidth: 28, textAlign: "center" }}>{rank}</span>;
   return (
     <div style={{
       width: 28, height: 28, borderRadius: "50%",
       background: m.bg, boxShadow: m.shadow,
       border: `1.5px solid ${m.border}`,
       display: "flex", alignItems: "center", justifyContent: "center",
-      fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 11,
-      color: "#fff", flexShrink: 0,
+      fontFamily: "'Orbitron',sans-serif", fontWeight: 800, fontSize: 11,
+      color: "#1a1206", flexShrink: 0,
+      ...(rank === 1 ? { animation: "crownGlow 2s ease-in-out infinite" } : {}),
     }}>{rank}</div>
   );
 }
@@ -174,6 +175,25 @@ export default function Leaderboard() {
     setRefreshing(false);
   };
 
+  // ── Anti-cheat display filter (Option B) ──────────────────────────────────
+  // Purane cheated scores (jab Layer 1 nahi tha) contract pe rehte hain,
+  // lekin UI pe hide karte hain. Contract untouched — sirf display filter.
+  // Tunable thresholds:
+  const CHEAT_FILTER = {
+    maxSingleScore: 20000,   // koi bhi single score isse upar → suspicious
+    maxScorePerPlay: 15000,  // best/plays ratio isse upar → suspicious (1 play me huge)
+  };
+
+  // Ek individual score suspicious hai?
+  const isSuspiciousScore = (score) => score > CHEAT_FILTER.maxSingleScore;
+
+  // Ek aggregated player suspicious hai?
+  const isSuspiciousPlayer = (p) => {
+    if (p.bestScore > CHEAT_FILTER.maxSingleScore) return true;
+    const ratio = p.gamesPlayed > 0 ? p.bestScore / p.gamesPlayed : p.bestScore;
+    return ratio > CHEAT_FILTER.maxScorePerPlay;
+  };
+
   const globalLB = Object.values(
     scores.reduce((acc, s) => {
       const key = s.player?.toLowerCase();          // aggregate case-insensitively
@@ -183,9 +203,12 @@ export default function Leaderboard() {
       if (s.score > acc[key].bestScore) { acc[key].bestScore = s.score; acc[key].bestGame = s.gameName; }
       return acc;
     }, {})
-  ).sort((a, b) => b.bestScore - a.bestScore).map((p, i) => ({ ...p, rank: i + 1 }));
+  )
+    .filter(p => !isSuspiciousPlayer(p))            // ← cheaters hide
+    .sort((a, b) => b.bestScore - a.bestScore).map((p, i) => ({ ...p, rank: i + 1 }));
 
   const gameLB = (selectedGame === "all" ? scores : scores.filter(s => String(s.gameId) === String(selectedGame)))
+    .filter(s => !isSuspiciousScore(s.score))       // ← cheated scores hide
     .sort((a, b) => b.score - a.score).map((s, i) => ({ ...s, rank: i + 1 }));
 
   const myRank = globalLB.findIndex(p => p.player?.toLowerCase() === address?.toLowerCase()) + 1;
@@ -210,16 +233,43 @@ export default function Leaderboard() {
       <style>{`
         @keyframes lbPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
         @keyframes floatUp  { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
-        .lb-row:hover { background: rgba(123,47,255,0.1) !important; }
-        .tab-btn:hover { color: #c4a0ff !important; }
+        @keyframes lbRowIn { from { opacity:0; transform: translateX(-12px); } to { opacity:1; transform: translateX(0); } }
+        @keyframes shimmer { 0%{ background-position: -200% 0; } 100%{ background-position: 200% 0; } }
+        @keyframes crownGlow { 0%,100%{ filter: drop-shadow(0 0 3px rgba(255,215,0,0.6)); } 50%{ filter: drop-shadow(0 0 10px rgba(255,215,0,1)); } }
+        @keyframes goldSweep { 0%{ transform: translateX(-100%); } 100%{ transform: translateX(200%); } }
+        @keyframes rankBounce { 0%{ transform: scale(0.6); opacity:0; } 60%{ transform: scale(1.12); } 100%{ transform: scale(1); opacity:1; } }
+        @keyframes gradShift { 0%{ background-position:0% 50%; } 50%{ background-position:100% 50%; } 100%{ background-position:0% 50%; } }
+        @keyframes scorePop { 0%{ transform: scale(1); } 50%{ transform: scale(1.06); } 100%{ transform: scale(1); } }
+
+        .lb-row { animation: lbRowIn 0.4s ease both; }
+        .lb-row:hover { background: rgba(123,47,255,0.14) !important; transform: translateX(3px); box-shadow: inset 3px 0 0 rgba(166,127,255,0.6); }
+        .lb-row { transition: background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease; }
+
+        .tab-btn:hover { color: #d9c4ff !important; }
         .lb-scroll::-webkit-scrollbar { display: none; }
+
+        .rank-1-row { position: relative; }
+        .rank-1-row::after {
+          content: ""; position: absolute; top:0; left:0; height:100%; width:60px;
+          background: linear-gradient(90deg, transparent, rgba(255,215,0,0.18), transparent);
+          animation: goldSweep 3.5s ease-in-out infinite; pointer-events:none;
+        }
+        .lb-title-grad {
+          background: linear-gradient(90deg,#a67fff,#00d4ff,#a67fff,#ff6ec4,#a67fff);
+          background-size: 300% auto;
+          -webkit-background-clip: text; background-clip: text;
+          -webkit-text-fill-color: transparent;
+          animation: gradShift 6s linear infinite;
+        }
+        .medal-anim { animation: rankBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) both; }
+        .refresh-spin:hover svg { transform: rotate(180deg); transition: transform 0.4s ease; }
       `}</style>
 
       {/* Grid BG */}
       <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", background: "#08070f" }}>
         <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(123,47,255,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(123,47,255,0.07) 1px, transparent 1px)", backgroundSize: "50px 50px" }} />
-        <div style={{ position: "absolute", top: "10%", left: "50%", transform: "translateX(-50%)", width: 600, height: 400, background: "radial-gradient(circle, rgba(123,47,255,0.15) 0%, transparent 70%)", borderRadius: "50%" }} />
-        <div style={{ position: "absolute", bottom: 0, right: 0, width: 400, height: 400, background: "radial-gradient(circle, rgba(0,212,255,0.06) 0%, transparent 70%)", borderRadius: "50%" }} />
+        <div style={{ position: "absolute", top: "10%", left: "50%", transform: "translateX(-50%)", width: 600, height: 400, background: "radial-gradient(circle, rgba(123,47,255,0.15) 0%, transparent 70%)", borderRadius: "50%", animation: "floatUp 8s ease-in-out infinite" }} />
+        <div style={{ position: "absolute", bottom: 0, right: 0, width: 400, height: 400, background: "radial-gradient(circle, rgba(0,212,255,0.06) 0%, transparent 70%)", borderRadius: "50%", animation: "floatUp 10s ease-in-out infinite" }} />
       </div>
 
       <div style={{ position: "relative", zIndex: 1 }}>
@@ -233,7 +283,7 @@ export default function Leaderboard() {
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <h1 style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: isMobile ? 28 : 48, letterSpacing: "-0.5px", textTransform: "uppercase", lineHeight: 1, color: "#fff" }}>
               Global{" "}
-              <span style={{ background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>
+              <span className="lb-title-grad">
                 Leaderboard
               </span>
             </h1>
@@ -304,7 +354,7 @@ export default function Leaderboard() {
               {/* Col headers */}
               <div style={{ display: isMobile ? "grid" : "grid", gridTemplateColumns: isMobile ? "36px 1fr 80px" : "52px 160px 1fr 130px", padding: "10px 20px", borderBottom: "1px solid rgba(123,47,255,0.08)", background: "rgba(0,0,0,0.2)" }}>
                 {["Rank", "Player", activeTab === "global" ? "Best Game" : "Game", "Score"].map((h, i) => (
-                  <div key={i} style={{ fontSize: 9, color: "#5533aa", textTransform: "uppercase", letterSpacing: "1.2px", textAlign: i === 2 ? "center" : i === 3 ? "right" : "left", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>{h}</div>
+                  <div key={i} style={{ fontSize: 9, color: "#7a5fc0", textTransform: "uppercase", letterSpacing: "1.2px", textAlign: i === 2 ? "center" : i === 3 ? "right" : "left", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>{h}</div>
                 ))}
               </div>
 
@@ -323,16 +373,16 @@ export default function Leaderboard() {
                     const rStyle = rankRowStyle(row.rank, isMe);
                     const copyAddr = () => { if (row.player) navigator.clipboard.writeText(row.player); };
                     return (
-                      <div key={idx} className="lb-row" style={{
+                      <div key={idx} className={`lb-row${row.rank === 1 ? " rank-1-row" : ""}`} style={{
                         display: isMobile ? "grid" : "grid", gridTemplateColumns: isMobile ? "36px 1fr 80px" : "52px 160px 1fr 130px",
                         padding: "12px 20px",
                         borderBottom: "1px solid rgba(123,47,255,0.05)",
-                        transition: "background 0.15s",
                         alignItems: "center",
+                        animationDelay: `${Math.min(idx * 0.04, 0.6)}s`,
                         ...rStyle,
                       }}>
                         {/* Rank */}
-                        <div style={{ display: "flex", alignItems: "center" }}>
+                        <div style={{ display: "flex", alignItems: "center" }} className="medal-anim">
                           <RankMedal rank={row.rank} />
                         </div>
 
@@ -340,7 +390,7 @@ export default function Leaderboard() {
                         <div onClick={copyAddr} title="Click to copy address" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
                           <div style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: isMe ? "#00FF88" : row.rank <= 3 ? scoreColor(row.rank) : "rgba(123,47,255,0.5)", boxShadow: isMe ? "0 0 6px #00FF88" : row.rank <= 3 ? `0 0 6px ${scoreColor(row.rank)}` : "none" }} />
                           <div>
-                            <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 10, color: isMe ? "#c4a0ff" : row.rank <= 3 ? scoreColor(row.rank) : "#9977cc", letterSpacing: "0.3px" }}>
+                            <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 10, color: isMe ? "#d4b8ff" : row.rank <= 3 ? scoreColor(row.rank) : "#b79aeb", letterSpacing: "0.3px", fontWeight: row.rank <= 3 ? 700 : 500 }}>
                               {shortAddr(row.player)}
                             </div>
                             {isMe && <div style={{ fontSize: 9, color: "#00FF88", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, marginTop: 1 }}>← You</div>}
@@ -352,14 +402,27 @@ export default function Leaderboard() {
                         </div>
 
                         {/* Game */}
-                        <div style={{ fontSize: 11, color: "#8866bb", fontFamily: "'Rajdhani',sans-serif", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>
-                          {activeTab === "global" ? (row.bestGame || "—") : (row.gameName || `Game #${row.gameId}`)}
+                        <div style={{ textAlign: "center", overflow: "hidden" }}>
+                          <span style={{
+                            fontSize: 11, color: "#b79aeb", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            display: "inline-block", maxWidth: "100%",
+                            padding: "3px 10px", borderRadius: 20,
+                            background: "rgba(123,47,255,0.1)", border: "1px solid rgba(123,47,255,0.15)",
+                          }}>
+                            {activeTab === "global" ? (row.bestGame || "—") : (row.gameName || `Game #${row.gameId}`)}
+                          </span>
                         </div>
 
                         {/* Score */}
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
                           <ArcadeCoin size={14} />
-                          <span style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 13, color: scoreColor(row.rank) }}>
+                          <span style={{
+                            fontFamily: "'Orbitron',sans-serif", fontWeight: 800, fontSize: 14,
+                            color: row.rank <= 3 ? scoreColor(row.rank) : "#d9c4ff",
+                            textShadow: row.rank <= 3 ? `0 0 12px ${scoreColor(row.rank)}88` : "none",
+                            letterSpacing: "0.3px",
+                          }}>
                             {fmtScore(activeTab === "global" ? row.bestScore : row.score)}
                           </span>
                         </div>
@@ -386,14 +449,14 @@ export default function Leaderboard() {
               {isConnected ? (
                 myStats ? (
                   <div>
-                    <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 44, fontWeight: 700, color: "#a67fff", letterSpacing: "-2px", lineHeight: 1, marginBottom: 4 }}>
+                    <div className="lb-title-grad" style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 44, fontWeight: 800, letterSpacing: "-2px", lineHeight: 1, marginBottom: 4 }}>
                       {myRank > 0 ? `#${myRank}` : "—"}
                     </div>
-                    <div style={{ fontSize: 10, color: "#5533aa", marginBottom: 16, fontFamily: "'Rajdhani',sans-serif" }}>Global ranking</div>
+                    <div style={{ fontSize: 10, color: "#7a5fc0", marginBottom: 16, fontFamily: "'Rajdhani',sans-serif", fontWeight: 600, letterSpacing: "0.5px", textTransform: "uppercase" }}>Global ranking</div>
                     {[["Best Score", fmtScore(myStats.bestScore)], ["Total Score", fmtScore(myStats.totalScore)], ["Games Played", myStats.gamesPlayed]].map(([k, v]) => (
                       <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid rgba(123,47,255,0.06)" }}>
-                        <span style={{ color: "#7755aa", fontFamily: "'Rajdhani',sans-serif" }}>{k}</span>
-                        <span style={{ color: "#a67fff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>{v}</span>
+                        <span style={{ color: "#8b6fd4", fontFamily: "'Rajdhani',sans-serif", fontWeight: 600 }}>{k}</span>
+                        <span style={{ color: "#d4b8ff", fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 12 }}>{v}</span>
                       </div>
                     ))}
                   </div>

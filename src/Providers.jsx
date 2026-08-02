@@ -30,6 +30,24 @@ if (wagmiNetworks.length === 0) {
 const projectId = import.meta.env.VITE_REOWN_PROJECT_ID;
 const queryClient = new QueryClient();
 
+// ── Chain icons for the AppKit "Choose Network" modal ──────────────────
+// Bina iske AppKit har custom chain pe generic globe dikhata hai. Har chain
+// ka logo chains.js se lete hain aur ABSOLUTE URL banate hain (AppKit ka
+// modal apne context me render hota hai — relative "/chains/mst.svg" kaam
+// nahi karta, isliye origin prefix karte hain).
+const ORIGIN =
+  (typeof window !== "undefined" && window.location?.origin) ||
+  "https://playarcadex.in";
+
+const chainImages = CHAIN_LIST.reduce((acc, c) => {
+  if (c.chainId && c.logo) {
+    acc[c.chainId] = c.logo.startsWith("http")
+      ? c.logo
+      : `${ORIGIN}${c.logo.startsWith("/") ? "" : "/"}${c.logo}`;
+  }
+  return acc;
+}, {});
+
 // Read selected chain from localStorage
 const savedChainKey = (() => {
   try { return window.localStorage.getItem("arcadex_selected_chain"); } catch { return null; }
@@ -64,6 +82,7 @@ createAppKit({
   networks: appKitNetworks, // selected chain PEHLE — yahi fix hai
   projectId,
   defaultNetwork,
+  chainImages, // ← globe ki jagah har chain ka apna icon (MST/BOTChain/Somnia)
   metadata: {
     name: "ArcadeX",
     description: "Play. Earn. Build — On Any Chain.",

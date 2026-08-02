@@ -236,10 +236,19 @@ export default function GamePlay() {
   }, [game?.id, address, gameLoading]);
 
   // ── ArcadeX SDK: postMessage helper (GamePlay -> game iframe) ──
-  // SH0005: targetOrigin = game's actual origin, not wildcard "*"
-  const getGameOrigin = () => game?.iframeUrl ? new URL(game.iframeUrl).origin : "*";
+  // SH0005 + SH0016: targetOrigin = game's actual origin, never "*".
+  // Agar origin resolve na ho toh send skip karo (fail-closed) — kabhi "*"
+  // pe sensitive data (player info) leak nahi hone dena.
+  const getGameOrigin = () => {
+    try {
+      if (game?.iframeUrl) return new URL(game.iframeUrl, window.location.origin).origin;
+    } catch { /* fallthrough */ }
+    return null;
+  };
   const sendToGame = (type, payload) => {
-    iframeRef.current?.contentWindow?.postMessage({ type, _platform: true, ...payload }, getGameOrigin());
+    const origin = getGameOrigin();
+    if (!origin) return; // origin pata nahi → mat bhejo
+    iframeRef.current?.contentWindow?.postMessage({ type, _platform: true, ...payload }, origin);
   };
 
   // ── Contract error → professional message mapper ──────────────────────────
@@ -550,23 +559,36 @@ export default function GamePlay() {
 
   // SDK messages
   useEffect(() => {
-    // SH0005: origin allowlist — only accept postMessages from the game iframe.
-    // game.iframeUrl se origin extract karte hain (protocol + host, no path).
-    // Agar origin match nahi kiya toh silently drop karo.
-    const allowedOrigin = game?.iframeUrl ? new URL(game.iframeUrl).origin : null;
+    // SH0005 + SH0016: origin allowlist — FAIL-CLOSED.
+    // game.iframeUrl se origin nikaalte hain. Agar resolve na ho (empty,
+    // relative URL, malformed) toh allowedOrigin null rahega — us case mein
+    // SAARE messages reject karo (safe default), warna koi bhi origin se
+    // forged message process ho sakta hai.
+    let allowedOrigin = null;
+    try {
+      if (game?.iframeUrl) allowedOrigin = new URL(game.iframeUrl, window.location.origin).origin;
+    } catch { allowedOrigin = null; }
 
     const handleMessage = (event) => {
-      if (allowedOrigin && event.origin !== allowedOrigin) return;
+      // FAIL-CLOSED: origin resolve nahi hua → sab reject
+      if (!allowedOrigin) return;
+      // Origin match nahi → reject
+      if (event.origin !== allowedOrigin) return;
       if (!event.data?._sdk && !event.data?.type) return;
       if (event.data?.type === "SCORE_UPDATE") {
+        const sc = Number(event.data.score);
+        if (!Number.isFinite(sc) || sc < 0) return; // garbage score ignore
         if (submitted) { setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false; }
-        setScore(event.data.score);
+        setScore(sc);
       }
       if (event.data?.type === "GAME_OVER") {
-        setScore(event.data.score); setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false;
-        submitScore(event.data.score);
+        const sc = Number(event.data.score);
+        if (!Number.isFinite(sc) || sc < 0) return; // garbage score ignore
+        setScore(sc); setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false;
+        submitScore(sc);
       }
       if (event.data?.type === "GET_PLAYER_INFO") {
+        // allowedOrigin guaranteed truthy yahan (upar check kiya) — "*" fallback nahi
         iframeRef.current?.contentWindow?.postMessage({
           type: "PLAYER_INFO",
           _platform: true,
@@ -574,7 +596,7 @@ export default function GamePlay() {
             address: address || "",
             balance: Number(balance)
           }
-        }, allowedOrigin || "*");
+        }, allowedOrigin);
       }
       if (event.data?.type === "PURCHASE_SKIN") handlePurchaseSkin(event.data);
       if (event.data?.type === "PURCHASE_POWERUP") handlePurchasePowerUp(event.data);

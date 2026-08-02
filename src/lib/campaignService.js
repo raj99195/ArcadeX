@@ -42,6 +42,7 @@ export async function getTasks(walletAddress) {
 export async function verifySocialTask(taskId, walletAddress, username, field) {
   return apiFetch("/api/campaign?action=verify-social", {
     method: "POST",
+    headers: authHeaders(),
     body: JSON.stringify({ wallet: walletAddress, taskId, username, field }),
   });
 }
@@ -50,6 +51,7 @@ export async function verifySocialTask(taskId, walletAddress, username, field) {
 export async function submitTransaction(walletAddress, txHash) {
   return apiFetch("/api/campaign?action=submit-transaction", {
     method: "POST",
+    headers: authHeaders(),
     body: JSON.stringify({ wallet: walletAddress, txHash }),
   });
 }
@@ -62,6 +64,7 @@ export async function submitTransaction(walletAddress, txHash) {
 export async function verifyTransaction(walletAddress, txHash) {
   return apiFetch("/api/campaign?action=verify-transaction", {
     method: "POST",
+    headers: authHeaders(),
     body: JSON.stringify({ wallet: walletAddress, txHash }),
   });
 }
@@ -69,7 +72,7 @@ export async function verifyTransaction(walletAddress, txHash) {
 /** GET /api/campaign?action=dashboard&wallet=... — the connected user's full campaign progress */
 export async function getDashboard(walletAddress) {
   if (!walletAddress) return null;
-  return apiFetch(`/api/campaign?action=dashboard&wallet=${walletAddress}`);
+  return apiFetch(`/api/campaign?action=dashboard&wallet=${walletAddress}`, { headers: authHeaders() });
 }
 
 /** GET /api/campaign?action=leaderboard — ranked participants */

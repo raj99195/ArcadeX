@@ -581,8 +581,14 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── POST admin-update-reward ──
+  // ── POST admin-update-reward (admin-only) ──
   if (req.method === "POST" && action === "admin-update-reward") {
+    // Admin gate — sirf VITE_ADMIN_ADDRESS wala wallet reward rate badal sake.
+    // Warna koi bhi logged-in user kisi bhi game ka reward inflate kar deta.
+    const adminAddr = process.env.VITE_ADMIN_ADDRESS?.toLowerCase();
+    if (!adminAddr || user.address?.toLowerCase() !== adminAddr)
+      return res.status(403).json({ error: "Admin only" });
+
     const { gameId, rewardRate, rewardRateNative } = req.body;
     if (!gameId) return res.status(400).json({ error: "gameId required" });
     try {

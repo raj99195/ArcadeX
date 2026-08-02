@@ -83,7 +83,7 @@ export default async function handler(req, res) {
   // ── GET /api/support?action=list — list all tickets (admin only) ──
   if (req.method === "GET" && action === "list") {
     const user = verifyToken(req);
-    if (!user || user.address !== ADMIN_ADDR) return res.status(403).json({ error: "Admin only" });
+    if (!user || user.address?.toLowerCase() !== ADMIN_ADDR) return res.status(403).json({ error: "Admin only" });
     try {
       const snap = await db.collection("supportTickets").orderBy("createdAt", "desc").get();
       const tickets = snap.docs.map(d => ({
@@ -100,7 +100,7 @@ export default async function handler(req, res) {
   // ── PATCH /api/support?action=reply — admin reply ──
   if (req.method === "PATCH" && action === "reply") {
     const user = verifyToken(req);
-    if (!user || user.address !== ADMIN_ADDR) return res.status(403).json({ error: "Admin only" });
+    if (!user || user.address?.toLowerCase() !== ADMIN_ADDR) return res.status(403).json({ error: "Admin only" });
     try {
       const { ticketId, replyText } = req.body;
       if (!ticketId || !replyText?.trim()) {
@@ -123,7 +123,7 @@ export default async function handler(req, res) {
   // ── PATCH /api/support?action=resolve — mark resolved ──
   if (req.method === "PATCH" && action === "resolve") {
     const user = verifyToken(req);
-    if (!user || user.address !== ADMIN_ADDR) return res.status(403).json({ error: "Admin only" });
+    if (!user || user.address?.toLowerCase() !== ADMIN_ADDR) return res.status(403).json({ error: "Admin only" });
     try {
       const { ticketId } = req.body;
       if (!ticketId) return res.status(400).json({ error: "ticketId required" });
