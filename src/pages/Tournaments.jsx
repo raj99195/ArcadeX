@@ -129,6 +129,10 @@ function LeaderboardPanel({ tournament, onClose, navigate, publicClient, tournam
   const pool     = players.length * entryFee * 0.95;
   const prizes   = [pool * 0.6, pool * 0.25, pool * 0.15];
   const podiumColors = ["#FFB700", "#C0C0C0", "#CD7F32"];
+  // Safe address helper — undefined/null pe crash na ho
+  const shortAddr = (a) => (typeof a === "string" && a.length >= 6) ? a.slice(0, 10) + "..." + a.slice(-4) : "—";
+  const addrInitials = (a) => (typeof a === "string" && a.length >= 4) ? a.slice(2, 4).toUpperCase() : "??";
+  const addrShort7 = (a) => (typeof a === "string" && a.length >= 7) ? a.slice(0, 7) + "..." : "—";
   const podiumBg     = ["rgba(255,183,0,0.1)", "rgba(192,192,192,0.08)", "rgba(205,127,50,0.08)"];
   const podiumBorder = ["rgba(255,183,0,0.3)", "rgba(192,192,192,0.25)", "rgba(205,127,50,0.25)"];
   const medals = ["🥇", "🥈", "🥉"];
@@ -207,40 +211,40 @@ function LeaderboardPanel({ tournament, onClose, navigate, publicClient, tournam
                 {players.length >= 2 && (
                   <div style={{ background: podiumBg[1], border: `1px solid ${podiumBorder[1]}`, borderRadius: 12, padding: "14px 10px", textAlign: "center", order: 0 }}>
                     <div style={{ fontSize: 22, marginBottom: 6 }}>🥈</div>
-                    <div style={{ width: 38, height: 38, borderRadius: "50%", background: `linear-gradient(135deg,${podiumColors[1]},${podiumColors[1]}88)`, margin: "0 auto 6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#08070f", border: `2px solid ${podiumColors[1]}`, fontFamily: "'Rajdhani',sans-serif" }}>{players[1].slice(2,4).toUpperCase()}</div>
-                    <div style={{ fontFamily: "monospace", fontSize: 9, color: podiumColors[1], marginBottom: 3 }}>{players[1].slice(0,7)}...</div>
-                    <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: podiumColors[1] }}>{scores[1].toLocaleString()}</div>
+                    <div style={{ width: 38, height: 38, borderRadius: "50%", background: `linear-gradient(135deg,${podiumColors[1]},${podiumColors[1]}88)`, margin: "0 auto 6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#08070f", border: `2px solid ${podiumColors[1]}`, fontFamily: "'Rajdhani',sans-serif" }}>{addrInitials(players[1])}</div>
+                    <div style={{ fontFamily: "monospace", fontSize: 9, color: podiumColors[1], marginBottom: 3 }}>{addrShort7(players[1])}</div>
+                    <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: podiumColors[1] }}>{(scores[1]||0).toLocaleString()}</div>
                     {prizes[1] > 0 && <div style={{ fontSize: 9, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, marginTop: 3 }}>+{prizes[1].toFixed(0)}</div>}
                   </div>
                 )}
                 <div style={{ background: podiumBg[0], border: `2px solid ${podiumBorder[0]}`, borderRadius: 12, padding: "18px 10px", textAlign: "center", order: players.length >= 2 ? 1 : 0, boxShadow: "0 0 24px rgba(255,183,0,0.2)" }}>
                   <div style={{ fontSize: 26, marginBottom: 6 }}>🥇</div>
-                  <div style={{ width: 46, height: 46, borderRadius: "50%", background: "linear-gradient(135deg,#FFB700,#ff8800)", margin: "0 auto 6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#08070f", border: `3px solid ${podiumColors[0]}`, boxShadow: "0 0 16px rgba(255,183,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>{players[0].slice(2,4).toUpperCase()}</div>
-                  <div style={{ fontFamily: "monospace", fontSize: 9, color: podiumColors[0], marginBottom: 3 }}>{players[0].slice(0,7)}...</div>
-                  <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 20, color: podiumColors[0] }}>{scores[0].toLocaleString()}</div>
+                  <div style={{ width: 46, height: 46, borderRadius: "50%", background: "linear-gradient(135deg,#FFB700,#ff8800)", margin: "0 auto 6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "#08070f", border: `3px solid ${podiumColors[0]}`, boxShadow: "0 0 16px rgba(255,183,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>{addrInitials(players[0])}</div>
+                  <div style={{ fontFamily: "monospace", fontSize: 9, color: podiumColors[0], marginBottom: 3 }}>{addrShort7(players[0])}</div>
+                  <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 20, color: podiumColors[0] }}>{(scores[0]||0).toLocaleString()}</div>
                   {prizes[0] > 0 && <div style={{ fontSize: 10, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, marginTop: 3 }}>+{prizes[0].toFixed(0)}</div>}
                 </div>
                 {players.length >= 3 && (
                   <div style={{ background: podiumBg[2], border: `1px solid ${podiumBorder[2]}`, borderRadius: 12, padding: "14px 10px", textAlign: "center", order: 2 }}>
                     <div style={{ fontSize: 22, marginBottom: 6 }}>🥉</div>
-                    <div style={{ width: 38, height: 38, borderRadius: "50%", background: `linear-gradient(135deg,${podiumColors[2]},${podiumColors[2]}88)`, margin: "0 auto 6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#fff", border: `2px solid ${podiumColors[2]}`, fontFamily: "'Rajdhani',sans-serif" }}>{players[2].slice(2,4).toUpperCase()}</div>
-                    <div style={{ fontFamily: "monospace", fontSize: 9, color: podiumColors[2], marginBottom: 3 }}>{players[2].slice(0,7)}...</div>
-                    <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: podiumColors[2] }}>{scores[2].toLocaleString()}</div>
+                    <div style={{ width: 38, height: 38, borderRadius: "50%", background: `linear-gradient(135deg,${podiumColors[2]},${podiumColors[2]}88)`, margin: "0 auto 6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#fff", border: `2px solid ${podiumColors[2]}`, fontFamily: "'Rajdhani',sans-serif" }}>{addrInitials(players[2])}</div>
+                    <div style={{ fontFamily: "monospace", fontSize: 9, color: podiumColors[2], marginBottom: 3 }}>{addrShort7(players[2])}</div>
+                    <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: podiumColors[2] }}>{(scores[2]||0).toLocaleString()}</div>
                     {prizes[2] > 0 && <div style={{ fontSize: 9, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, marginTop: 3 }}>+{prizes[2].toFixed(0)}</div>}
                   </div>
                 )}
               </div>
               {/* All players list */}
               <div style={{ fontSize: 9, color: "#5533aa", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 8 }}>All Players</div>
-              {players.map((addr, i) => (
+              {players.filter(Boolean).map((addr, i) => (
                 <div key={addr} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: i < 3 ? podiumBg[i] : "rgba(123,47,255,0.04)", borderRadius: 9, border: `1px solid ${i < 3 ? podiumBorder[i] : "rgba(123,47,255,0.08)"}`, marginBottom: 5 }}>
                   <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 12, color: i < 3 ? podiumColors[i] : "#5533aa", fontWeight: 700, minWidth: 26, textAlign: "center" }}>{i < 3 ? medals[i] : `#${i+1}`}</div>
-                  <div style={{ width: 32, height: 32, borderRadius: "50%", background: i < 3 ? `linear-gradient(135deg,${podiumColors[i]},${podiumColors[i]}88)` : "rgba(123,47,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: i < 3 ? "#08070f" : "#a67fff", fontFamily: "'Rajdhani',sans-serif", flexShrink: 0, border: `1px solid ${i < 3 ? podiumColors[i] : "rgba(123,47,255,0.3)"}` }}>{addr.slice(2,4).toUpperCase()}</div>
+                  <div style={{ width: 32, height: 32, borderRadius: "50%", background: i < 3 ? `linear-gradient(135deg,${podiumColors[i]},${podiumColors[i]}88)` : "rgba(123,47,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: i < 3 ? "#08070f" : "#a67fff", fontFamily: "'Rajdhani',sans-serif", flexShrink: 0, border: `1px solid ${i < 3 ? podiumColors[i] : "rgba(123,47,255,0.3)"}` }}>{addrInitials(addr)}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontFamily: "monospace", fontSize: 11, color: i < 3 ? podiumColors[i] : "#9977cc", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{addr.slice(0,10)}...{addr.slice(-4)}</div>
+                    <div style={{ fontFamily: "monospace", fontSize: 11, color: i < 3 ? podiumColors[i] : "#9977cc", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortAddr(addr)}</div>
                     {i < 3 && prizes[i] > 0 && <div style={{ fontSize: 9, color: "#FFB700", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>🏆 +{prizes[i].toFixed(0)} {rewardToken || 'ARCADE'}</div>}
                   </div>
-                  <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: i < 3 ? podiumColors[i] : "#a67fff" }}>{scores[i].toLocaleString()}</div>
+                  <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: i < 3 ? podiumColors[i] : "#a67fff" }}>{(scores[i]||0).toLocaleString()}</div>
                 </div>
               ))}
             </>

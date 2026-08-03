@@ -186,13 +186,25 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── POST claim-gas (PUBLIC — no JWT, new users won't have token) ──────────
+  // ── POST claim-gas (SH0017: JWT required — ownership enforced) ────────────
+  // Pehle koi bhi wallet address bhej ke claim kar sakta tha (ownership check
+  // nahi tha) — attacker unlimited fresh wallets bana ke faucet drain kar sakta
+  // tha. Ab JWT chahiye aur claim JWT ke address ke liye hi hota hai. JWT sirf
+  // wallet-signature ke baad milta hai, toh attacker ko har fake wallet se
+  // actually sign karna padega — mass draining economically impractical.
   if (req.method === "POST" && action === "claim-gas") {
-    const { address: claimAddress } = req.body;
-    if (!claimAddress) return res.status(400).json({ error: "address required" });
+    const gasUser = verifyToken(req);
+    if (!gasUser) return res.status(401).json({ error: "Unauthorized — connect wallet first" });
+
+    // claimAddress body se nahi — JWT se (koi doosre ka wallet claim nahi kar sakta)
+    const claimAddress = gasUser.address;
+
     const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
     if (!rateLimit(`faucet:${ip}`, 3))
       return res.status(429).json({ error: "Too many requests" });
+    // Extra: per-address rate limit bhi (JWT ke address pe)
+    if (!rateLimit(`faucet-addr:${claimAddress.toLowerCase()}`, 2))
+      return res.status(429).json({ error: "Too many requests for this wallet" });
     try {
       const rpcUrl     = process.env.MST_RPC_URL;
       const pk         = process.env.PRIVATE_KEY;

@@ -4,6 +4,8 @@ pragma solidity ^0.8.28;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
  * @title Tournament
@@ -18,7 +20,17 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *   → entry fee paid in MSTC (msg.value), prizes paid in MSTC
  */
 contract Tournament is AccessControl, ReentrancyGuard {
+    using ECDSA for bytes32;
+    using MessageHashUtils for bytes32;
+
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    // ── SH0018: Score signing (same pattern as Platform.sol) ──
+    // submitTournamentScore ab trusted scoreSigner ki signature maangta hai,
+    // taaki koi bhi custom score submit na kar sake. Agar scoreSigner unset
+    // (address(0)) hai toh backward-compatible: signature ignore (purana flow).
+    address public scoreSigner;
+    mapping(bytes32 => bool) public usedTournamentProofs;
 
     // ── Token config ──────────────────────────────────────────────────────────
     IERC20  public rewardToken;
@@ -160,18 +172,42 @@ contract Tournament is AccessControl, ReentrancyGuard {
     }
 
     // ── Submit score ──────────────────────────────────────────────────────────
-    function submitTournamentScore(uint256 tournamentId, uint256 score) external {
+    function submitTournamentScore(
+        uint256 tournamentId,
+        uint256 score,
+        uint256 nonce,
+        bytes calldata signature
+    ) external {
         TournamentInfo storage t = tournaments[tournamentId];
         require(t.id != 0,                                                                       "Not found");
         require(t.status != TournamentStatus.Ended && t.status != TournamentStatus.Cancelled,   "Finished");
         require(block.timestamp >= t.startTime && block.timestamp <= t.endTime,                 "Outside time");
         require(playerScores[tournamentId][msg.sender].submitted,                               "Not joined");
 
+        // ── SH0018: score proof verification ──
+        // Backend (scoreSigner) exact tuple ko sign karta hai. Bina valid
+        // signature ke koi custom score submit nahi kar sakta.
+        // Message = keccak256(player, tournamentId, score, nonce, address(this), chainid)
+        if (scoreSigner != address(0)) {
+            bytes32 messageHash = keccak256(abi.encodePacked(
+                msg.sender, tournamentId, score, nonce, address(this), block.chainid
+            ));
+            bytes32 ethSignedHash = messageHash.toEthSignedMessageHash();
+            require(!usedTournamentProofs[ethSignedHash], "Score proof already used");
+            require(ethSignedHash.recover(signature) == scoreSigner, "Invalid score proof");
+            usedTournamentProofs[ethSignedHash] = true;
+        }
+
         if (score > playerScores[tournamentId][msg.sender].score) {
             playerScores[tournamentId][msg.sender].score = score;
         }
 
         emit ScoreSubmitted(tournamentId, msg.sender, score);
+    }
+
+    // ── SH0018: admin sets the trusted score signer (backend wallet) ──
+    function setScoreSigner(address _signer) external onlyRole(ADMIN_ROLE) {
+        scoreSigner = _signer;
     }
 
     // ── End + distribute ──────────────────────────────────────────────────────

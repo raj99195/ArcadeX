@@ -115,7 +115,7 @@ export default function CampaignAdmin() {
                   <td style={{ padding: "12px 16px", fontFamily: P.raj, fontSize: 12, color: P.textDim }}>{u.telegram}</td>
                   <td style={{ padding: "12px 16px", fontFamily: P.raj, fontSize: 12, color: P.textDim }}>{u.discord}</td>
                   <td style={{ padding: "12px 16px", fontFamily: P.raj, fontSize: 12, color: P.textDim }}>{u.gamePlayed}</td>
-                  <td style={{ padding: "12px 16px", fontFamily: "monospace", fontSize: 11, color: P.textDim }}>{u.txHash.slice(0, 10)}...</td>
+                  <td style={{ padding: "12px 16px", fontFamily: "monospace", fontSize: 11, color: P.textDim }}>{u.txHash ? u.txHash.slice(0, 10) + "..." : "—"}</td>
                   <td style={{ padding: "12px 16px" }}><StatusBadge status={u.verificationStatus} size="sm" /></td>
                   <td style={{ padding: "12px 16px" }}><StatusBadge status={u.rewardStatus} size="sm" /></td>
                   <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>

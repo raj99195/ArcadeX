@@ -53,9 +53,17 @@ export default function Navbar() {
     if (!address || faucetLoading) return;
     setFaucetLoading(true);
     try {
+      // SH0017: JWT required — backend claim JWT ke address ke liye karta hai,
+      // taaki koi doosre ka wallet claim na kar sake. Bina JWT ke 401.
+      const token = localStorage.getItem("arcadex_jwt");
+      if (!token) {
+        console.warn("Gas claim needs wallet auth — connect wallet first.");
+        setFaucetLoading(false);
+        return;
+      }
       const res = await fetch("/api/games?action=claim-gas", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ address }),
       });
       const data = await res.json();
