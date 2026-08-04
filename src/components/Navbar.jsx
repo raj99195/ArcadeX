@@ -6,6 +6,7 @@ import { injected } from "wagmi/connectors";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useChain } from "../context/ChainContext";
+import { useFirebaseAuth } from "../hooks/useFirebaseAuth";
 
 const LOGO_SIZE = 28;
 
@@ -32,7 +33,9 @@ export default function Navbar() {
   const [gameMap, setGameMap] = useState({}); // gameId → { thumbnail, name }
   const [playerShareForEarnings, setPlayerShareForEarnings] = useState(80); // on-chain playerSharePercent
   const [faucetClaimed, setFaucetClaimed] = useState(false);
-  const [faucetLoading, setFaucetLoading] = useState(false);
+  const [faucetPanel, setFaucetPanel] = useState(false);      // panel open?
+  const [faucetStage, setFaucetStage] = useState("idle");      // idle | redirecting | claiming | success | error
+  const [faucetError, setFaucetError] = useState("");
 
   const ddRef = useRef(null);
   const menuRef = useRef(null);
@@ -49,35 +52,58 @@ export default function Navbar() {
     })();
   }, [isConnected, address, chainKey]);
 
+  const { user: xUser, loginWithTwitter } = useFirebaseAuth();
+
+  // Panel-driven claim flow with staged animations
   const handleClaimGas = async () => {
-    if (!address || faucetLoading) return;
-    setFaucetLoading(true);
+    if (!address || faucetStage === "claiming" || faucetStage === "redirecting") return;
+    setFaucetError("");
+
+    const token = localStorage.getItem("arcadex_jwt");
+    if (!token) {
+      setFaucetStage("error");
+      setFaucetError("Connect your wallet first.");
+      return;
+    }
+
     try {
-      // SH0017: JWT required — backend claim JWT ke address ke liye karta hai,
-      // taaki koi doosre ka wallet claim na kar sake. Bina JWT ke 401.
-      const token = localStorage.getItem("arcadex_jwt");
-      if (!token) {
-        console.warn("Gas claim needs wallet auth — connect wallet first.");
-        setFaucetLoading(false);
-        return;
+      // ── Stage 1: X login (if not already) ──
+      let fbUser = xUser;
+      if (!fbUser) {
+        setFaucetStage("redirecting");            // "Redirecting to X…" animation
+        await new Promise(r => setTimeout(r, 600)); // let animation breathe
+        try {
+          fbUser = await loginWithTwitter();       // X popup
+        } catch {
+          setFaucetStage("idle");                  // user cancelled — back to panel
+          setFaucetError("X login cancelled. Please try again.");
+          return;
+        }
       }
+      const firebaseToken = await fbUser.getIdToken();
+
+      // ── Stage 2: claiming ──
+      setFaucetStage("claiming");                  // "Claiming 0.1 MSTC…" animation
       const res = await fetch("/api/games?action=claim-gas", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ address }),
+        body: JSON.stringify({ address, firebaseToken }),
       });
       const data = await res.json();
+
       if (data.already || data.success) {
+        setFaucetStage("success");
         setFaucetClaimed(true);
-        if (data.success) {
-          // Small toast — optional
-          console.log("✅ 0.1 MSTC claimed:", data.txHash);
-        }
+        if (data.success) console.log("✅ 0.1 MSTC claimed:", data.txHash);
+        setTimeout(() => setFaucetPanel(false), 2200);  // auto-close after success
+      } else {
+        setFaucetStage("error");
+        setFaucetError(data.error || "Claim failed. Try again.");
       }
     } catch (e) {
       console.error("Faucet claim failed:", e);
-    } finally {
-      setFaucetLoading(false);
+      setFaucetStage("error");
+      setFaucetError("Something went wrong. Try again.");
     }
   };
   // 1. Agar MetaMask available hai → directly wagmi injected connector use karo
@@ -396,32 +422,25 @@ export default function Navbar() {
         {isConnected && chainKey === "mst" &&
          !faucetClaimed && Number(balance) === 0 && (
           <button
-            onClick={handleClaimGas}
-            disabled={faucetLoading}
+            onClick={() => { setFaucetPanel(true); setFaucetStage("idle"); setFaucetError(""); }}
             title="Claim free MSTC for gas fees"
             style={{
               padding: isMobile ? "5px 10px" : "6px 14px",
-              background: faucetLoading
-                ? "rgba(255,47,94,0.1)"
-                : "linear-gradient(135deg,#ff2f5e,#ff6b35)",
+              background: "linear-gradient(135deg,#ff2f5e,#ff6b35)",
               border: "none",
               borderRadius: 20,
               color: "#fff",
               fontFamily: "'Rajdhani',sans-serif",
               fontWeight: 700,
               fontSize: isMobile ? 10 : 12,
-              cursor: faucetLoading ? "not-allowed" : "pointer",
+              cursor: "pointer",
               display: "flex", alignItems: "center", gap: 5,
-              boxShadow: faucetLoading ? "none" : "0 0 18px rgba(255,47,94,0.35)",
-              opacity: faucetLoading ? 0.7 : 1,
+              boxShadow: "0 0 18px rgba(255,47,94,0.35)",
               transition: "all 0.2s",
               whiteSpace: "nowrap",
             }}
           >
-            {faucetLoading
-              ? <><span style={{ width: 10, height: 10, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", animation: "chainSpin 0.7s linear infinite", display: "inline-block" }} /> Claiming...</>
-              : <>⛽ {isMobile ? "0.1 MSTC" : "Claim 0.1 MSTC"}</>
-            }
+            ⛽ {isMobile ? "0.1 MSTC" : "Claim 0.1 MSTC"}
           </button>
         )}
 
@@ -516,6 +535,135 @@ export default function Navbar() {
         )}
       </div>
     </nav>
+
+      {/* ── ⛽ GAS FAUCET PANEL — X login + staged animations ────────── */}
+      {faucetPanel && (
+        <>
+          <style>{`
+            @keyframes fpModalIn    { from{opacity:0;transform:scale(0.92) translateY(10px)} to{opacity:1;transform:scale(1) translateY(0)} }
+            @keyframes fpBgIn       { from{opacity:0} to{opacity:1} }
+            @keyframes fpArrowSlide { 0%{transform:translateX(-5px);opacity:0.3} 50%{transform:translateX(5px);opacity:1} 100%{transform:translateX(-5px);opacity:0.3} }
+            @keyframes fpPulseRing  { 0%{box-shadow:0 0 0 0 rgba(29,161,242,0.5)} 70%{box-shadow:0 0 0 16px rgba(29,161,242,0)} 100%{box-shadow:0 0 0 0 rgba(29,161,242,0)} }
+            @keyframes fpDropIn     { 0%{transform:translateY(-24px) scale(0.4);opacity:0} 60%{transform:translateY(3px) scale(1.15)} 100%{transform:translateY(0) scale(1);opacity:1} }
+            @keyframes fpSpin       { from{transform:rotate(0)} to{transform:rotate(360deg)} }
+            @keyframes fpGradFlow   { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
+            @keyframes fpFloat      { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+            .fp-x-btn { transition: transform 0.15s, box-shadow 0.15s, filter 0.15s; }
+            .fp-x-btn:hover { transform: translateY(-2px); filter: brightness(1.1); box-shadow: 0 6px 22px rgba(29,161,242,0.4); }
+            .fp-grad-title {
+              background: linear-gradient(90deg,#ff2f5e,#ff6b35,#ffb800,#ff2f5e);
+              background-size: 300% auto;
+              -webkit-background-clip: text; background-clip: text;
+              -webkit-text-fill-color: transparent;
+              animation: fpGradFlow 5s linear infinite;
+            }
+          `}</style>
+
+          {/* backdrop */}
+          <div
+            onClick={() => { if (faucetStage === "idle" || faucetStage === "error" || faucetStage === "success") setFaucetPanel(false); }}
+            style={{ position: "fixed", inset: 0, zIndex: 3000, background: "rgba(4,3,10,0.82)", backdropFilter: "blur(10px)", animation: "fpBgIn 0.25s ease" }}
+          />
+
+          {/* panel */}
+          <div style={{
+            position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+            zIndex: 3001, width: "min(400px, 92vw)",
+            background: "linear-gradient(160deg,#141021,#0d0a17)",
+            border: "1px solid rgba(255,47,94,0.25)", borderRadius: 22,
+            overflow: "hidden", animation: "fpModalIn 0.35s cubic-bezier(0.34,1.56,0.64,1)",
+            boxShadow: "0 20px 70px rgba(0,0,0,0.6), 0 0 40px rgba(255,47,94,0.12)",
+            fontFamily: "'Rajdhani',sans-serif",
+          }}>
+            {/* top gradient bar */}
+            <div style={{ height: 3, background: "linear-gradient(90deg,#ff2f5e,#ff6b35,#ffb800)" }} />
+
+            {/* close */}
+            {(faucetStage === "idle" || faucetStage === "error" || faucetStage === "success") && (
+              <button onClick={() => setFaucetPanel(false)} style={{ position: "absolute", top: 14, right: 14, width: 30, height: 30, borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2 }}>✕</button>
+            )}
+
+            <div style={{ padding: "34px 30px 30px", textAlign: "center" }}>
+
+              {/* ═══ STAGE: IDLE ═══ */}
+              {faucetStage === "idle" && (
+                <>
+                  <div style={{ width: 64, height: 64, borderRadius: "50%", background: "linear-gradient(135deg,#ff2f5e,#ff6b35)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, margin: "0 auto 18px", boxShadow: "0 0 26px rgba(255,47,94,0.4)", animation: "fpFloat 3s ease-in-out infinite" }}>⛽</div>
+                  <div className="fp-grad-title" style={{ fontSize: 24, fontWeight: 800, marginBottom: 8 }}>Claim Free Gas</div>
+                  <div style={{ fontSize: 13, color: "#b8b0d0", lineHeight: 1.6, marginBottom: 24 }}>
+                    Get <b style={{ color: "#ff8f5e" }}>0.1 MSTC</b> to cover gas fees.<br />
+                    Login with X to verify — one claim per account.
+                  </div>
+
+                  {faucetError && (
+                    <div style={{ marginBottom: 16, padding: "10px 14px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.25)", borderRadius: 10, fontSize: 12, color: "#ff8080" }}>{faucetError}</div>
+                  )}
+
+                  <button className="fp-x-btn" onClick={handleClaimGas} style={{
+                    width: "100%", padding: "14px 20px",
+                    background: "#1da1f2", border: "none", borderRadius: 13,
+                    color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 11,
+                  }}>
+                    <div style={{ width: 26, height: 26, borderRadius: 7, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1da1f2", fontSize: 15, fontWeight: 900 }}>𝕏</div>
+                    Login with X to Claim
+                  </button>
+
+                  <div style={{ marginTop: 16, fontSize: 11, color: "#7a6fa0" }}>🔒 No spam · No data sold · One-time verification</div>
+                </>
+              )}
+
+              {/* ═══ STAGE: REDIRECTING TO X ═══ */}
+              {faucetStage === "redirecting" && (
+                <div style={{ padding: "18px 0" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginBottom: 26 }}>
+                    {/* ArcadeX orb */}
+                    <div style={{ width: 52, height: 52, borderRadius: "50%", background: "linear-gradient(135deg,#7B2FFF,#a67fff)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>🎮</div>
+                    {/* arrow */}
+                    <div style={{ fontSize: 22, color: "#1da1f2", animation: "fpArrowSlide 1s ease-in-out infinite", margin: "0 4px" }}>→</div>
+                    {/* X badge with pulse */}
+                    <div style={{ width: 52, height: 52, borderRadius: "50%", background: "#1da1f2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 900, color: "#fff", flexShrink: 0, animation: "fpPulseRing 1.4s ease-out infinite" }}>𝕏</div>
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#fff", marginBottom: 6 }}>Redirecting to X</div>
+                  <div style={{ fontSize: 13, color: "#b8b0d0" }}>Complete login in the popup window…</div>
+                </div>
+              )}
+
+              {/* ═══ STAGE: CLAIMING ═══ */}
+              {faucetStage === "claiming" && (
+                <div style={{ padding: "18px 0" }}>
+                  <div style={{ width: 66, height: 66, margin: "0 auto 22px", position: "relative" }}>
+                    <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: "3px solid rgba(255,47,94,0.15)", borderTopColor: "#ff2f5e", animation: "fpSpin 0.8s linear infinite" }} />
+                    <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 }}>⛽</div>
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#fff", marginBottom: 6 }}>Claiming 0.1 MSTC</div>
+                  <div style={{ fontSize: 13, color: "#b8b0d0" }}>Sending to your wallet on-chain…</div>
+                </div>
+              )}
+
+              {/* ═══ STAGE: SUCCESS ═══ */}
+              {faucetStage === "success" && (
+                <div style={{ padding: "14px 0" }}>
+                  <div style={{ width: 72, height: 72, borderRadius: "50%", background: "linear-gradient(135deg,#00c853,#00e676)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, margin: "0 auto 20px", animation: "fpDropIn 0.5s cubic-bezier(0.34,1.56,0.64,1)", boxShadow: "0 0 30px rgba(0,230,118,0.4)" }}>✓</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#00e676", marginBottom: 8 }}>Gas Claimed!</div>
+                  <div style={{ fontSize: 14, color: "#b8b0d0" }}><b style={{ color: "#00e676" }}>0.1 MSTC</b> is now in your wallet.</div>
+                </div>
+              )}
+
+              {/* ═══ STAGE: ERROR ═══ */}
+              {faucetStage === "error" && (
+                <div style={{ padding: "14px 0" }}>
+                  <div style={{ width: 66, height: 66, borderRadius: "50%", background: "rgba(255,68,68,0.12)", border: "2px solid rgba(255,68,68,0.35)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, margin: "0 auto 18px" }}>⚠️</div>
+                  <div style={{ fontSize: 19, fontWeight: 700, color: "#ff6b6b", marginBottom: 8 }}>Couldn't Claim</div>
+                  <div style={{ fontSize: 13, color: "#b8b0d0", marginBottom: 22, lineHeight: 1.5 }}>{faucetError || "Something went wrong."}</div>
+                  <button onClick={() => { setFaucetStage("idle"); setFaucetError(""); }} style={{ width: "100%", padding: "13px", background: "linear-gradient(135deg,#ff2f5e,#ff6b35)", border: "none", borderRadius: 12, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif" }}>Try Again</button>
+                </div>
+              )}
+
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ── EARNINGS PANEL — Premium Design ──────────────────────── */}
       {earningsOpen && (

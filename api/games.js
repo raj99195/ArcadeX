@@ -186,23 +186,47 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
-  // ── POST claim-gas (SH0017: JWT required — ownership enforced) ────────────
-  // Pehle koi bhi wallet address bhej ke claim kar sakta tha (ownership check
-  // nahi tha) — attacker unlimited fresh wallets bana ke faucet drain kar sakta
-  // tha. Ab JWT chahiye aur claim JWT ke address ke liye hi hota hai. JWT sirf
-  // wallet-signature ke baad milta hai, toh attacker ko har fake wallet se
-  // actually sign karna padega — mass draining economically impractical.
+  // ── POST claim-gas (SH0017: JWT + X-account required) ────────────────────
+  // Pehle koi bhi wallet address bhej ke claim kar sakta tha — attacker unlimited
+  // fresh wallets bana ke faucet drain kar sakta tha. Ab do gates:
+  //   1. JWT (wallet ownership) — claim JWT ke address ke liye hi
+  //   2. X/Twitter account (Firebase) — one claim per X account
+  // Fresh wallets free hain, lekin fresh X accounts mass-generate karna mushkil
+  // (phone verify, rate limits) — isliye farming impractical.
   if (req.method === "POST" && action === "claim-gas") {
     const gasUser = verifyToken(req);
     if (!gasUser) return res.status(401).json({ error: "Unauthorized — connect wallet first" });
 
+    // ── X/Twitter account verification (Firebase ID token) ──
+    // Frontend Firebase X login karke idToken bhejta hai (body.firebaseToken).
+    const { firebaseToken } = req.body;
+    if (!firebaseToken)
+      return res.status(403).json({ error: "X login required to claim gas" });
+
+    let xUid, xProvider;
+    try {
+      const decoded = await admin.auth().verifyIdToken(firebaseToken);
+      xUid      = decoded.uid;
+      xProvider = decoded.firebase?.sign_in_provider || "";
+      // Sirf Twitter/X login accept karo (Google se bypass na ho)
+      if (!xProvider.includes("twitter"))
+        return res.status(403).json({ error: "Must login with X (Twitter) to claim gas" });
+    } catch (e) {
+      return res.status(403).json({ error: "Invalid or expired X login. Please login again." });
+    }
+
     // claimAddress body se nahi — JWT se (koi doosre ka wallet claim nahi kar sakta)
     const claimAddress = gasUser.address;
+
+    // ── One claim per X account ──
+    const xClaimRef = db.collection("faucetXClaims").doc(xUid);
+    const xClaimDoc = await xClaimRef.get();
+    if (xClaimDoc.exists)
+      return res.status(403).json({ error: "This X account has already claimed gas." });
 
     const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
     if (!rateLimit(`faucet:${ip}`, 3))
       return res.status(429).json({ error: "Too many requests" });
-    // Extra: per-address rate limit bhi (JWT ke address pe)
     if (!rateLimit(`faucet-addr:${claimAddress.toLowerCase()}`, 2))
       return res.status(429).json({ error: "Too many requests for this wallet" });
     try {
@@ -228,6 +252,11 @@ export default async function handler(req, res) {
         return res.status(503).json({ error: "Faucet empty — refill pending" });
       const tx = await faucet.claimGas(claimAddress, { gasLimit: 120_000 });
       await tx.wait();
+      // X account ko record karo — ab ye X account dubara claim nahi kar sakta
+      await xClaimRef.set({
+        xUid, wallet: claimAddress.toLowerCase(),
+        txHash: tx.hash, claimedAt: new Date(),
+      });
       return res.status(200).json({ success: true, txHash: tx.hash });
     } catch (err) {
       const msg = err.shortMessage || err.message || "Claim failed";
