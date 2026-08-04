@@ -40,6 +40,11 @@ const PLATFORM_ADDRESSES = {
   botchain: "0x2Ca0C74C1ee7e65e5f96c469cef840B62Ba6cFB4",
   mst:      "0xd9181c86f9E1D5825E47ED80Ae9E76B4dF18c0B8",
 };
+// Tournament contracts (SH0018 signature-verified). From deployedAddresses.json.
+const TOURNAMENT_ADDRESSES = {
+  botchain: "0xf1086B6e247D1322Cd9A0b3b9C02539Ae05BA8eC",
+  mst:      "0x3f2AAa35E0cFa71804079317eA68fdBdcb6BD5d3",
+};
 const CHAIN_IDS = {
   botchain: 677n,
   mst:      4646n,
@@ -444,7 +449,33 @@ export default async function handler(req, res) {
       );
 
       const signature = await signerWallet.signMessage(ethers.getBytes(messageHash));
-      return res.status(200).json({ nonce: nonce.toString(), signature });
+
+      // ── Tournament proof (only if this play is part of a tournament) ──
+      // Contract expects a SEPARATE signature over the tournament tuple:
+      //   keccak256(player, tournamentId, score, nonce, TOURNAMENT_ADDR, chainId)
+      // Same already-validated score — no separate anti-cheat path, gates above
+      // (session burn, min play time, rate ceiling, self-learning avg, soft-ban)
+      // all ran before we reached here.
+      let tournamentNonce = null, tournamentSignature = null;
+      const { tournamentId } = req.body;
+      if (tournamentId) {
+        const tournamentAddr = TOURNAMENT_ADDRESSES[chain];
+        if (tournamentAddr) {
+          tournamentNonce = BigInt(Date.now());
+          const tHash = ethers.solidityPackedKeccak256(
+            ["address", "uint256", "uint256", "uint256", "address", "uint256"],
+            [player, BigInt(tournamentId), BigInt(score), tournamentNonce, tournamentAddr, chainId]
+          );
+          tournamentSignature = await signerWallet.signMessage(ethers.getBytes(tHash));
+        }
+      }
+
+      return res.status(200).json({
+        nonce: nonce.toString(),
+        signature,
+        tournamentNonce: tournamentNonce?.toString() ?? null,
+        tournamentSignature,
+      });
 
     } catch (err) {
       console.error("[sign-score]", err);
