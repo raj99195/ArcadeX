@@ -10,7 +10,7 @@ import { useChain } from "../context/ChainContext";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 
-const TOURNAMENT_SCORE_ABI = [{ name: "submitTournamentScore", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tournamentId", type: "uint256" }, { name: "score", type: "uint256" }], outputs: [] }];
+const TOURNAMENT_SCORE_ABI = [{ name: "submitTournamentScore", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tournamentId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
 const PLATFORM_ABI = [{ name: "recordPlayAndEarn", type: "function", stateMutability: "nonpayable", inputs: [{ name: "gameId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
 const PLATFORM_READ_ABI = [
   { name: "games", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "gameId", type: "uint256" }, { name: "name", type: "string" }, { name: "creator", type: "address" }, { name: "iframeUrl", type: "string" }, { name: "rewardRate", type: "uint256" }, { name: "totalPlays", type: "uint256" }, { name: "isActive", type: "bool" }] },
@@ -669,12 +669,15 @@ export default function GamePlay() {
       }
 
       let nonce, signature;
+      let tNonce = null, tSig = null;   // tournament proof (set below if tournamentId)
       try {
         const sigRes = await fetch("/api/games?action=sign-score", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${_jwt}` },
           // player field nahi — backend JWT se lega (SH0009)
-          body: JSON.stringify({ gameId: onChainGameId, score: finalScore, chain: chainKey, sessionToken: _session }),
+          // tournamentId bhejte hain taaki backend usi validated score pe
+          // tournament proof bhi sign kar de (ek session burn, dono proofs)
+          body: JSON.stringify({ gameId: onChainGameId, score: finalScore, chain: chainKey, sessionToken: _session, tournamentId: tournamentId || undefined }),
         });
         if (!sigRes.ok) {
           const errData = await sigRes.json().catch(() => ({}));
@@ -684,6 +687,8 @@ export default function GamePlay() {
         const sigData = await sigRes.json();
         nonce = BigInt(sigData.nonce);
         signature = sigData.signature;
+        tNonce = sigData.tournamentNonce ? BigInt(sigData.tournamentNonce) : null;
+        tSig   = sigData.tournamentSignature || null;
         sessionTokenRef.current = null; // burn — one-time use
 
         // Auto-renew session for next game round (background, non-blocking)
@@ -717,20 +722,25 @@ export default function GamePlay() {
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
-      if (tournamentId) {
+      if (tournamentId && tSig) {
         try {
           const tHash = await writeContract(wagmiAdapter.wagmiConfig, {
             address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_SCORE_ABI,
             functionName: "submitTournamentScore",
-            args: [BigInt(tournamentId), BigInt(finalScore)],
-            gas: BigInt(200000), chainId: CHAIN_ID,
+            args: [BigInt(tournamentId), BigInt(finalScore), tNonce, tSig],
+            gas: BigInt(250000), chainId: CHAIN_ID,
           });
           await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash: tHash });
         } catch (tErr) {
-          if (tErr.message?.includes("not active") || tErr.message?.includes("Outside tournament")) {
+          // ab silently swallow nahi — real failures console mein dikhenge
+          console.error("Tournament score submit failed:", tErr);
+          if (tErr.message?.includes("Finished") || tErr.message?.includes("Outside time") || tErr.message?.includes("Not joined")) {
             setSubmitError({ type: "tournament", soft: true, icon: "🏆", title: "Tournament Ended", msg: "This tournament has ended — your score wasn't counted for the tournament, but your on-chain reward was still paid." });
           }
         }
+      } else if (tournamentId && !tSig) {
+        // tournamentId tha par backend ne proof nahi diya (TOURNAMENT_ADDRESSES map miss?)
+        console.warn("Tournament play but no proof returned — check TOURNAMENT_ADDRESSES / SCORE_SIGNER config.");
       }
 
       setTokensEarned(playerReward);
