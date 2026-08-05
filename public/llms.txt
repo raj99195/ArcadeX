@@ -1,0 +1,268 @@
+# ArcadeX SDK — Developer Documentation
+
+> ArcadeX is a multi-chain Web3 gaming platform. This SDK lets any web-based game
+> (Unity WebGL, Godot HTML5, Phaser 3, or plain HTML/JS) submit on-chain scores,
+> reward players with tokens, and sell NFT skins / power-ups — with only a few
+> lines of code. Games run inside an ArcadeX iframe and talk to the platform over
+> `window.postMessage`; the platform handles all wallet and blockchain work.
+
+- SDK version: v4.0.0 (Unity edition: v2.0.0)
+- Supported chains: BOTChain EVM and MST Blockchain (multi-chain)
+- Docs page: https://www.playarcadex.in/sdk
+- This file: https://www.playarcadex.in/llms.txt
+
+## How It Works
+
+The SDK is a thin messaging bridge. Your game never touches wallets, private keys,
+or contracts directly — it just emits events:
+
+1. Your game calls `ArcadeSDK.gameOver(score)` when the player finishes.
+2. `arcade-sdk.js` sends a `postMessage` event to the parent window.
+3. The ArcadeX platform receives the event and triggers the blockchain transaction
+   (score validation, signing, on-chain submission).
+4. The chain saves the score and mints reward tokens.
+
+Reward split per play: 80% of tokens go to the player, 20% to the game's creator.
+
+Scores are validated and signed server-side before they are written on-chain, so a
+game cannot submit an arbitrary score directly — the platform is the source of truth.
+
+## SDK Files
+
+Pick the file that matches your engine. All files are downloadable from the
+Overview section of the docs page.
+
+- `arcade-sdk.js` (v4.0.0) — Core SDK. Works with any web-based game engine / plain HTML.
+- `arcade-sdk-unity.js` (v2.0.0) — Unity WebGL edition. Exposes globals the C# bridge calls. Place in the WebGL `Build/` folder.
+- `arcade-sdk-godot.js` (v4.0.0) — Godot 3.x / 4.x HTML5 export edition.
+- `arcade-sdk-phaser.js` (v4.0.0) — Phaser 3 edition. Global API plus an optional Scene Plugin (`this.arcade`).
+- `ArcadeBridge.jslib` — Unity C# ↔ JavaScript bridge (`DllImport`). Place in `Assets/Plugins/WebGL/`.
+
+Place the SDK file in the same folder as your `index.html` and load it with a
+`<script>` tag before your game code.
+
+## Quick Start
+
+From zero to an integrated game in under 10 minutes:
+
+1. Build your game and export as WebGL / HTML5.
+2. Add `arcade-sdk.js` next to your `index.html`.
+3. Add three lines of code: `init`, `updateScore`, `gameOver`.
+4. Deploy (e.g. Vercel) and submit your game URL on ArcadeX.
+
+Minimal integration:
+
+```html
+<!-- 1. Add the SDK to your index.html -->
+<script src="arcade-sdk.js"></script>
+<script>
+  // 2. Initialize once when the game loads
+  ArcadeSDK.init("YOUR_GAME_ID");   // use "" on your first deploy
+
+  // 3. Send live score updates (UI only, no transaction)
+  ArcadeSDK.updateScore(1500);
+
+  // 4. Submit the final score on-chain when the game ends
+  ArcadeSDK.gameOver(9999);
+</script>
+```
+
+`updateScore()` only updates the ArcadeX UI and never triggers a transaction, so it
+is safe to call frequently. `gameOver()` is the only call that writes on-chain.
+
+## Core API Reference
+
+`ArcadeSDK.init(gameId, options)`
+Initialize the SDK. Call once when the game loads.
+- `gameId` (string) — Your Game ID from the Creator Dashboard. Pass `""` on first deploy.
+- `options.gameName` (string) — Display name shown on the platform.
+- `options.debug` (boolean) — Enable verbose console logging.
+
+`ArcadeSDK.updateScore(score)`
+Send the real-time score to the ArcadeX UI. Does NOT trigger a blockchain tx. Call frequently.
+- `score` (number) — Current player score.
+
+`ArcadeSDK.gameOver(finalScore)`
+Submit the final score on-chain. Triggers a blockchain tx. 80% tokens to player, 20% to creator.
+- `finalScore` (number) — Player's final score.
+
+`ArcadeSDK.purchaseSkin(skinIndex, name, pinataCID, price)`
+Pay + mint an ERC-1155 NFT for a permanent skin/character in a single call. No
+pre-registration — pass everything the game already knows about the skin.
+- `skinIndex` (number) — Unique index for this skin (0, 1, 2...).
+- `name` (string) — Display name, e.g. "Batman".
+- `pinataCID` (string) — IPFS CID (with or without the `ipfs://` prefix).
+- `price` (number) — Price in ARCADE/MSTC, whole tokens.
+
+`ArcadeSDK.purchasePowerUp(powerUpId, price)`
+Pay only, no NFT minted. Ownership/unlock state stays entirely on your game side.
+- `powerUpId` (string) — Unique identifier, e.g. "SCALE_BOOST".
+- `price` (number) — Price in ARCADE/MSTC, whole tokens.
+
+`ArcadeSDK.recordGameTime(seconds)`
+Log playtime for this session (off-chain, Firestore only).
+- `seconds` (number) — Seconds played this session.
+
+`ArcadeSDK.recordEvent(eventType, value)`
+Log a custom gameplay event (kill, win, level_up, etc.) off-chain.
+- `eventType` (string) — Event name.
+- `value` (number) — Event value, defaults to 1.
+
+`ArcadeSDK.getPlayerProfile()`
+Request the connected player's wallet info. Returns via the `PLAYER_INFO` event.
+
+Other helpers: `ArcadeSDK.pause()`, `ArcadeSDK.resume()`, `ArcadeSDK.getScore()`.
+
+## Events (platform → game)
+
+Your game receives these via `window.postMessage`. Listen with
+`window.addEventListener("message", handler)`.
+
+```js
+window.addEventListener("message", (event) => {
+  const { type, data } = event.data;
+  switch (type) {
+    case "PLAYER_INFO":         // wallet connected: data.address, data.balance
+    case "TRANSACTION_SUCCESS": // score on-chain: data.txHash
+    case "TRANSACTION_FAILED":  // tx failed: data.error
+    case "PURCHASE_SUCCESS":    // skin/powerup confirmed: data.kind, data.tokenId, data.txHash
+    case "PURCHASE_FAILED":     // purchase failed/rejected: data.kind, data.error
+      break;
+  }
+});
+```
+
+Event reference:
+
+- `PLAYER_INFO` — Sent when player info is requested. `data.address` (EVM wallet address), `data.balance` (token balance).
+- `TRANSACTION_SUCCESS` — Score successfully submitted on-chain. `data.txHash`.
+- `TRANSACTION_FAILED` — Blockchain transaction failed. `data.error`.
+- `PURCHASE_SUCCESS` — Skin or power-up purchase confirmed. `data.kind` ("skin" | "powerup"), `data.skinIndex` (skin only), `data.powerUpId` (power-up only), `data.tokenId` (minted NFT, skin only), `data.txHash`.
+- `PURCHASE_FAILED` — Skin or power-up purchase failed or was rejected. `data.kind`, `data.error`.
+
+Note: some engine editions also expose callback hooks instead of raw events, e.g.
+`ArcadeSDK.onSuccess`, `onError`, `onPurchaseSuccess`, `onPurchaseFailed`, `onPlayerInfo`.
+
+## Integration — Unity WebGL
+
+Use `arcade-sdk-unity.js` + `ArcadeBridge.jslib`. The `.jslib` exposes C# extern
+methods (`arcade_init`, `arcade_updateScore`, `arcade_gameOver`, etc.) that call the
+JS SDK. Incoming events are delivered to a GameObject named exactly `ArcadeManager`
+via Unity's `SendMessage` (`OnTransactionSuccess`, `OnTransactionFailed`,
+`OnPlayerInfoReceived`).
+
+Setup:
+1. Put `arcade-sdk-unity.js` in the WebGL `Build/` folder (next to `index.html`) and load it with a `<script>` tag.
+2. Put `ArcadeBridge.jslib` in `Assets/Plugins/WebGL/`.
+3. Create a GameObject named `ArcadeManager` and attach a manager script that declares the `DllImport` externs and receives the callbacks.
+
+C# extern declarations (WebGL only):
+
+```csharp
+[DllImport("__Internal")] private static extern void arcade_init(string gameId);
+[DllImport("__Internal")] private static extern void arcade_updateScore(int score);
+[DllImport("__Internal")] private static extern void arcade_gameOver(int finalScore);
+[DllImport("__Internal")] private static extern void arcade_getPlayerProfile();
+
+void Start()  { arcade_init("YOUR_GAME_ID"); }
+void OnEnd(int s) { arcade_gameOver(s); }
+
+// Called back by the SDK on the "ArcadeManager" GameObject:
+public void OnTransactionSuccess(string txHash) { /* score saved */ }
+public void OnTransactionFailed(string error)   { /* handle failure */ }
+public void OnPlayerInfoReceived(string json)   { /* {address, balance} */ }
+```
+
+## Integration — Godot HTML5
+
+Use `arcade-sdk-godot.js`. In the Godot export `index.html`, add before `</head>`:
+
+```html
+<script src="arcade-sdk-godot.js"></script>
+```
+
+Godot 3.x (GDScript, via `JavaScript.eval`):
+
+```gdscript
+func _ready():
+    if OS.has_feature("JavaScript"):
+        JavaScript.eval("ArcadeSDK.init('YOUR_GAME_ID')")
+
+func game_over(final_score: int):
+    if OS.has_feature("JavaScript"):
+        JavaScript.eval("ArcadeSDK.gameOver(" + str(final_score) + ")")
+```
+
+Godot 4.x — replace `JavaScript.eval()` with `JavaScriptBridge.eval()` and
+`OS.has_feature("JavaScript")` with `OS.has_feature("web")`.
+
+## Integration — Phaser 3
+
+Use `arcade-sdk-phaser.js`. Two styles are available.
+
+Global (simple):
+
+```js
+ArcadeSDK.init("YOUR_GAME_ID");
+ArcadeSDK.updateScore(this.score);
+ArcadeSDK.gameOver(this.score);
+```
+
+Scene Plugin (advanced) — the SDK registers itself as `this.arcade` inside any Scene:
+
+```js
+class GameScene extends Phaser.Scene {
+  create() { this.arcade.init("YOUR_GAME_ID"); }
+  update() { if (this.score % 100 === 0) this.arcade.updateScore(this.score); }
+  onGameOver() {
+    this.arcade.gameOver(this.score);
+    ArcadeSDK.onSuccess = (txHash) => console.log("saved:", txHash);
+    ArcadeSDK.onError   = (err)    => console.error(err);
+  }
+}
+```
+
+## Integration — Plain HTML / JS
+
+Use `arcade-sdk.js` — works with any web game or engine:
+
+```html
+<script src="arcade-sdk.js"></script>
+<script>
+  ArcadeSDK.init("YOUR_GAME_ID", { debug: true });
+  // ... run your game, then on game end:
+  ArcadeSDK.gameOver(finalScore);
+  ArcadeSDK.onSuccess = (txHash) => console.log("On-chain:", txHash);
+  ArcadeSDK.onError   = (err)    => console.error("Failed:", err);
+</script>
+```
+
+To read the connected wallet, call `ArcadeSDK.getPlayerProfile()` and handle the
+`PLAYER_INFO` event (or set `ArcadeSDK.onPlayerInfo`).
+
+## FAQ
+
+What Game ID do I use on first deploy?
+Leave it empty (`""`). After an admin approves your game you get a Game ID; update
+it in your code and redeploy (Vercel auto-redeploys in ~30s).
+
+Does the player need to connect a wallet?
+Yes — players connect MetaMask or a compatible wallet on a supported ArcadeX chain
+(BOTChain or MST Blockchain) to earn tokens. The Connect Wallet button is in the
+ArcadeX navbar.
+
+My game is in an iframe, will postMessage work?
+Yes. ArcadeX embeds your game in an iframe and the SDK uses
+`window.parent.postMessage` to communicate with the platform.
+
+Can I test locally without deploying?
+Yes — use the "Simulate Game Over" button on the gameplay page, or the Debug panel
+(🐛) to test score submission.
+
+What happens if the transaction fails?
+Your game receives a `TRANSACTION_FAILED` event. The score is NOT saved on-chain.
+Show the player an error or offer a retry.
+
+How do I get my Game ID?
+Submit your game at `/publish` on ArcadeX. After admin approval (usually within 24
+hours) your Game ID appears in your Creator Dashboard.
