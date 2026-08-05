@@ -316,7 +316,7 @@ export default function SDK() {
               <span style={{ color: C.muted, fontWeight: 400 }}>SDK</span>
             </h1>
             <p style={{ color: C.muted, fontSize: 15, maxWidth: 600, lineHeight: 1.8, marginBottom: 32, fontFamily: C.ui }}>
-              Integrate your game with ArcadeX in minutes. Submit on-chain scores, reward players with ARCADE tokens, and connect to BOTChain — works with any game engine.
+              Integrate your game with ArcadeX in minutes. Submit on-chain scores, reward players with on-chain tokens, and go live on any supported chain — works with any game engine.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {[{ label: "Unity WebGL", color: C.green, icon: "🎮" }, { label: "Godot HTML5", color: C.cyan, icon: "🔵" }, { label: "Phaser.js", color: C.purple, icon: "⚡" }, { label: "Plain JS", color: C.gold, icon: "🌐" }].map(e => (
@@ -432,7 +432,7 @@ export default function SDK() {
               { isArrow: true },
               { color: C.blue, label: "ArcadeX Platform", desc: "Receives event, triggers blockchain transaction" },
               { isArrow: true },
-              { color: C.green, label: "BOTChain", desc: "Score saved + ARCADE tokens minted on-chain ✅" },
+              { color: C.green, label: "Blockchain", desc: "Score saved + reward tokens minted on-chain ✅" },
             ].map((item, i) => item.isArrow ? (
               <div key={i} style={{ fontSize: 18, color: C.border, padding: "4px 0 4px 20px" }}>↓</div>
             ) : (
@@ -448,7 +448,7 @@ export default function SDK() {
 
           <H3>Token Split</H3>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
-            {[{ label: "Player gets", value: "80%", color: C.green, desc: "ARCADE tokens for playing" }, { label: "Creator gets", value: "20%", color: C.purple, desc: "ARCADE tokens from each play" }].map(s => (
+            {[{ label: "Player gets", value: "80%", color: C.green, desc: "Reward tokens for playing" }, { label: "Creator gets", value: "20%", color: C.purple, desc: "Reward tokens from each play" }].map(s => (
               <div key={s.label} style={{ background: C.surface, border: `1px solid ${s.color}33`, borderRadius: 12, padding: "20px 24px" }}>
                 <div style={{ fontSize: 32, fontWeight: 700, color: s.color, fontFamily: C.display, marginBottom: 6 }}>{s.value}</div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: C.text, fontFamily: C.ui, marginBottom: 4 }}>{s.label}</div>
@@ -915,7 +915,7 @@ ArcadeSDK.getPlayerProfile();`} />
 
           <H3>Event Reference</H3>
           {[
-            { event: "PLAYER_INFO", color: C.cyan, desc: "Sent when player info is requested. Contains wallet address and ARCADE balance.", fields: [["type", '"PLAYER_INFO"'], ["data.address", "string — EVM wallet address"], ["data.balance", "string — ARCADE token balance"]] },
+            { event: "PLAYER_INFO", color: C.cyan, desc: "Sent when player info is requested. Contains wallet address and reward token balance.", fields: [["type", '"PLAYER_INFO"'], ["data.address", "string — EVM wallet address"], ["data.balance", "string — reward token balance (chain's native reward token)"]] },
             { event: "TRANSACTION_SUCCESS", color: C.green, desc: "Sent when score is successfully submitted on-chain.", fields: [["type", '"TRANSACTION_SUCCESS"'], ["data.txHash", "string — blockchain tx hash"]] },
             { event: "TRANSACTION_FAILED", color: C.red, desc: "Sent when blockchain transaction fails.", fields: [["type", '"TRANSACTION_FAILED"'], ["data.error", "string — error message"]] },
             { event: "PURCHASE_SUCCESS", color: C.gold, desc: "Sent when a skin or power-up purchase confirms on-chain.", fields: [["type", '"PURCHASE_SUCCESS"'], ["data.kind", '"skin" | "powerup"'], ["data.skinIndex", "number — present for skin purchases only"], ["data.powerUpId", "string — present for power-up purchases only"], ["data.tokenId", "string — minted NFT tokenId (skin only)"], ["data.txHash", "string — blockchain tx hash"]] },
@@ -940,7 +940,7 @@ ArcadeSDK.getPlayerProfile();`} />
           <H2 id="faq" sub="Common questions about ArcadeX SDK integration">FAQ</H2>
           {[
             { q: "What Game ID do I use on first deploy?", a: "Leave it empty or use '' (empty string). After admin approves your game, you'll get a Game ID. Update it in your code and redeploy — Vercel auto-redeploys in ~30s." },
-            { q: "Does the player need to connect a wallet?", a: "Yes, players need to connect a MetaMask or compatible wallet on BOTChain Testnet to earn ARCADE tokens. The Connect Wallet button is in the ArcadeX navbar." },
+            { q: "Does the player need to connect a wallet?", a: "Yes, players connect a MetaMask or compatible wallet on a supported ArcadeX chain (BOTChain or MST Blockchain) to earn reward tokens. The Connect Wallet button is in the ArcadeX navbar." },
             { q: "My game is in an iframe, will postMessage work?", a: "Yes! ArcadeX embeds your game in an iframe. The SDK uses window.parent.postMessage to communicate with the platform." },
             { q: "Can I test locally without deploying?", a: "Yes, use the 'Simulate Game Over' button on the gameplay page, or use the Debug panel (🐛 button) to test score submission." },
             { q: "What happens if the transaction fails?", a: "Your game receives a TRANSACTION_FAILED event. The score is NOT saved on-chain. You can show the player an error or retry." },
@@ -1090,7 +1090,7 @@ ArcadeSDK.getPlayerProfile();`} />
             <div style={{ marginTop: 28, padding: 14, background: "rgba(0,255,136,0.05)", border: "1px solid rgba(0,255,136,0.15)", borderRadius: 10 }}>
               <div style={{ fontSize: 11, color: C.green, fontWeight: 700, fontFamily: C.ui, marginBottom: 6 }}>SDK Version</div>
               <div style={{ fontSize: 12, color: C.muted, fontFamily: C.mono }}>v4.0.0</div>
-              <div style={{ fontSize: 10, color: C.dim, fontFamily: C.ui, marginTop: 4 }}>BOTChain EVM</div>
+              <div style={{ fontSize: 10, color: C.dim, fontFamily: C.ui, marginTop: 4 }}>Multi-chain EVM · BOTChain + MST</div>
             </div>
           </div>
         )}
