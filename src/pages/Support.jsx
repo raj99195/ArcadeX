@@ -34,7 +34,7 @@ const ISSUE_TYPES = [
 ];
 
 const COMMUNITY = [
-  { iconKey: "telegram", name: "Telegram", desc: "Fastest support — usually < 1hr", label: "Join Community", url: "https://t.me/AracdeX", color: "#0088cc", border: "rgba(0,136,204,0.25)", bg: "rgba(0,136,204,0.06)" },
+  { iconKey: "telegram", name: "Telegram", desc: "Fastest support — usually < 1hr", label: "Join Community", url: "https://t.me/PlayArcadeX", color: "#0088cc", border: "rgba(0,136,204,0.25)", bg: "rgba(0,136,204,0.06)" },
   { iconKey: "discord", name: "Discord", desc: "Dev discussions, bug reports, builders", label: "Join Server", url: "https://discord.gg/836Mx9XjbB", color: S.purple, border: S.border2, bg: "rgba(123,47,255,0.06)" },
   { iconKey: "x", name: "X / Twitter", desc: "Platform updates, announcements", label: "Follow Us", url: "https://x.com/PlayArcadeX", color: "#fff", border: "rgba(255,255,255,0.15)", bg: "rgba(255,255,255,0.04)" },
   { iconKey: "linkedin", name: "LinkedIn", desc: "Partnerships, enterprise inquiries", label: "Connect", url: "https://www.linkedin.com/company/playarcadex/", color: "#0077b5", border: "rgba(0,119,181,0.25)", bg: "rgba(0,119,181,0.06)" },
