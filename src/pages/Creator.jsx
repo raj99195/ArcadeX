@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { saveGame, saveCreator, getGamesByCreator, registerCreator, getCreatorStatus, getGameById } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
+import { parseEther } from "viem";
 import { wagmiAdapter } from "../Providers";
 import { useChain } from "../context/ChainContext";
 
@@ -514,7 +515,15 @@ const submitGame = async () => {
       // Whichever chain the creator is actually connected to right now is
       // the one this on-chain registerGame() call goes to — pick the
       // matching rate for that chain's token type.
-      const rateForThisChain = isNativeToken ? safeRewardRateNative : safeRewardRate;
+      //
+      // MST (native reward) Platform stores rewardRate in WEI (18 decimals):
+      // 1 MSTC/play = 1e18. Passing the raw integer (1) = 1 wei triggers the
+      // contract's "Below min reward rate" revert. So convert native rates to wei.
+      // NOTE: if the BOTChain (ARCADE) Platform is ALSO wei-based, wrap
+      // safeRewardRate in parseEther() below too.
+      const rateForThisChain = isNativeToken
+        ? parseEther(String(safeRewardRateNative))
+        : BigInt(safeRewardRate);
 
       // 2. Contract se total games nikalo
       const totalGames = await publicClient.readContract({ 
@@ -525,7 +534,7 @@ const submitGame = async () => {
       const contractTotal = Number(totalGames);
 
       // 3. Register Game on-chain
-      const registerArgs = [form.name, form.iframeUrl, BigInt(rateForThisChain)];
+      const registerArgs = [form.name, form.iframeUrl, rateForThisChain];
       const registerGas = await getGasWithBuffer(publicClient, {
         address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
         functionName: "registerGame", args: registerArgs, account: address,
