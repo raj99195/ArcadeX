@@ -413,14 +413,26 @@ export default async function handler(req, res) {
       if (!Number.isFinite(scoreNum) || scoreNum < 0)
         return res.status(400).json({ error: "Invalid score value.", softReject: true });
 
-      // GATE 1 — minimum play time. SOFT signal: page refreshes, wallet
-      // reconnects, and double-clicking Submit all reset the session timer, so
-      // this fires constantly for legit users. Reject the submission WITHOUT
-      // flagging (no ban). A bot still can't cheat — no signature is issued —
-      // but a real user who refreshed isn't punished for it.
-      const MIN_PLAY_SECONDS = 15;
-      if (playSec < MIN_PLAY_SECONDS)
-        return res.status(400).json({ error: `Play a little longer before submitting (min ${MIN_PLAY_SECONDS}s).`, minPlaySeconds: MIN_PLAY_SECONDS, softReject: true });
+      // Per-game learned stats (Option B, no manual config). Each game learns
+      // its own normal score-rate AND typical play duration from real plays.
+      const statRef  = db.collection("gameStats").doc(String(gameId));
+      const statSnap = await statRef.get();
+      const { avgRate = null, avgPlaySec = null, count = 0 } = statSnap.exists ? statSnap.data() : {};
+      const LEARN_SAMPLES = 20;   // plays needed before learned thresholds kick in
+
+      // GATE 1 — self-learning minimum play time. SOFT signal (no flag/ban).
+      // Refreshes/reconnects/double-clicks reset the timer, and game lengths
+      // vary wildly — a 5s puzzle and a 3-min runner can't share one number.
+      // Cold start: only block near-instant (bot/no-play) submits via a small
+      // floor. Once learned: require a fraction of THIS game's typical duration.
+      // Fully automatic, per-game, permanent — no per-game config needed.
+      const MIN_PLAY_FLOOR    = 3;      // absolute floor — blocks 0s/instant submits
+      const MIN_PLAY_FRACTION = 0.25;   // must play >= 25% of this game's typical time
+      const minPlayRequired = (count >= LEARN_SAMPLES && avgPlaySec)
+        ? Math.max(MIN_PLAY_FLOOR, avgPlaySec * MIN_PLAY_FRACTION)
+        : MIN_PLAY_FLOOR;
+      if (playSec < minPlayRequired)
+        return res.status(400).json({ error: "Play a little longer before submitting.", minPlaySeconds: Math.ceil(minPlayRequired), softReject: true });
 
       // GATE 2 — absolute impossible-rate ceiling (bootstrap safety net)
       // Koi bhi game realistically 500 pts/sec cross nahi karega.
@@ -428,22 +440,19 @@ export default async function handler(req, res) {
       if (rate > ABSOLUTE_MAX_RATE)
         return await flagAndReject("Impossible score rate", { absoluteMaxRate: ABSOLUTE_MAX_RATE });
 
-      // GATE 3 — self-learning per-game rate (Option B, no manual config)
-      // Har game apna normal rate khud seekhta hai. 20+ samples ke baad
-      // koi bhi submission jo learned-average se 3x zyada ho → flag.
-      const statRef  = db.collection("gameStats").doc(String(gameId));
-      const statSnap = await statRef.get();
-      const { avgRate = null, count = 0 } = statSnap.exists ? statSnap.data() : {};
-
-      if (count >= 20 && avgRate && rate > avgRate * 3)
+      // GATE 3 — self-learning per-game rate. After LEARN_SAMPLES plays, any
+      // submission > 3x the learned average rate → flag (genuine anomaly).
+      if (count >= LEARN_SAMPLES && avgRate && rate > avgRate * 3)
         return await flagAndReject("Score anomaly — far above normal for this game", { learnedAvgRate: avgRate });
 
-      // Legit submission → rolling average update (outliers ko average mein mat lo)
+      // Legit submission → roll BOTH averages forward (skip rate outliers so a
+      // near-miss cheat doesn't poison the learned norms).
       const withinNormal = !avgRate || rate <= avgRate * 3;
       if (withinNormal) {
-        const newCount = count + 1;
-        const newAvg   = avgRate ? (avgRate * count + rate) / newCount : rate;
-        await statRef.set({ avgRate: newAvg, count: newCount, lastUpdated: new Date() }, { merge: true });
+        const newCount   = count + 1;
+        const newAvgRate = avgRate    ? (avgRate * count + rate) / newCount       : rate;
+        const newAvgPlay = avgPlaySec ? (avgPlaySec * count + playSec) / newCount : playSec;
+        await statRef.set({ avgRate: newAvgRate, avgPlaySec: newAvgPlay, count: newCount, lastUpdated: new Date() }, { merge: true });
       }
       // ═══════════════════════════════════════════════════════════════════════
       // END LAYER 1
