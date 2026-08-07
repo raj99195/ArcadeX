@@ -998,6 +998,7 @@ export default function GamePlay() {
                   <div style={{ fontFamily: C.raj, fontSize: 13, fontWeight: 700, color: "#a67fff" }}>Writing on chain...</div>
                 </div>
                 <div style={{ fontSize: 10, color: C.dimMore, fontFamily: C.raj }}>Approve in your wallet</div>
+                <div style={{ fontSize: 9.5, color: C.dimMore, fontFamily: C.raj, marginTop: 3, opacity: 0.85 }}>Keep this page open — don't refresh</div>
               </div>
             )}
 

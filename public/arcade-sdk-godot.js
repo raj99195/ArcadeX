@@ -1,7 +1,7 @@
 /**
  * ArcadeX SDK v4.0.0 — Godot HTML5 Edition
  * Place in your Godot HTML5 export folder (same as index.html)
- * https://arcade-x-sand.vercel.app/sdk
+ * https://www.playarcadex.in/sdk
  *
  * In your Godot export index.html, add before </head>:
  *   <script src="arcade-sdk-godot.js"></script>

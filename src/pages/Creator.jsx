@@ -200,7 +200,7 @@ export default function Creator() {
   const [claimMsg, setClaimMsg] = useState("");
   const [creatorStatus, setCreatorStatus] = useState(null);
   const [creatorLoading, setCreatorLoading] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50", rewardRateNative: "1" });
+  const [form, setForm] = useState({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", customCategory: "", rewardRate: "50", rewardRateNative: "1" });
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = { current: null };
@@ -222,7 +222,14 @@ export default function Creator() {
   const [mintLoading, setMintLoading] = useState(false);
   const [mintError, setMintError] = useState("");
 
-  const categories = ["Action", "Runner", "Shooter", "Fighting", "Strategy", "Tower Defense", "Puzzle", "Trivia", "Casual", "Idle / Clicker", "Simulation", "Adventure", "RPG", "Platformer", "Sports", "Racing", "Horror", "Music / Rhythm", "Card / Board"];
+  const categories = [
+    "Action", "Adventure", "Arcade", "Platformer", "Runner", "Shooter", "Fighting",
+    "Stealth", "Survival", "Horror", "RPG", "Roguelike", "Strategy", "RTS", "Turn-Based",
+    "Tower Defense", "MOBA", "Simulation", "Sandbox / Building", "Management / Tycoon",
+    "Puzzle", "Match-3", "Trivia", "Word", "Educational", "Casual", "Hypercasual",
+    "Idle / Clicker", "Music / Rhythm", "Sports", "Racing", "Physics", "Card / Board",
+    "Visual Novel", "Multiplayer / PvP", "Battle Royale", "IO", "Other",
+  ];
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
   const validateUrl = (url) => { try { new URL(url); return true; } catch { return false; } };
 
@@ -501,6 +508,8 @@ const submitGame = async () => {
     if (!form.name || !form.iframeUrl || !form.description) { setError("Fill in all required fields."); return; }
     if (!validateUrl(form.iframeUrl)) { setError("Enter a valid game URL."); return; }
     if (!form.thumbnailUrl) { setError("Please upload a thumbnail image."); return; }
+    if (form.category === "Other" && !(form.customCategory || "").trim()) { setError("Enter your custom category."); return; }
+    const finalCategory = form.category === "Other" ? form.customCategory.trim() : form.category;
     setError("");
     setLoading(true);
     
@@ -566,7 +575,7 @@ const submitGame = async () => {
         description: form.description, 
         iframeUrl: form.iframeUrl, 
         thumbnailUrl: form.thumbnailUrl || "", 
-        category: form.category, 
+        category: finalCategory, 
         rewardRate: safeRewardRate,             // ARCADE (ERC-20 chains)
         rewardRateNative: safeRewardRateNative, // native chains (MST)
         creator: address, 
@@ -1099,6 +1108,17 @@ const submitGame = async () => {
                     <select name="category" value={form.category} onChange={handleChange} className="cr-input cr-select" style={inputStyle}>
                       {categories.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
+                    {form.category === "Other" && (
+                      <input
+                        name="customCategory"
+                        value={form.customCategory || ""}
+                        onChange={handleChange}
+                        placeholder="Type your category (e.g. Metroidvania)"
+                        maxLength={24}
+                        className="cr-input"
+                        style={{ ...inputStyle, marginTop: 8 }}
+                      />
+                    )}
                   </div>
                   <div>
                     <label style={labelStyle}>Reward Rate (ARCADE — BOTChain/Somnia)</label>
@@ -1128,7 +1148,7 @@ const submitGame = async () => {
               <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 600 }}>
                 <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 20 }}>
                   <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 16 }}>Review your submission</div>
-                  {[["Game Name", form.name], ["Description", form.description], ["Game URL", form.iframeUrl], ["Category", form.category], ["Reward Rate (ARCADE)", `${form.rewardRate} ARCADE per play`], ["Reward Rate (Native)", `${form.rewardRateNative} MSTC per play`], ["Creator", `${nftProfile?.username || address?.slice(0, 8)}.arcade`]].map(([k, v]) => (
+                  {[["Game Name", form.name], ["Description", form.description], ["Game URL", form.iframeUrl], ["Category", form.category === "Other" ? (form.customCategory || "Other") : form.category], ["Reward Rate (ARCADE)", `${form.rewardRate} ARCADE per play`], ["Reward Rate (Native)", `${form.rewardRateNative} MSTC per play`], ["Creator", `${nftProfile?.username || address?.slice(0, 8)}.arcade`]].map(([k, v]) => (
                     <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "8px 0", borderBottom: `1px solid ${P.b}` }}>
                       <span style={{ color: "#9977cc", minWidth: 130, fontFamily: P.raj }}>{k}</span>
                       <span style={{ color: "#c4a0ff", textAlign: "right", wordBreak: "break-all", fontFamily: P.raj, fontWeight: 600 }}>{v}</span>
@@ -1170,8 +1190,8 @@ const submitGame = async () => {
                   </div>
                 )}
                 <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-                  <Btn onClick={() => { setActiveTab("my-games"); setStep(1); setForm({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50", rewardRateNative: "1" }); setTxHash(""); setNewGameId(null); }}>View My Games →</Btn>
-                  <Btn onClick={() => { setStep(1); setForm({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", rewardRate: "50", rewardRateNative: "1" }); setTxHash(""); setNewGameId(null); }} variant="ghost">Submit Another</Btn>
+                  <Btn onClick={() => { setActiveTab("my-games"); setStep(1); setForm({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", customCategory: "", rewardRate: "50", rewardRateNative: "1" }); setTxHash(""); setNewGameId(null); }}>View My Games →</Btn>
+                  <Btn onClick={() => { setStep(1); setForm({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", customCategory: "", rewardRate: "50", rewardRateNative: "1" }); setTxHash(""); setNewGameId(null); }} variant="ghost">Submit Another</Btn>
                 </div>
               </div>
             )}

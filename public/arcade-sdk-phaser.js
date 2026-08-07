@@ -1,7 +1,7 @@
 /**
  * ArcadeX SDK v4.0.0 — Phaser 3 Edition
  * Place in your project folder (same as index.html)
- * https://arcade-x-sand.vercel.app/sdk
+ * https://www.playarcadex.in/sdk
  *
  * Two ways to use:
  *
@@ -207,7 +207,7 @@
     });
 
     global.ArcadePlugin = ArcadePlugin;
-    this._log("Phaser plugin registered as 'arcade'");
+    ArcadeSDK._log("Phaser plugin registered as 'arcade'");
   }
 
 })(typeof window !== "undefined" ? window : this);

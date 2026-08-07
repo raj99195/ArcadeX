@@ -341,11 +341,20 @@ export default async function handler(req, res) {
     if (!gameId || score == null || !chain || !sessionToken)
       return res.status(400).json({ error: "gameId, score, chain, sessionToken required" });
 
-    // ── LAYER 3 — soft-ban: 3+ flagged submissions → sign-score refuse ──
-    const flagCount = (await db.collection("flagged")
+    // ── LAYER 3 — soft-ban: only genuine cheat flags within a recent window ──
+    // Windowed (not lifetime) so a wrongly-flagged wallet auto-recovers, and only
+    // HARD signals (impossibly-high scores) get here — normal behaviour like page
+    // refreshes or double-clicking Submit no longer contributes to a ban.
+    const FLAG_WINDOW_MS     = 24 * 60 * 60 * 1000;  // 24h decay
+    const FLAG_BAN_THRESHOLD = 3;
+    const recentFlags = (await db.collection("flagged")
       .where("player", "==", signUser.address.toLowerCase())
-      .limit(3).get()).size;
-    if (flagCount >= 3)
+      .limit(10).get())
+      .docs.filter(d => {
+        const t = d.data().flaggedAt?.toDate?.() || new Date(d.data().flaggedAt);
+        return t.getTime() > Date.now() - FLAG_WINDOW_MS;
+      }).length;
+    if (recentFlags >= FLAG_BAN_THRESHOLD)
       return res.status(403).json({ error: "Account under review due to suspicious activity." });
 
     const pk = process.env.SCORE_SIGNER_PRIVATE_KEY;
@@ -399,14 +408,19 @@ export default async function handler(req, res) {
         return res.status(403).json({ error: reason });
       };
 
-      // GATE 0 — negative / NaN / non-finite score
+      // GATE 0 — malformed score (negative / NaN / non-finite).
+      // Almost always a UI glitch, not cheating → soft reject, NO flag.
       if (!Number.isFinite(scoreNum) || scoreNum < 0)
-        return await flagAndReject("Invalid score value");
+        return res.status(400).json({ error: "Invalid score value.", softReject: true });
 
-      // GATE 1 — minimum play time (bina khelay instant submit block)
+      // GATE 1 — minimum play time. SOFT signal: page refreshes, wallet
+      // reconnects, and double-clicking Submit all reset the session timer, so
+      // this fires constantly for legit users. Reject the submission WITHOUT
+      // flagging (no ban). A bot still can't cheat — no signature is issued —
+      // but a real user who refreshed isn't punished for it.
       const MIN_PLAY_SECONDS = 15;
       if (playSec < MIN_PLAY_SECONDS)
-        return await flagAndReject("Play time too short — actually play the game", { minPlaySeconds: MIN_PLAY_SECONDS });
+        return res.status(400).json({ error: `Play a little longer before submitting (min ${MIN_PLAY_SECONDS}s).`, minPlaySeconds: MIN_PLAY_SECONDS, softReject: true });
 
       // GATE 2 — absolute impossible-rate ceiling (bootstrap safety net)
       // Koi bhi game realistically 500 pts/sec cross nahi karega.

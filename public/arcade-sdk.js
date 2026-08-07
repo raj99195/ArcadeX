@@ -1,7 +1,7 @@
 /**
  * ArcadeX SDK v4.0.0
- * Integrate your game with ArcadeX on BOTChain EVM
- * https://arcade-x-sand.vercel.app/sdk
+ * Integrate your game with ArcadeX (BOTChain & MST Blockchain — multi-chain EVM)
+ * https://www.playarcadex.in/sdk
  *
  * Usage:
  *   ArcadeSDK.init("YOUR_GAME_ID");
