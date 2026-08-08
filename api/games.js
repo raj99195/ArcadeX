@@ -95,6 +95,32 @@ export default async function handler(req, res) {
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
+  // ── GET sitemap.xml (SEO) ─────────────────────────────────────────────────
+  // Served at /sitemap.xml via a vercel.json rewrite. Auto-lists every approved
+  // game page + static routes so Google discovers the whole catalogue — no
+  // separate serverless function (12-function limit), always fresh.
+  if (req.method === "GET" && action === "sitemap") {
+    try {
+      const BASE = "https://www.playarcadex.in";
+      const staticRoutes = ["/", "/games", "/leaderboard", "/tournaments", "/marketplace", "/support", "/sdk", "/publish"];
+      const snap = await db.collection("games").where("status", "==", "approved").get();
+      const gamePaths = snap.docs
+        .map(d => d.data().gameId)
+        .filter(id => id != null)
+        .map(id => `/play/${id}`);
+      const today = new Date().toISOString().split("T")[0];
+      const body = [...staticRoutes, ...gamePaths].map(path => {
+        const priority = path === "/" ? "1.0" : path.startsWith("/play/") ? "0.8" : "0.6";
+        const freq     = (path === "/" || path === "/games") ? "daily" : "weekly";
+        return `  <url>\n    <loc>${BASE}${path}</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>${freq}</changefreq>\n    <priority>${priority}</priority>\n  </url>`;
+      }).join("\n");
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</urlset>`;
+      res.setHeader("Content-Type", "application/xml; charset=utf-8");
+      res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=3600");
+      return res.status(200).send(xml);
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
   // ── GET creator-games ──
   if (req.method === "GET" && action === "creator-games") {
     const user = verifyToken(req);

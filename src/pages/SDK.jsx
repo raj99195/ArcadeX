@@ -469,7 +469,7 @@ export default function SDK() {
           <H3>Step 1 — Download files</H3>
           <p style={{ fontSize: 13, color: C.muted, fontFamily: C.ui, marginBottom: 12 }}>Download both files from the Overview page:</p>
           <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, marginBottom: 20 }}>
-            {[["arcade-sdk-unity.js", "Place in WebGLBuild/ folder (same as index.html)"], ["ArcadeBridge.jslib", "Place in Assets/Plugins/WebGL/"]].map(([f, d]) => (
+            {[["arcade-sdk-unity.js", "Place in Assets/WebGLTemplates/ArcadeX/ (auto-copied to the build)"], ["ArcadeBridge.jslib", "Place in Assets/Plugins/WebGL/"]].map(([f, d]) => (
               <div key={f} style={{ display: "flex", gap: 12, padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
                 <code style={{ color: C.green, fontFamily: C.mono, fontSize: 12, minWidth: 200 }}>{f}</code>
                 <span style={{ fontSize: 12, color: C.muted, fontFamily: C.ui }}>{d}</span>
@@ -492,6 +492,12 @@ public class ArcadeManager : MonoBehaviour
     public string gameId = "YOUR_GAME_ID";   // Update after approval
     public string gameName = "My Game";
 
+    // Score / transaction events
+    public static event Action<string> OnScoreSubmittedEvent;  // txHash
+    public static event Action<string> OnScoreFailedEvent;     // error
+    public static event Action<PlayerInfo> OnPlayerInfoEvent;  // wallet address + balance
+
+    // Purchase events
     public static event Action<PurchaseResult> OnPurchaseSuccessEvent;
     public static event Action<PurchaseResult> OnPurchaseFailedEvent;
 
@@ -508,6 +514,9 @@ public class ArcadeManager : MonoBehaviour
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
         DontDestroyOnLoad(gameObject);
+
+        // Guarantee the GameObject name the SDK's SendMessage targets.
+        if (gameObject.name != "ArcadeManager") gameObject.name = "ArcadeManager";
     }
 
     void Start()
@@ -547,7 +556,27 @@ public class ArcadeManager : MonoBehaviour
 #endif
     }
 
-    // Called by arcade-sdk-unity.js via SendMessage — GameObject must be named "ArcadeManager"
+    // ─── Callbacks from arcade-sdk-unity.js (via SendMessage) ──────────────
+    // GameObject MUST be named "ArcadeManager" for these to fire.
+
+    public void OnTransactionSuccess(string txHash)
+    {
+        Debug.Log("[ArcadeX] Score on-chain: " + txHash);
+        OnScoreSubmittedEvent?.Invoke(txHash);
+    }
+
+    public void OnTransactionFailed(string error)
+    {
+        Debug.LogWarning("[ArcadeX] Score submit failed: " + error);
+        OnScoreFailedEvent?.Invoke(error);
+    }
+
+    public void OnPlayerInfoReceived(string json)
+    {
+        var info = JsonUtility.FromJson<PlayerInfo>(json);
+        OnPlayerInfoEvent?.Invoke(info);
+    }
+
     public void OnPurchaseSuccess(string json)
     {
         var data = JsonUtility.FromJson<PurchaseResult>(json);
@@ -559,6 +588,13 @@ public class ArcadeManager : MonoBehaviour
         var data = JsonUtility.FromJson<PurchaseResult>(json);
         OnPurchaseFailedEvent?.Invoke(data);
     }
+}
+
+[Serializable]
+public class PlayerInfo
+{
+    public string address;
+    public string balance;   // reward token balance (chain's native reward token)
 }
 
 [Serializable]
@@ -579,6 +615,9 @@ public class PurchaseResult
 
     void Start()
     {
+        ArcadeManager.OnScoreSubmittedEvent += HandleScoreSubmitted;
+        ArcadeManager.OnScoreFailedEvent += HandleScoreFailed;
+        ArcadeManager.OnPlayerInfoEvent += HandlePlayerInfo;
         ArcadeManager.OnPurchaseSuccessEvent += HandlePurchaseSuccess;
         ArcadeManager.OnPurchaseFailedEvent += HandlePurchaseFailed;
     }
@@ -619,6 +658,10 @@ public class PurchaseResult
     {
         Debug.LogWarning("Purchase failed: " + result.error);
     }
+
+    void HandleScoreSubmitted(string txHash) => Debug.Log("Score on-chain: " + txHash);
+    void HandleScoreFailed(string error)     => Debug.LogWarning("Score failed: " + error);
+    void HandlePlayerInfo(PlayerInfo info)   => Debug.Log("Wallet: " + info.address + " | Balance: " + info.balance);
 }`} />
         </div>
       );
