@@ -33,9 +33,7 @@ export default function App() {
 
       {/* Baaki sab */}
       <Route path="*" element={
-        !hasSelectedChain ? (
-          <ChainSelector />
-        ) : (
+        (
           <div style={{ background: "#0C0C0C", minHeight: "100vh" }}>
             <Navbar />
             <Routes>
@@ -58,6 +56,13 @@ export default function App() {
               <Route path="/campaign/admin" element={<CampaignAdmin />} />
               <Route path="/admin/mst" element={<AdminMST />} />
             </Routes>
+            {/* ChainSelector is a fixed full-screen overlay (z-9999), so it
+                covers the content for humans on first visit — preserving the
+                "pick a chain every time" flow — while the real page content and
+                its SEO title/description/schema stay in the DOM for search
+                crawlers, which have no saved chain and previously saw only the
+                selector on every URL. */}
+            {!hasSelectedChain && <ChainSelector />}
           </div>
         )
       } />

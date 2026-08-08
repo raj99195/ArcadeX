@@ -9,6 +9,7 @@ import { saveScore } from "../lib/gameService";
 import { useChain } from "../context/ChainContext";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
+import Seo from "../components/Seo";
 
 const TOURNAMENT_SCORE_ABI = [{ name: "submitTournamentScore", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tournamentId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
 const PLATFORM_ABI = [{ name: "recordPlayAndEarn", type: "function", stateMutability: "nonpayable", inputs: [{ name: "gameId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
@@ -774,6 +775,24 @@ export default function GamePlay() {
   const thumbnail = game.thumbnailUrl || game.thumbnail || game.image || null;
   const hasHelpContent = !!(game.helpContent && Object.values(game.helpContent).some(v => v && v.trim()));
 
+  // ── SEO (React 19 hoists these into <head>) ──────────────────────────────
+  const gameSlugId = game.gameId || game.id;
+  const seoDesc = (game.description
+    || `Play ${game.name} on ArcadeX — a free on-chain ${game.category || "arcade"} game. Compete on verified leaderboards and earn token rewards, instantly in your browser.`);
+  const gameJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "VideoGame",
+    name: game.name,
+    description: seoDesc.slice(0, 300),
+    url: `https://www.playarcadex.in/play/${gameSlugId}`,
+    ...(thumbnail ? { image: thumbnail } : {}),
+    ...(game.category ? { genre: game.category } : {}),
+    applicationCategory: "GameApplication",
+    operatingSystem: "Web browser",
+    offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    publisher: { "@type": "Organization", name: "ArcadeX", url: "https://www.playarcadex.in" },
+  };
+
   // ── Error card helper — called in JSX ────────────────────────────────────
   const renderErrorCard = () => {
     if (!submitError) return null;
@@ -807,6 +826,13 @@ export default function GamePlay() {
 
   return (
     <div style={{ minHeight: "calc(100vh - 54px)", background: C.bg }}>
+      <Seo
+        title={game.name}
+        description={seoDesc}
+        path={`/play/${gameSlugId}`}
+        image={thumbnail || undefined}
+        jsonLd={gameJsonLd}
+      />
       <style>{`
         @keyframes lbPulse{0%,100%{opacity:1}50%{opacity:0.3}}
         @keyframes poweredGlow{0%,100%{opacity:0.7}50%{opacity:1}}

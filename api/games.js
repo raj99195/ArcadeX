@@ -704,10 +704,42 @@ export default async function handler(req, res) {
 
   // ── POST admin-update-reward (admin-only) ──
   if (req.method === "POST" && action === "admin-update-reward") {
-    // Admin gate — sirf VITE_ADMIN_ADDRESS wala wallet reward rate badal sake.
-    // Warna koi bhi logged-in user kisi bhi game ka reward inflate kar deta.
-    const adminAddr = process.env.VITE_ADMIN_ADDRESS?.toLowerCase();
-    if (!adminAddr || user.address?.toLowerCase() !== adminAddr)
+    // Admin gate — verifies the caller's ADMIN_ROLE ON-CHAIN (no env / allowlist
+    // to maintain). Grant ADMIN_ROLE on the Platform contract and the backend
+    // respects it automatically, in sync with the on-chain gate AdminMST uses.
+    // The legacy /admin super-admin (VITE_ADMIN_ADDRESS) is still honored too.
+    const caller = user.address?.toLowerCase();
+    const superAdmin = process.env.VITE_ADMIN_ADDRESS?.toLowerCase();
+
+    const isOnChainAdmin = async (addr) => {
+      if (!addr) return false;
+      const DEFAULT_ADMIN_ROLE = "0x" + "0".repeat(64);
+      const abi = [
+        "function hasRole(bytes32 role, address account) view returns (bool)",
+        "function ADMIN_ROLE() view returns (bytes32)",
+      ];
+      // Admin on ANY configured chain's Platform can manage rates.
+      for (const chain of Object.keys(PLATFORM_ADDRESSES)) {
+        const platformAddr = PLATFORM_ADDRESSES[chain];
+        const rpc = RPC_URLS[chain];
+        if (!platformAddr || !rpc) continue;
+        try {
+          const c = new ethers.Contract(platformAddr, abi, new ethers.JsonRpcProvider(rpc));
+          // Read the role hash straight from the contract (exactly like the
+          // AdminMST gate does) so it matches no matter how it was declared.
+          const adminRole = await c.ADMIN_ROLE().catch(() => null);
+          const checks = await Promise.all([
+            adminRole ? c.hasRole(adminRole, addr).catch(() => false) : Promise.resolve(false),
+            c.hasRole(DEFAULT_ADMIN_ROLE, addr).catch(() => false),
+          ]);
+          if (checks.some(Boolean)) return true;
+        } catch (_) { /* RPC hiccup — try next chain */ }
+      }
+      return false;
+    };
+
+    const allowed = (superAdmin && caller === superAdmin) || await isOnChainAdmin(caller);
+    if (!allowed)
       return res.status(403).json({ error: "Admin only" });
 
     const { gameId, rewardRate, rewardRateNative } = req.body;

@@ -7,6 +7,7 @@ import { useEffect, useState, useRef } from "react";
 import { getScores } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { useChain } from "../context/ChainContext";
+import Seo from "../components/Seo";
 
 // ── Full-screen Snake Animation ───────────────────────────────────────────────
 function SnakeCanvas() {
@@ -230,6 +231,24 @@ export default function Home() {
       height: isMobile ? "auto" : "calc(100vh - 54px)",
       position: "relative",
     }}>
+      <Seo
+        description="Play free on-chain arcade games on ArcadeX. Compete on verified leaderboards, earn token rewards, and own your progress — no download, instant browser play on any chain."
+        path="/"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "WebSite",
+          name: "ArcadeX",
+          alternateName: "PlayArcadeX",
+          url: "https://www.playarcadex.in",
+          description: "A multi-chain Web3 arcade — play browser games, compete on-chain, and earn token rewards.",
+          publisher: { "@type": "Organization", name: "ArcadeX", url: "https://www.playarcadex.in" },
+          potentialAction: {
+            "@type": "SearchAction",
+            target: { "@type": "EntryPoint", urlTemplate: "https://www.playarcadex.in/games?q={search_term_string}" },
+            "query-input": "required name=search_term_string",
+          },
+        }}
+      />
       {/* Full-screen snake background — one snake at a time */}
       {!isMobile && <SnakeCanvas />}
 
