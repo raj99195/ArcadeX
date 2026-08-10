@@ -17,6 +17,7 @@ const PLATFORM_READ_ABI = [
   { name: "games", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "gameId", type: "uint256" }, { name: "name", type: "string" }, { name: "creator", type: "address" }, { name: "iframeUrl", type: "string" }, { name: "rewardRate", type: "uint256" }, { name: "totalPlays", type: "uint256" }, { name: "isActive", type: "bool" }] },
   { name: "playerSharePercent", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
   { name: "creatorSharePercent", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+  { name: "gameMinScore", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "", type: "uint256" }] },
 ];
 
 // ── ArcadeX SDK: GameItems (ERC-1155 — skins + power-ups, no registry) ──
@@ -118,6 +119,7 @@ export default function GamePlay() {
   const [likeCount, setLikeCount] = useState(0);
   const [playerSplit, setPlayerSplit] = useState(80);
   const [creatorSplit, setCreatorSplit] = useState(20);
+  const [minScore, setMinScore] = useState(null);   // admin-set per-game min score to earn
   const [comments, setComments] = useState([]);
   const [commentText, setCommentText] = useState("");
   const [postingComment, setPostingComment] = useState(false);
@@ -162,8 +164,16 @@ export default function GamePlay() {
       } catch (err) {
         console.warn("Could not fetch reward split, using defaults:", err.message);
       }
+      // Per-game minimum score to earn a reward (admin sets it in AdminMST →
+      // setGameMinScore on-chain). Separate try so a miss here doesn't block splits.
+      if (gameId != null) {
+        try {
+          const ms = await publicClient.readContract({ address: PLATFORM_ADDRESS, abi: PLATFORM_READ_ABI, functionName: "gameMinScore", args: [BigInt(gameId)] });
+          setMinScore(Number(ms));
+        } catch (_) {}
+      }
     })();
-  }, [PLATFORM_ADDRESS, publicClient]);
+  }, [PLATFORM_ADDRESS, publicClient, gameId]);
 
   useEffect(() => {
     if (!gameId || !address) return;
@@ -1014,6 +1024,17 @@ export default function GamePlay() {
                   </div>
                 ))}
               </div>
+              {/* Min score to claim reward — admin-set per-game (on-chain gameMinScore) */}
+              {minScore !== null && (
+                <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "rgba(0,255,136,0.06)", border: "1px solid rgba(0,255,136,0.22)", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 14 }}>🎯</span>
+                  <span style={{ fontFamily: C.raj, fontSize: 11.5, fontWeight: 700, color: "#8effc4", lineHeight: 1.35 }}>
+                    {minScore > 0
+                      ? <>Score min <b style={{ color: "#00FF88" }}>{minScore.toLocaleString()}</b> pts to claim {rewardSymbol}</>
+                      : <>No minimum — any score earns {rewardSymbol}</>}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* TX status */}
