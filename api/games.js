@@ -58,6 +58,38 @@ const PLATFORM_EVENT_ABI = [
   "event PlayRecorded(address indexed player, uint256 indexed gameId, uint256 playerReward, uint256 creatorReward)",
 ];
 
+// ── Module-scope admin gate ────────────────────────────────────────────────
+// Verifies ADMIN_ROLE / DEFAULT_ADMIN_ROLE on ANY configured Platform contract,
+// plus the legacy super-admin (VITE_ADMIN_ADDRESS). Mirrors the inline gate used
+// by admin-update-reward so every admin action agrees on who counts as admin.
+async function checkOnChainAdmin(addr) {
+  if (!addr) return false;
+  const lower = addr.toLowerCase();
+  const superAdmin = process.env.VITE_ADMIN_ADDRESS?.toLowerCase();
+  if (superAdmin && lower === superAdmin) return true;
+
+  const DEFAULT_ADMIN_ROLE = "0x" + "0".repeat(64);
+  const abi = [
+    "function hasRole(bytes32 role, address account) view returns (bool)",
+    "function ADMIN_ROLE() view returns (bytes32)",
+  ];
+  for (const chain of Object.keys(PLATFORM_ADDRESSES)) {
+    const platformAddr = PLATFORM_ADDRESSES[chain];
+    const rpc = RPC_URLS[chain];
+    if (!platformAddr || !rpc) continue;
+    try {
+      const c = new ethers.Contract(platformAddr, abi, new ethers.JsonRpcProvider(rpc));
+      const adminRole = await c.ADMIN_ROLE().catch(() => null);
+      const checks = await Promise.all([
+        adminRole ? c.hasRole(adminRole, addr).catch(() => false) : Promise.resolve(false),
+        c.hasRole(DEFAULT_ADMIN_ROLE, addr).catch(() => false),
+      ]);
+      if (checks.some(Boolean)) return true;
+    } catch (_) { /* RPC hiccup — try next chain */ }
+  }
+  return false;
+}
+
 export default async function handler(req, res) {
   cors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -753,6 +785,117 @@ export default async function handler(req, res) {
       await db.collection("games").doc(String(gameId)).update(updates);
       return res.status(200).json({ success: true });
     } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST flagged-list (admin-only) ────────────────────────────────────────
+  // Groups the `flagged` collection by player so the panel can show who's
+  // currently soft-banned (>=3 flags in the trailing 24h window).
+  if (req.method === "POST" && action === "flagged-list") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+    try {
+      const FLAG_WINDOW_MS = 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      const snap = await db.collection("flagged")
+        .orderBy("flaggedAt", "desc").limit(1000).get();
+
+      const byPlayer = {};
+      snap.docs.forEach(d => {
+        const data = d.data();
+        const p = (data.player || "").toLowerCase();
+        if (!p) return;
+        const t = data.flaggedAt?.toDate?.()?.getTime?.() ?? new Date(data.flaggedAt).getTime();
+        if (!byPlayer[p]) byPlayer[p] = { player: p, total: 0, recent: 0, lastFlaggedAt: null, reasons: {}, chains: new Set() };
+        const e = byPlayer[p];
+        e.total++;
+        if (t > now - FLAG_WINDOW_MS) e.recent++;
+        if (!e.lastFlaggedAt || t > e.lastFlaggedAt) e.lastFlaggedAt = t;
+        if (data.reason) e.reasons[data.reason] = (e.reasons[data.reason] || 0) + 1;
+        if (data.chain) e.chains.add(data.chain);
+      });
+
+      const players = Object.values(byPlayer).map(e => ({
+        player: e.player,
+        total: e.total,
+        recent: e.recent,
+        banned: e.recent >= 3,      // matches sign-score FLAG_BAN_THRESHOLD
+        lastFlaggedAt: e.lastFlaggedAt,
+        reasons: e.reasons,
+        chains: [...e.chains],
+      })).sort((a, b) => b.recent - a.recent || b.total - a.total);
+
+      return res.status(200).json({ players });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST clear-flags (admin-only) ─────────────────────────────────────────
+  // Deletes ALL flag docs for a player → immediately un-bans them (the
+  // sign-score soft-ban counts flags in a 24h window; zero flags = not banned).
+  if (req.method === "POST" && action === "clear-flags") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+    const { player } = req.body;
+    if (!player) return res.status(400).json({ error: "player required" });
+    try {
+      const target = String(player).toLowerCase();
+      const snap = await db.collection("flagged").where("player", "==", target).get();
+      if (snap.empty) return res.status(200).json({ success: true, cleared: 0 });
+
+      const docs = snap.docs;
+      let cleared = 0;
+      for (let i = 0; i < docs.length; i += 450) {   // Firestore batch cap = 500
+        const batch = db.batch();
+        docs.slice(i, i + 450).forEach(d => batch.delete(d.ref));
+        await batch.commit();
+        cleared += Math.min(450, docs.length - i);
+      }
+      return res.status(200).json({ success: true, cleared });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST admin-faucet-withdraw (admin-only, server key = faucet owner) ─────
+  // faucet.withdrawFunds is onlyOwner; the server PRIVATE_KEY is that owner
+  // (same key claim-gas uses), so an on-chain admin can trigger a withdrawal
+  // without ever holding/connecting the owner wallet in a browser.
+  if (req.method === "POST" && action === "admin-faucet-withdraw") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+    const { to, amount } = req.body;   // amount in whole MSTC (string/number)
+    if (!to || !ethers.isAddress(to))
+      return res.status(400).json({ error: "Valid 'to' address required" });
+    if (amount == null || isNaN(Number(amount)) || Number(amount) <= 0)
+      return res.status(400).json({ error: "Valid amount required" });
+    try {
+      const rpcUrl     = process.env.MST_RPC_URL;
+      const pk         = process.env.PRIVATE_KEY;
+      const faucetAddr = process.env.MST_FAUCET_ADDRESS;
+      if (!rpcUrl || !pk || !faucetAddr)
+        return res.status(503).json({ error: "Faucet not configured" });
+
+      const provider    = new ethers.JsonRpcProvider(rpcUrl);
+      const ownerWallet = new ethers.Wallet(pk, provider);
+      const faucetABI = [
+        "function withdrawFunds(address payable to, uint256 amount) external",
+        "function balance() view returns (uint256)",
+        "function owner() view returns (address)",
+      ];
+      const faucet = new ethers.Contract(faucetAddr, faucetABI, ownerWallet);
+
+      const owner = await faucet.owner();
+      if (owner.toLowerCase() !== ownerWallet.address.toLowerCase())
+        return res.status(500).json({ error: "Server key is not the faucet owner" });
+
+      const amountWei = ethers.parseEther(String(amount));
+      const bal = await faucet.balance();
+      if (amountWei > bal)
+        return res.status(400).json({ error: `Faucet balance too low (${ethers.formatEther(bal)} MSTC available)` });
+
+      const tx = await faucet.withdrawFunds(to, amountWei, { gasLimit: 120000 });
+      await tx.wait();
+      return res.status(200).json({ success: true, txHash: tx.hash, amount: String(amount), to });
+    } catch (err) {
+      return res.status(500).json({ error: err.shortMessage || err.message });
+    }
   }
 
   return res.status(400).json({ error: "Invalid action" });

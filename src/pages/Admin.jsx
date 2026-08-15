@@ -6,6 +6,7 @@ import { useChain } from "../context/ChainContext";
 import { getAllGames, approveGameInFirebase, rejectGameInFirebase } from "../lib/gameService";
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import SDKTestModal from "../components/SDKTestModal";
+import AdminOps from "../components/AdminOps";
 
 const ADMIN_ADDRESS = import.meta.env.VITE_ADMIN_ADDRESS;
 
@@ -788,6 +789,8 @@ export default function Admin() {
             })}
           </div>
         ))}
+
+        <AdminOps />
 
         <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 20, marginTop: 24 }}>
           <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#c4a0ff", marginBottom: 6 }}>🏆 Campaign Badges</div>
