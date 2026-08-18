@@ -1,5 +1,5 @@
 import { useParams, useNavigate, useLocation } from "react-router-dom";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback, memo, forwardRef } from "react";
 import { useAccount, usePublicClient } from "wagmi";
 import { writeContract, waitForTransactionReceipt, readContract } from "@wagmi/core";
 import { keccak256, toHex } from "viem";
@@ -82,6 +82,34 @@ function DiceBearAvatar({ address, style, size = 28 }) {
   );
 }
 
+// Memoized game frame — the iframe lives here so the parent's frequent post-load
+// re-renders (stats, comments, likes, splits) never touch the iframe DOM node.
+// On iOS Safari, re-inserting an iframe during reconciliation reloads it, which
+// is what caused the 2-3 restarts; memo + a single stable element stops that.
+// Fullscreen restyles THIS same element instead of mounting a second iframe.
+const GameFrame = memo(forwardRef(function GameFrame({ url, title, isMobile, isFullscreen, onToggleFullscreen }, ref) {
+  const containerStyle = isFullscreen
+    ? { position: "fixed", inset: 0, zIndex: 9999, background: "#000", display: "flex", flexDirection: "column" }
+    : { position: "relative" };
+  const iframeStyle = isFullscreen
+    ? { flex: 1, width: "100%", border: "none", display: "block" }
+    : { width: "100%", height: isMobile ? "75vw" : "calc(100vh - 54px - 160px)", minHeight: isMobile ? 300 : 480, border: "none", display: "block" };
+  const btnBase = { padding: "6px 12px", background: "rgba(0,0,0,0.8)", border: `1px solid ${C.border2}`, borderRadius: 7, color: "#a67fff", fontSize: 11, cursor: "pointer", fontFamily: C.raj, fontWeight: 700, backdropFilter: "blur(8px)", display: "flex", alignItems: "center", gap: 5 };
+  return (
+    <div style={containerStyle}>
+      <iframe ref={ref} src={url}
+        style={iframeStyle}
+        allow="fullscreen" allowFullScreen title={title} />
+      <button onClick={onToggleFullscreen} style={isFullscreen
+        ? { ...btnBase, position: "absolute", top: 12, right: 12, zIndex: 10000 }
+        : { ...btnBase, position: "absolute", bottom: 10, right: 10 }}>
+        <span>{isFullscreen ? "✕" : "⛶"}</span> {isFullscreen ? "Exit" : "Fullscreen"}
+      </button>
+    </div>
+  );
+}));
+
+
 export default function GamePlay() {
   const { gameId } = useParams();
   const location = useLocation();
@@ -129,6 +157,19 @@ export default function GamePlay() {
   const submittingRef = useRef(false);
   const sessionTokenRef = useRef(null); // SH0009: gameplay session token
   const { balance } = useArcadeBalance();
+
+  // SH0003: native fullscreen on desktop; iOS blocks iframe fullscreen so we fall
+  // back to CSS "fake" fullscreen. Stable identity (refs + setter only) so the
+  // memoized GameFrame never re-renders on toggle — the iframe won't reload.
+  const handleToggleFullscreen = useCallback(() => {
+    const iframe = iframeRef.current;
+    const nativeFS = iframe?.requestFullscreen || iframe?.webkitRequestFullscreen;
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (!isIOS && nativeFS) {
+      try { nativeFS.call(iframe); return; } catch (e) { /* fall back to fake FS */ }
+    }
+    setIsFakeFullscreen(fs => !fs);
+  }, []);
 
   useEffect(() => {
     const h = () => setIsMobile(window.innerWidth <= 768);
@@ -916,43 +957,14 @@ export default function GamePlay() {
           {/* ── GAME IFRAME ── */}
           <div style={{ background: C.card, border: `1px solid ${C.border2}`, borderRadius: 14, overflow: "hidden", position: "relative" }}>
             {game.iframeUrl && !game.iframeUrl.includes("your-unity-game") ? (
-              <>
-                <iframe ref={iframeRef} src={game.iframeUrl}
-                  style={{ width: "100%", height: isMobile ? "75vw" : "calc(100vh - 54px - 160px)", minHeight: isMobile ? 300 : 480, border: "none", display: "block" }}
-                  allow="fullscreen" allowFullScreen title={game.name} />
-                {/* SH0003: iOS Safari blocks iframe.requestFullscreen entirely.
-                    Fake fullscreen: fixed-position overlay covering full viewport.
-                    Works on iOS, Android, and desktop. ESC key also exits on desktop. */}
-                <button onClick={() => {
-                  const iframe = iframeRef.current;
-                  // Try native fullscreen first (desktop Chrome/Firefox/Edge)
-                  const nativeFS = iframe?.requestFullscreen || iframe?.webkitRequestFullscreen;
-                  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-                  if (!isIOS && nativeFS) {
-                    try {
-                      nativeFS.call(iframe);
-                      return;
-                    } catch (e) { /* fallthrough to fake fullscreen */ }
-                  }
-                  // iOS / native FS unavailable → CSS fake fullscreen
-                  setIsFakeFullscreen(fs => !fs);
-                }} style={{ position: "absolute", bottom: 10, right: 10, padding: "6px 12px", background: "rgba(0,0,0,0.8)", border: `1px solid ${C.border2}`, borderRadius: 7, color: "#a67fff", fontSize: 11, cursor: "pointer", fontFamily: C.raj, fontWeight: 700, backdropFilter: "blur(8px)", display: "flex", alignItems: "center", gap: 5 }}>
-                  <span>{isFakeFullscreen ? "✕" : "⛶"}</span> {isFakeFullscreen ? "Exit" : "Fullscreen"}
-                </button>
-
-                {/* Fake fullscreen overlay — fixed, full viewport, highest z-index */}
-                {isFakeFullscreen && (
-                  <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "#000", display: "flex", flexDirection: "column" }}>
-                    <iframe src={game.iframeUrl}
-                      style={{ flex: 1, width: "100%", border: "none", display: "block" }}
-                      allow="fullscreen" allowFullScreen title={game.name} />
-                    <button onClick={() => setIsFakeFullscreen(false)}
-                      style={{ position: "absolute", top: 12, right: 12, padding: "6px 14px", background: "rgba(0,0,0,0.85)", border: `1px solid ${C.border2}`, borderRadius: 7, color: "#a67fff", fontSize: 12, cursor: "pointer", fontFamily: C.raj, fontWeight: 700, zIndex: 10000 }}>
-                      ✕ Exit
-                    </button>
-                  </div>
-                )}
-              </>
+              <GameFrame
+                ref={iframeRef}
+                url={game.iframeUrl}
+                title={game.name}
+                isMobile={isMobile}
+                isFullscreen={isFakeFullscreen}
+                onToggleFullscreen={handleToggleFullscreen}
+              />
             ) : (
               <div style={{ height: isMobile ? "75vw" : "calc(100vh - 54px - 160px)", minHeight: isMobile ? 300 : 480, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
                 <div style={{ fontSize: 56, filter: "drop-shadow(0 0 20px rgba(123,47,255,0.5))" }}>🎮</div>
