@@ -387,7 +387,9 @@ export default function Navbar() {
             onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(0,212,255,0.22)"; e.currentTarget.style.background = "rgba(0,212,255,0.08)"; }}
           >
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00d4ff", flexShrink: 0 }} />
-            {!isMobile && <span style={{ color: "#00d4ff", fontSize: 11, fontWeight: 700, letterSpacing: "0.3px" }}>{chainName}</span>}
+            <span style={{ color: "#00d4ff", fontSize: isMobile ? 10 : 11, fontWeight: 700, letterSpacing: "0.3px", whiteSpace: "nowrap" }}>
+              {isMobile ? (chainName || "").split(" ")[0] : chainName}
+            </span>
             <svg width="8" height="8" viewBox="0 0 9 9" style={{ opacity: 0.6 }}>
               <path d="M1.5 3L4.5 6L7.5 3" stroke="#00d4ff" strokeWidth="1.2" fill="none" strokeLinecap="round" />
             </svg>
@@ -395,7 +397,7 @@ export default function Navbar() {
         )}
 
         {/* 2. REWARD BALANCE — clickable → earnings panel */}
-        {isConnected && balance !== null && (
+        {isConnected && balance !== null && !(isMobile && chainKey === "mst" && !faucetClaimed && Number(balance) === 0) && (
           <div
             onClick={handleEarningsOpen}
             title="View earning history"
@@ -440,7 +442,7 @@ export default function Navbar() {
               whiteSpace: "nowrap",
             }}
           >
-            ⛽ {isMobile ? "0.1 MSTC" : "Claim 0.1 MSTC"}
+            ⛽ {isMobile ? "Free Gas" : "Claim 0.1 MSTC"}
           </button>
         )}
 
@@ -486,23 +488,7 @@ export default function Navbar() {
         {/* Mobile: wallet icon + hamburger */}
         {isMobile && (
           <>
-            {isConnected ? (
-              <button
-                onClick={copyAddress}
-                title={copied ? "Copied!" : "Copy address"}
-                style={{
-                  padding: "5px 10px",
-                  background: copied ? "rgba(0,255,136,0.1)" : "rgba(123,47,255,0.08)",
-                  border: copied ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(123,47,255,0.2)",
-                  borderRadius: 6,
-                  color: copied ? "#00FF88" : "#a67fff",
-                  fontSize: 10, cursor: "pointer", fontFamily: "monospace",
-                  transition: "all 0.2s",
-                }}
-              >
-                {copied ? "✓" : shortAddress(address)}
-              </button>
-            ) : (
+            {!isConnected && (
               <button onClick={handleConnect} style={{ padding: "6px 12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
                 Connect
               </button>
@@ -528,6 +514,16 @@ export default function Navbar() {
                       {label}
                     </div>
                   ))}
+                  {isConnected && (
+                    <div
+                      onClick={copyAddress}
+                      title={copied ? "Copied!" : "Tap to copy address"}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 16px", fontSize: 12, cursor: "pointer", borderTop: "1px solid rgba(123,47,255,0.12)", background: copied ? "rgba(0,255,136,0.08)" : "transparent", color: copied ? "#00FF88" : "#b8a8e0", fontFamily: "monospace", transition: "background 0.15s" }}
+                    >
+                      <span>{copied ? "Copied!" : shortAddress(address)}</span>
+                      <span style={{ fontSize: 10, color: copied ? "#00FF88" : "#8866cc", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px" }}>{copied ? "✓" : "COPY"}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

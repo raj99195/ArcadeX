@@ -1,7 +1,7 @@
 // src/pages/ChainSelector.jsx
 import { useChain } from "../context/ChainContext";
 import { useSwitchChain, useAccount } from "wagmi";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const P = {
   bg: "#08070f",
@@ -12,9 +12,6 @@ const P = {
   orb: "'Orbitron', sans-serif",
 };
 
-// Per-chain accent color — matched to the BOTChain (cyan), MST (red/pink),
-// Somnia (purple) treatment in the reference mockup. Falls back to purple
-// for any chain not explicitly listed here.
 const ACCENTS = {
   botchain: "#00e0c8",
   mst: "#ff2f5e",
@@ -31,7 +28,7 @@ const FEATURES = [
   { icon: "🌐", title: "Community Driven", desc: "Players. Creators. You." },
 ];
 
-function ChainCard({ chain, onSelect, isSwitching }) {
+function ChainCard({ chain, onSelect, isSwitching, isMobile }) {
   const isLive = chain.status === "live";
   const [logoFailed, setLogoFailed] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -46,6 +43,128 @@ function ChainCard({ chain, onSelect, isSwitching }) {
 
   const showLogo = chain.logo && !logoFailed;
 
+  const iconInner = isSwitching ? (
+    <div
+      style={{
+        width: isMobile ? 20 : 30,
+        height: isMobile ? 20 : 30,
+        borderRadius: "50%",
+        border: "3px solid rgba(255,255,255,0.15)",
+        borderTopColor: accent,
+        animation: "chainSpin 0.7s linear infinite",
+      }}
+    />
+  ) : showLogo ? (
+    <img
+      src={chain.logo}
+      alt={chain.name}
+      style={{
+        width: "56%",
+        height: "56%",
+        objectFit: "contain",
+        filter: isLive ? "none" : "grayscale(1)",
+        display: "block",
+      }}
+      onError={() => setLogoFailed(true)}
+    />
+  ) : (
+    <span
+      style={{
+        fontFamily: P.orb,
+        fontWeight: 700,
+        fontSize: isMobile ? 18 : 30,
+        color: isLive ? accent : "rgba(255,255,255,0.25)",
+      }}
+    >
+      {initials}
+    </span>
+  );
+
+  // ── MOBILE: compact full-width horizontal row ──
+  if (isMobile) {
+    return (
+      <button
+        onClick={() => isLive && !isSwitching && onSelect(chain)}
+        disabled={!isLive || isSwitching}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          padding: "13px 15px",
+          borderRadius: 14,
+          textAlign: "left",
+          background: isLive
+            ? `linear-gradient(120deg, ${accent}14 0%, rgba(10,8,18,0.7) 72%)`
+            : "rgba(255,255,255,0.02)",
+          border: `1px solid ${isLive ? accent + "44" : "rgba(255,255,255,0.06)"}`,
+          cursor: isLive && !isSwitching ? "pointer" : "not-allowed",
+          transition: "all 0.2s ease",
+        }}
+      >
+        <div
+          style={{
+            width: 46,
+            height: 46,
+            flexShrink: 0,
+            borderRadius: "50%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: `${accent}14`,
+            border: `2px solid ${accent}55`,
+          }}
+        >
+          {iconInner}
+        </div>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontFamily: P.raj,
+              fontWeight: 700,
+              fontSize: 17,
+              lineHeight: 1.15,
+              color: isLive ? "#fff" : "rgba(255,255,255,0.4)",
+            }}
+          >
+            {chain.name}
+          </div>
+          <div
+            style={{
+              fontFamily: P.raj,
+              fontWeight: 700,
+              fontSize: 12,
+              marginTop: 3,
+              color: isLive ? accent : "rgba(255,255,255,0.25)",
+            }}
+          >
+            Earn <span style={{ fontWeight: 800 }}>{chain.rewardToken}</span>
+          </div>
+        </div>
+
+        <span
+          style={{
+            flexShrink: 0,
+            fontFamily: P.raj,
+            fontWeight: 700,
+            fontSize: 12,
+            letterSpacing: "0.5px",
+            textTransform: "uppercase",
+            color: isLive ? accent : "rgba(255,255,255,0.3)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {!isLive ? "Soon" : isSwitching ? "..." : <>Select <span>→</span></>}
+        </span>
+      </button>
+    );
+  }
+
+  // ── DESKTOP: original vertical card ──
   return (
     <div
       onMouseEnter={() => isLive && setHovered(true)}
@@ -65,7 +184,6 @@ function ChainCard({ chain, onSelect, isSwitching }) {
         transition: "all 0.3s ease",
       }}
     >
-      {/* Icon circle */}
       <div
         style={{
           width: 96,
@@ -80,45 +198,9 @@ function ChainCard({ chain, onSelect, isSwitching }) {
           boxShadow: isLive ? `0 0 30px ${accent}22` : "none",
         }}
       >
-        {isSwitching ? (
-          <div
-            style={{
-              width: 30,
-              height: 30,
-              borderRadius: "50%",
-              border: "3px solid rgba(255,255,255,0.15)",
-              borderTopColor: accent,
-              animation: "chainSpin 0.7s linear infinite",
-            }}
-          />
-        ) : showLogo ? (
-          <img
-            src={chain.logo}
-            alt={chain.name}
-            style={{
-              width: "56%",
-              height: "56%",
-              objectFit: "contain",
-              filter: isLive ? "none" : "grayscale(1)",
-              display: "block",
-            }}
-            onError={() => setLogoFailed(true)}
-          />
-        ) : (
-          <span
-            style={{
-              fontFamily: P.orb,
-              fontWeight: 700,
-              fontSize: 30,
-              color: isLive ? accent : "rgba(255,255,255,0.25)",
-            }}
-          >
-            {initials}
-          </span>
-        )}
+        {iconInner}
       </div>
 
-      {/* Name */}
       <div
         style={{
           fontFamily: P.raj,
@@ -131,10 +213,8 @@ function ChainCard({ chain, onSelect, isSwitching }) {
         {chain.name}
       </div>
 
-      {/* Divider */}
       <div style={{ width: 36, height: 2, background: accent, opacity: isLive ? 1 : 0.4, margin: "0 auto 12px", borderRadius: 2 }} />
 
-      {/* Reward token */}
       <div
         style={{
           fontFamily: P.raj,
@@ -147,7 +227,6 @@ function ChainCard({ chain, onSelect, isSwitching }) {
         Earn <span style={{ fontWeight: 800 }}>{chain.rewardToken}</span>
       </div>
 
-      {/* CTA */}
       <button
         onClick={() => isLive && !isSwitching && onSelect(chain)}
         disabled={!isLive || isSwitching}
@@ -185,25 +264,28 @@ export default function ChainSelector() {
   const { switchChainAsync } = useSwitchChain();
   const [switchingKey, setSwitchingKey] = useState(null);
   const [error, setError] = useState("");
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth <= 768 : false
+  );
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const handleSelect = async (chain) => {
     setError("");
     setSwitchingKey(chain.key);
     try {
-      // Always attempt to add/switch the chain in MetaMask first — whether
-      // connected or not. This ensures MetaMask is already on the correct
-      // chain before AppKit's wallet-connect flow runs, preventing AppKit
-      // from defaulting to BOTChain (wagmiNetworks[0]) on first visit.
       if (window.ethereum) {
         const chainIdHex = "0x" + chain.chainId.toString(16);
         try {
-          // Try switching first (works if chain already added)
           await window.ethereum.request({
             method: "wallet_switchEthereumChain",
             params: [{ chainId: chainIdHex }],
           });
         } catch (switchErr) {
-          // 4902 = chain not added yet — add it
           if (switchErr.code === 4902 || switchErr.code === -32603) {
             await window.ethereum.request({
               method: "wallet_addEthereumChain",
@@ -221,8 +303,6 @@ export default function ChainSelector() {
         }
       }
 
-      // If already connected via wagmi, also switch through wagmi so
-      // useAccount()/useChainId() hooks update correctly
       if (isConnected) {
         await switchChainAsync({ chainId: chain.chainId });
       }
@@ -249,8 +329,8 @@ export default function ChainSelector() {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
+        justifyContent: isMobile ? "flex-start" : "center",
+        padding: isMobile ? "28px 18px 40px" : 24,
         overflowY: "auto",
       }}
     >
@@ -258,7 +338,6 @@ export default function ChainSelector() {
         @keyframes chainSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
 
-      {/* Background glow */}
       <div
         style={{
           position: "absolute", inset: 0, pointerEvents: "none",
@@ -266,20 +345,19 @@ export default function ChainSelector() {
         }}
       />
 
-      {/* Header */}
-      <div style={{ textAlign: "center", marginBottom: 48, position: "relative" }}>
+      <div style={{ textAlign: "center", marginBottom: isMobile ? 26 : 48, position: "relative" }}>
         <div
           style={{
             fontSize: 11, fontFamily: P.raj, fontWeight: 700,
             color: P.purple, letterSpacing: "4px", textTransform: "uppercase",
-            marginBottom: 14,
+            marginBottom: isMobile ? 10 : 14,
           }}
         >
           ArcadeX
         </div>
         <h1
           style={{
-            fontFamily: P.orb, fontWeight: 700, fontSize: 44,
+            fontFamily: P.orb, fontWeight: 700, fontSize: isMobile ? 27 : 44,
             color: "#fff", margin: 0, letterSpacing: "1px", lineHeight: 1.15,
             textTransform: "uppercase",
           }}
@@ -298,24 +376,25 @@ export default function ChainSelector() {
         </h1>
         <p
           style={{
-            fontSize: 14, color: "rgba(255,255,255,0.45)", fontFamily: P.raj,
-            margin: "12px 0 0", fontWeight: 500,
+            fontSize: isMobile ? 13 : 14, color: "rgba(255,255,255,0.45)", fontFamily: P.raj,
+            margin: "10px 0 0", fontWeight: 500,
           }}
         >
           Select a blockchain to start playing and earning
         </p>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 18 }}>
-          <div style={{ width: 40, height: 2, background: `linear-gradient(90deg, ${P.purple}, transparent)`, borderRadius: 2 }} />
-          <div style={{ width: 4, height: 4, borderRadius: "50%", background: P.purple }} />
-          <div style={{ width: 4, height: 4, borderRadius: "50%", background: "rgba(123,47,255,0.4)" }} />
-        </div>
+        {!isMobile && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 18 }}>
+            <div style={{ width: 40, height: 2, background: `linear-gradient(90deg, ${P.purple}, transparent)`, borderRadius: 2 }} />
+            <div style={{ width: 4, height: 4, borderRadius: "50%", background: P.purple }} />
+            <div style={{ width: 4, height: 4, borderRadius: "50%", background: "rgba(123,47,255,0.4)" }} />
+          </div>
+        )}
       </div>
 
-      {/* Error */}
       {error && (
         <div
           style={{
-            marginBottom: 28, padding: "10px 20px", borderRadius: 8,
+            marginBottom: 20, padding: "10px 20px", borderRadius: 8,
             background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.25)",
             color: "#ff8080", fontFamily: P.raj, fontSize: 13, fontWeight: 600,
             maxWidth: 420, textAlign: "center", position: "relative",
@@ -325,16 +404,18 @@ export default function ChainSelector() {
         </div>
       )}
 
-      {/* Chain cards */}
       <div
         style={{
           display: "flex",
-          gap: 24,
+          flexDirection: isMobile ? "column" : "row",
+          gap: isMobile ? 12 : 24,
           flexWrap: "wrap",
           justifyContent: "center",
-          maxWidth: 900,
+          alignItems: "stretch",
+          width: isMobile ? "100%" : "auto",
+          maxWidth: isMobile ? 440 : 900,
           position: "relative",
-          marginBottom: 40,
+          marginBottom: isMobile ? 28 : 40,
         }}
       >
         {allChains.map((chain) => (
@@ -343,19 +424,19 @@ export default function ChainSelector() {
             chain={chain}
             onSelect={handleSelect}
             isSwitching={switchingKey === chain.key}
+            isMobile={isMobile}
           />
         ))}
       </div>
 
-      {/* Feature strip */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          gap: 20,
+          gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: isMobile ? 12 : 20,
           width: "100%",
-          maxWidth: 1000,
-          padding: "24px 32px",
+          maxWidth: isMobile ? 440 : 1000,
+          padding: isMobile ? "16px 18px" : "24px 32px",
           borderRadius: 16,
           border: `1px solid ${P.border}`,
           background: "rgba(255,255,255,0.02)",
@@ -363,20 +444,20 @@ export default function ChainSelector() {
         }}
       >
         {FEATURES.map((f) => (
-          <div key={f.title} style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div key={f.title} style={{ display: "flex", alignItems: "center", gap: isMobile ? 10 : 14 }}>
             <div
               style={{
-                width: 42, height: 42, borderRadius: "50%", flexShrink: 0,
+                width: isMobile ? 34 : 42, height: isMobile ? 34 : 42, borderRadius: "50%", flexShrink: 0,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 background: "rgba(123,47,255,0.1)", border: `1px solid ${P.purple}33`,
-                fontSize: 18,
+                fontSize: isMobile ? 15 : 18,
               }}
             >
               {f.icon}
             </div>
             <div>
-              <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 14, color: "#fff" }}>{f.title}</div>
-              <div style={{ fontFamily: P.raj, fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{f.desc}</div>
+              <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: isMobile ? 12 : 14, color: "#fff" }}>{f.title}</div>
+              {!isMobile && <div style={{ fontFamily: P.raj, fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{f.desc}</div>}
             </div>
           </div>
         ))}

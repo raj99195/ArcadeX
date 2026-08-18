@@ -161,6 +161,25 @@ export default function Home() {
     setTimeout(() => { setPage(clamped); setVisible(true); }, 280);
   };
 
+  // ── Touch swipe for the featured carousel (mobile) ──
+  const swipeRef = useRef({ x: 0, y: 0, t: 0 });
+  const onCarouselTouchStart = (e) => {
+    const t = e.touches[0];
+    swipeRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+  };
+  const onCarouselTouchEnd = (e) => {
+    if (totalPages <= 1) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - swipeRef.current.x;
+    const dy = t.clientY - swipeRef.current.y;
+    const dt = Date.now() - swipeRef.current.t;
+    // Horizontal, far enough, quick enough, and not a vertical scroll.
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.4 && dt < 800) {
+      if (dx < 0) goTo(page + 1);   // swipe left → next
+      else goTo(page - 1);          // swipe right → prev
+    }
+  };
+
   useEffect(() => {
     getScores().then(setScores).catch(() => {});
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
@@ -585,6 +604,8 @@ export default function Home() {
             overflow: "hidden",
           }}
             onWheel={e => { if (!isMobile) { e.preventDefault(); if (e.deltaY > 0) goTo(page + 1); else goTo(page - 1); } }}
+            onTouchStart={onCarouselTouchStart}
+            onTouchEnd={onCarouselTouchEnd}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
               <span style={{ fontSize: 10, color: "rgba(210,185,255,0.8)", textTransform: "uppercase", letterSpacing: "2px", fontWeight: 700, fontFamily: "'Rajdhani',sans-serif" }}>
