@@ -498,22 +498,23 @@ export default async function handler(req, res) {
       if (rate > ABSOLUTE_MAX_RATE)
         return await flagAndReject("Impossible score rate", { absoluteMaxRate: ABSOLUTE_MAX_RATE });
 
-      // GATE 3 — self-learning anomaly, anchored on the BEST legit rate seen,
-      // not just the mean. A skilled run legitimately beats the average, so a
-      // flat mean*3 was punishing good players (worse when the average is
-      // dragged low by short/low plays or score-resets). Flag only when a
-      // submission blows past BOTH the learned mean AND the best legit rate
-      // this game has ever recorded — a true outlier. GATE 2 (impossible rate)
-      // stays the hard cap for actual cheats.
-      const ANOMALY_AVG_MULT = 6;   // must exceed 6x the learned mean rate, AND
-      const ANOMALY_MAX_MULT = 2;   // must exceed 2x the best legit rate ever seen
-      if (
-        count >= LEARN_SAMPLES && avgRate &&
-        rate > avgRate * ANOMALY_AVG_MULT &&
-        rate > (maxRate || avgRate) * ANOMALY_MAX_MULT
-      ) {
-        return await flagAndReject("Score anomaly — far above normal for this game", { learnedAvgRate: avgRate, learnedMaxRate: maxRate });
-      }
+      // GATE 3 — self-learning anomaly. ⚠️ TEMPORARILY DISABLED.
+      // The rate metric (score / playSec) is unreliable: playSec is measured
+      // from session creation (page open), not from actual gameplay start, so
+      // idle time skews it — this gate was mass-flagging legit players. Until
+      // playSec is measured from real gameplay, GATE 3 neither flags nor blocks.
+      // GATE 2 (impossible >500 pts/sec) remains the hard cheat cap. We still
+      // roll the learned averages forward below so GATE 3 can be re-enabled
+      // cleanly once the playSec fix lands.
+      const ANOMALY_AVG_MULT = 6;   // kept for the average-poisoning guard below
+      // const ANOMALY_MAX_MULT = 2;
+      // if (
+      //   count >= LEARN_SAMPLES && avgRate &&
+      //   rate > avgRate * ANOMALY_AVG_MULT &&
+      //   rate > (maxRate || avgRate) * ANOMALY_MAX_MULT
+      // ) {
+      //   return await flagAndReject("Score anomaly — far above normal for this game", { learnedAvgRate: avgRate, learnedMaxRate: maxRate });
+      // }
 
       // Legit submission → roll BOTH averages forward (skip rate outliers so a
       // near-miss cheat doesn't poison the learned norms).
