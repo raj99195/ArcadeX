@@ -475,7 +475,7 @@ export default async function handler(req, res) {
       // its own normal score-rate AND typical play duration from real plays.
       const statRef  = db.collection("gameStats").doc(String(gameId));
       const statSnap = await statRef.get();
-      const { avgRate = null, avgPlaySec = null, count = 0 } = statSnap.exists ? statSnap.data() : {};
+      const { avgRate = null, avgPlaySec = null, maxRate = null, count = 0 } = statSnap.exists ? statSnap.data() : {};
       const LEARN_SAMPLES = 20;   // plays needed before learned thresholds kick in
 
       // GATE 1 — self-learning minimum play time. SOFT signal (no flag/ban).
@@ -498,19 +498,36 @@ export default async function handler(req, res) {
       if (rate > ABSOLUTE_MAX_RATE)
         return await flagAndReject("Impossible score rate", { absoluteMaxRate: ABSOLUTE_MAX_RATE });
 
-      // GATE 3 — self-learning per-game rate. After LEARN_SAMPLES plays, any
-      // submission > 3x the learned average rate → flag (genuine anomaly).
-      if (count >= LEARN_SAMPLES && avgRate && rate > avgRate * 3)
-        return await flagAndReject("Score anomaly — far above normal for this game", { learnedAvgRate: avgRate });
+      // GATE 3 — self-learning anomaly. ⚠️ TEMPORARILY DISABLED.
+      // The rate metric (score / playSec) is unreliable: playSec is measured
+      // from session creation (page open), not from actual gameplay start, so
+      // idle time skews it — this gate was mass-flagging legit players. Until
+      // playSec is measured from real gameplay, GATE 3 neither flags nor blocks.
+      // GATE 2 (impossible >500 pts/sec) remains the hard cheat cap. We still
+      // roll the learned averages forward below so GATE 3 can be re-enabled
+      // cleanly once the playSec fix lands.
+      const ANOMALY_AVG_MULT = 6;   // kept for the average-poisoning guard below
+      // const ANOMALY_MAX_MULT = 2;
+      // if (
+      //   count >= LEARN_SAMPLES && avgRate &&
+      //   rate > avgRate * ANOMALY_AVG_MULT &&
+      //   rate > (maxRate || avgRate) * ANOMALY_MAX_MULT
+      // ) {
+      //   return await flagAndReject("Score anomaly — far above normal for this game", { learnedAvgRate: avgRate, learnedMaxRate: maxRate });
+      // }
 
       // Legit submission → roll BOTH averages forward (skip rate outliers so a
       // near-miss cheat doesn't poison the learned norms).
-      const withinNormal = !avgRate || rate <= avgRate * 3;
+      // Legit submission → roll averages forward. Skip rate outliers (beyond the
+      // avg multiplier) so a near-miss cheat can't poison the learned norms, and
+      // track the best legit rate so the anomaly ceiling self-calibrates.
+      const withinNormal = !avgRate || rate <= avgRate * ANOMALY_AVG_MULT;
       if (withinNormal) {
         const newCount   = count + 1;
         const newAvgRate = avgRate    ? (avgRate * count + rate) / newCount       : rate;
         const newAvgPlay = avgPlaySec ? (avgPlaySec * count + playSec) / newCount : playSec;
-        await statRef.set({ avgRate: newAvgRate, avgPlaySec: newAvgPlay, count: newCount, lastUpdated: new Date() }, { merge: true });
+        const newMaxRate = Math.max(maxRate || 0, rate);
+        await statRef.set({ avgRate: newAvgRate, avgPlaySec: newAvgPlay, maxRate: newMaxRate, count: newCount, lastUpdated: new Date() }, { merge: true });
       }
       // ═══════════════════════════════════════════════════════════════════════
       // END LAYER 1
