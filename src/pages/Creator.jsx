@@ -15,6 +15,7 @@ import { useChain } from "../context/ChainContext";
 
 const PLATFORM_ABI = [
   { name: "initCreator", type: "function", stateMutability: "nonpayable", inputs: [{ name: "creator", type: "address" }], outputs: [] },
+  { name: "creators", type: "function", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ name: "creator", type: "address" }, { name: "totalEarned", type: "uint256" }, { name: "gamesPublished", type: "uint256" }, { name: "isVerified", type: "bool" }] },
   { name: "registerGame", type: "function", stateMutability: "nonpayable", inputs: [{ name: "name", type: "string" }, { name: "iframeUrl", type: "string" }, { name: "rewardRate", type: "uint256" }], outputs: [] },
   { name: "getTotalGames", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
   { name: "getCreatorStats", type: "function", stateMutability: "view", inputs: [{ name: "creator", type: "address" }], outputs: [{ name: "totalEarned", type: "uint256" }, { name: "gamesPublished", type: "uint256" }, { name: "isVerified", type: "bool" }] },
@@ -221,6 +222,9 @@ export default function Creator() {
   const [usernameChecking, setUsernameChecking] = useState(false);
   const [mintLoading, setMintLoading] = useState(false);
   const [mintError, setMintError] = useState("");
+  const [isInitialized, setIsInitialized] = useState(null);
+  const [initLoading, setInitLoading] = useState(false);
+  const [initError, setInitError] = useState("");
 
   const categories = [
     "Action", "Adventure", "Arcade", "Platformer", "Runner", "Shooter", "Fighting",
@@ -270,8 +274,18 @@ export default function Creator() {
         tokenId: Number(tokenId) 
       });
       setCreatorStatus("approved");
+      // On-chain Platform init check (creators mapping). NFT minted but
+      // initCreator not run => creator can't publish until setup completes.
+      try {
+        const cp = await publicClient.readContract({
+          address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
+          functionName: "creators", args: [address],
+        });
+        setIsInitialized(!!(cp && cp[0] && cp[0] !== "0x0000000000000000000000000000000000000000"));
+      } catch { setIsInitialized(false); }
     } else {
       setNftProfile(null);
+      setIsInitialized(null);
     }
   } catch (err) { console.error(err); }
 };
@@ -324,7 +338,9 @@ export default function Creator() {
     setMintError("");
     setMintLoading(true);
     try {
-      // 1. Mint NFT — gas estimated dynamically per chain
+      // 1. Mint NFT — the ONLY mandatory transaction. Once this confirms the
+      //    wallet is a creator on-chain; Platform init below is a separate step
+      //    the user can complete now or later from the setup panel.
       const mintArgs = [username, selectedStyle];
       const mintGas = await getGasWithBuffer(publicClient, {
         address: CREATOR_NFT_ADDRESS, abi: NFT_ABI,
@@ -340,31 +356,59 @@ export default function Creator() {
       });
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
-      // 2. initCreator on Platform — gas estimated dynamically per chain
-      const initArgs = [address];
-      const initGas = await getGasWithBuffer(publicClient, {
-        address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
-        functionName: "initCreator", args: initArgs, account: address,
-      });
-      await writeContract(wagmiAdapter.wagmiConfig, {
-        address: PLATFORM_ADDRESS,
-        abi: PLATFORM_ABI,
-        functionName: "initCreator",
-        args: initArgs,
-        gas: initGas,
-        chainId: CHAIN_ID,
-      });
-
-      // 3. Save to Firebase
-      await registerCreator({ address, displayName: username });
-
-      // 4. Refresh
+      // NFT exists now — refresh so UI reflects "creator, pending setup".
       await checkNFT();
-      setCreatorStatus("approved");
+
+      // 2. Try to finish setup right away (initCreator + Firebase). If the user
+      //    rejects it, completeInit swallows the error and leaves them on the
+      //    "Complete Setup" panel — publishing stays locked until they run it.
+      await completeInit(username);
     } catch (err) {
       console.error(err);
-      setMintError("Transaction failed: " + err.message);
+      setMintError("Transaction failed: " + (err.shortMessage || err.message));
     } finally { setMintLoading(false); }
+  };
+
+  // Completes creator setup: initCreator on Platform (user tx) + Firebase record.
+  // Callable from the mint flow AND the "Complete Setup" panel, any time. Safe to
+  // re-run: skips initCreator if already initialized, treats "Already registered"
+  // as success, and registerCreator upserts.
+  const completeInit = async (nameOverride) => {
+    const displayName = nameOverride || nftProfile?.username || username;
+    setInitError("");
+    setInitLoading(true);
+    try {
+      if (isInitialized !== true) {
+        try {
+          const initGas = await getGasWithBuffer(publicClient, {
+            address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
+            functionName: "initCreator", args: [address], account: address,
+          });
+          const initHash = await writeContract(wagmiAdapter.wagmiConfig, {
+            address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
+            functionName: "initCreator", args: [address],
+            gas: initGas, chainId: CHAIN_ID,
+          });
+          await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash: initHash });
+        } catch (e) {
+          // Already initialized on-chain? Treat as done. Anything else re-throws.
+          if (!/already registered/i.test(e.shortMessage || e.message || "")) throw e;
+        }
+      }
+
+      // Firebase profile (idempotent upsert)
+      await registerCreator({ address, displayName });
+
+      // Refresh on-chain + Firebase status → unlocks the dashboard.
+      await checkCreatorStatus();
+      return true;
+    } catch (err) {
+      console.error(err);
+      setInitError(err.shortMessage || err.message || "Setup failed. Please try again.");
+      return false;
+    } finally {
+      setInitLoading(false);
+    }
   };
 
   const fetchMyGames = async () => {
@@ -724,6 +768,45 @@ const submitGame = async () => {
       </div>
     </div>
   );
+
+  // STATE 2.5: Has NFT but NOT initialized on-chain — block publishing until
+  // the creator completes setup (initCreator). They can run it any time here.
+  if (nftProfile && isInitialized === false) return (
+    <div style={{ minHeight: "calc(100vh - 54px)", background: P.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ maxWidth: 460, width: "100%" }}>
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <div style={{ width: 72, height: 72, borderRadius: "50%", background: P.p2, border: `1px solid ${P.pb}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, margin: "0 auto 16px" }}>🔓</div>
+          <h2 style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 26, textTransform: "uppercase", color: "#fff", marginBottom: 8 }}>
+            One Step <span style={{ background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Left</span>
+          </h2>
+          <p style={{ color: "#9977cc", fontSize: 12, fontFamily: P.raj, lineHeight: 1.7 }}>
+            Your Creator NFT <b style={{ color: "#c4a0ff" }}>{nftProfile?.username ? `${nftProfile.username}.arcade` : ""}</b> is minted — but the on-chain setup step was skipped. Run it once on {chainName} to unlock publishing. You can do this any time.
+          </p>
+        </div>
+
+        <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 12, padding: 18, marginBottom: 16 }}>
+          <div style={{ fontSize: 9, color: "#9977cc", textTransform: "uppercase", letterSpacing: "1.5px", fontFamily: P.raj, fontWeight: 700, marginBottom: 12 }}>Publishing is locked until setup completes</div>
+          {[["✅", "Creator NFT minted"], ["⏳", "Initialize creator on-chain (this step)"], ["🔒", "Publish games — unlocks after setup"]].map(([icon, text]) => (
+            <div key={text} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 14 }}>{icon}</span>
+              <span style={{ fontSize: 11, color: "#c4a0ff", fontFamily: P.raj }}>{text}</span>
+            </div>
+          ))}
+        </div>
+
+        {initError && <div style={{ padding: 10, background: "rgba(255,68,68,0.07)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 7, color: "#ff4444", fontSize: 11, fontFamily: P.raj, marginBottom: 14, wordBreak: "break-all" }}>{initError}</div>}
+
+        <button onClick={() => completeInit()} disabled={initLoading} style={{ width: "100%", padding: "14px", background: initLoading ? "rgba(123,47,255,0.2)" : "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 8, color: initLoading ? "#5533aa" : "#fff", fontSize: 13, fontWeight: 700, cursor: initLoading ? "not-allowed" : "pointer", fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase", transition: "all 0.18s" }}>
+          {initLoading ? `Completing setup on ${chainName}...` : "🔓 Complete Setup"}
+        </button>
+
+        <p style={{ textAlign: "center", color: "#5533aa", fontSize: 10, fontFamily: P.raj, marginTop: 12 }}>
+          Runs one transaction (initCreator) from your wallet. No re-mint, only gas.
+        </p>
+      </div>
+    </div>
+  );
+
 
   // STATE 3: APPROVED — Full Dashboard
   return (
