@@ -280,13 +280,14 @@ export default function Leaderboard() {
             <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "lbPulse 1.5s ease-in-out infinite" }} />
             Live On-Chain Scores
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "flex-start" : "center", gap: isMobile ? 10 : 12 }}>
             <h1 style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: isMobile ? 28 : 48, letterSpacing: "-0.5px", textTransform: "uppercase", lineHeight: 1, color: "#fff" }}>
               Global{" "}
               <span className="lb-title-grad">
                 Leaderboard
               </span>
             </h1>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             {chainName && (
               <span style={{ fontSize: 9, padding: "3px 10px", background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: 10, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", whiteSpace: "nowrap" }}>
                 {chainName}
@@ -302,6 +303,7 @@ export default function Leaderboard() {
               onMouseEnter={e => e.currentTarget.style.borderColor = "rgba(123,47,255,0.55)"}
               onMouseLeave={e => e.currentTarget.style.borderColor = "rgba(123,47,255,0.3)"}
             >{refreshing ? "..." : "↻ Refresh"}</button>
+            </div>
           </div>
           <p style={{ color: "rgba(180,150,255,0.7)", fontSize: 12, marginTop: 8, fontFamily: "'Rajdhani',sans-serif" }}>
             {chainName ? `${chainName} scores — switch chain in navbar to see other chains.` : "Tamper-proof scores from OnChain — verified every block."}
@@ -314,10 +316,10 @@ export default function Leaderboard() {
           {/* LEFT */}
           <div style={{ minWidth: 0 }}>
             {/* Tabs */}
-            <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 20, borderBottom: "1px solid rgba(123,47,255,0.15)" }}>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 0, rowGap: 8, marginBottom: 20, borderBottom: "1px solid rgba(123,47,255,0.15)" }}>
               {["global", "by-game"].map(tab => (
                 <button key={tab} className="tab-btn" onClick={() => setActiveTab(tab)} style={{
-                  padding: "10px 22px", background: "transparent", border: "none",
+                  padding: isMobile ? "10px 15px" : "10px 22px", background: "transparent", border: "none",
                   borderBottom: activeTab === tab ? "2px solid #7B2FFF" : "1px solid transparent",
                   color: activeTab === tab ? "#c4a0ff" : "#5533aa",
                   fontSize: 12, cursor: "pointer", marginBottom: "-1px",
@@ -327,7 +329,7 @@ export default function Leaderboard() {
               ))}
               {activeTab === "by-game" && (
                 <select value={selectedGame} onChange={e => setSelectedGame(e.target.value)} style={{
-                  marginLeft: 50,
+                  marginLeft: isMobile ? 12 : 50, maxWidth: isMobile ? 150 : "none", flexShrink: 0,
                   background: "rgba(123,47,255,0.15)", border: "1px solid rgba(123,47,255,0.2)",
                   borderRadius: 6, color: "#a67fff", fontSize: 11, padding: "5px 10px",
                   cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 600,
