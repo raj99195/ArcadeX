@@ -399,21 +399,25 @@ export default async function handler(req, res) {
     if (!gameId || score == null || !chain || !sessionToken)
       return res.status(400).json({ error: "gameId, score, chain, sessionToken required" });
 
-    // ── LAYER 3 — soft-ban: only genuine cheat flags within a recent window ──
-    // Windowed (not lifetime) so a wrongly-flagged wallet auto-recovers, and only
-    // HARD signals (impossibly-high scores) get here — normal behaviour like page
-    // refreshes or double-clicking Submit no longer contributes to a ban.
-    const FLAG_WINDOW_MS     = 24 * 60 * 60 * 1000;  // 24h decay
-    const FLAG_BAN_THRESHOLD = 3;
-    const recentFlags = (await db.collection("flagged")
-      .where("player", "==", signUser.address.toLowerCase())
-      .limit(10).get())
-      .docs.filter(d => {
-        const t = d.data().flaggedAt?.toDate?.() || new Date(d.data().flaggedAt);
-        return t.getTime() > Date.now() - FLAG_WINDOW_MS;
-      }).length;
-    if (recentFlags >= FLAG_BAN_THRESHOLD)
-      return res.status(403).json({ error: "Account under review due to suspicious activity." });
+    // ── LAYER 3 — soft-ban: DISABLED (flags are admin-review-only now) ──
+    // Auto-banning on accumulated flags was blocking legitimate high-scorers with
+    // "Account under review" and hurting growth — especially while the rate metric
+    // is unreliable (playSec is measured from page-open, not actual gameplay).
+    // Suspicious submissions are still written to `flagged` for review in the Admin
+    // panel, where a genuine cheater can be actioned manually. A single impossibly-
+    // high submission is still hard-blocked by GATE 2 below. No user is auto-banned.
+    //
+    // const FLAG_WINDOW_MS     = 24 * 60 * 60 * 1000;
+    // const FLAG_BAN_THRESHOLD = 3;
+    // const recentFlags = (await db.collection("flagged")
+    //   .where("player", "==", signUser.address.toLowerCase())
+    //   .limit(10).get())
+    //   .docs.filter(d => {
+    //     const t = d.data().flaggedAt?.toDate?.() || new Date(d.data().flaggedAt);
+    //     return t.getTime() > Date.now() - FLAG_WINDOW_MS;
+    //   }).length;
+    // if (recentFlags >= FLAG_BAN_THRESHOLD)
+    //   return res.status(403).json({ error: "Account under review due to suspicious activity." });
 
     const pk = process.env.SCORE_SIGNER_PRIVATE_KEY;
     if (!pk) return res.status(503).json({ error: "Score signing not configured" });
@@ -533,13 +537,20 @@ export default async function handler(req, res) {
       // END LAYER 1
       // ═══════════════════════════════════════════════════════════════════════
 
-      // Burn — one-time use
-      await sessDoc.ref.update({ used: true, usedAt: new Date() });
+      // NOTE: the session is intentionally NOT burned here. Burning it before the
+      // on-chain tx meant that if the player rejected the wallet prompt or the tx
+      // failed, the session was already gone → "Invalid session, play first" →
+      // they had to replay the whole game to submit. Retry-safety instead comes
+      // from the deterministic per-session nonce below + the contract's
+      // usedScoreProofs mapping (each score-proof lands on-chain exactly once).
+      // The session simply expires on its own timer.
 
       // player JWT se lo — body se nahi (SH0009)
       const player       = signUser.address;
       const signerWallet = new ethers.Wallet(pk);
-      const nonce        = BigInt(Date.now());
+      // Deterministic per session: every retry for this play produces the SAME
+      // signature, so the contract accepts it at most once (usedScoreProofs).
+      const nonce        = ethers.toBigInt(ethers.keccak256(ethers.toUtf8Bytes("sess:" + sessionToken)));
 
       const messageHash = ethers.solidityPackedKeccak256(
         ["address", "uint256", "uint256", "uint256", "address", "uint256"],
@@ -559,7 +570,7 @@ export default async function handler(req, res) {
       if (tournamentId) {
         const tournamentAddr = TOURNAMENT_ADDRESSES[chain];
         if (tournamentAddr) {
-          tournamentNonce = BigInt(Date.now());
+          tournamentNonce = ethers.toBigInt(ethers.keccak256(ethers.toUtf8Bytes("tsess:" + sessionToken)));
           const tHash = ethers.solidityPackedKeccak256(
             ["address", "uint256", "uint256", "uint256", "address", "uint256"],
             [player, BigInt(tournamentId), BigInt(score), tournamentNonce, tournamentAddr, chainId]
