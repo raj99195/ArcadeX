@@ -170,12 +170,18 @@ export default function Admin() {
     setTicketsLoading(true);
     try {
       const token = localStorage.getItem("arcadex_jwt");
+      // API side (api/support.js) expects GET for action=list.
+      // Pehle yahan method: "POST" tha — request kisi handler pe match nahi
+      // karti thi, seedha 404 "Unknown action" milta tha, res.ok false hota
+      // tha, setTickets kabhi call nahi hoti thi → UI empty rehti thi even
+      // when Firestore mein data present tha.
       const res = await fetch("/api/support?action=list", {
-        method: "POST", // 👈 YE LINE MISSING THI
+        method: "GET",
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
       if(res.ok) setTickets(data.tickets || []);
+      else console.error("Tickets fetch failed:", res.status, data?.error);
     } catch (e) { console.error("Error fetching tickets:", e); }
     finally { setTicketsLoading(false); }
   };
