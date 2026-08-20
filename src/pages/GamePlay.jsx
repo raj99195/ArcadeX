@@ -1,6 +1,6 @@
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useState, useRef, useCallback, memo, forwardRef } from "react";
-import { useAccount, usePublicClient } from "wagmi";
+import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { writeContract, waitForTransactionReceipt, readContract } from "@wagmi/core";
 import { keccak256, toHex } from "viem";
 import { wagmiAdapter } from "../Providers";
@@ -9,6 +9,7 @@ import { saveScore } from "../lib/gameService";
 import { useChain } from "../context/ChainContext";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
+import { signInAndGetJwt, hasValidJwtForWallet } from "../hooks/useAutoAuth";
 import Seo from "../components/Seo";
 
 const TOURNAMENT_SCORE_ABI = [{ name: "submitTournamentScore", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tournamentId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
@@ -154,6 +155,11 @@ export default function GamePlay() {
   const rewardSymbol = rewardToken || "ARCADE";
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
+  // walletClient chahiye kyunki submitScore ke andar agar JWT missing/expired
+  // ho toh signInAndGetJwt() call karna hai — wo walletClient.signMessage
+  // ka fallback use karta hai jab window.ethereum available na ho (rare, but
+  // WalletConnect-only flows me hota hai).
+  const { data: walletClient } = useWalletClient();
 
   const [score, setScore] = useState(0);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -162,6 +168,18 @@ export default function GamePlay() {
   const [submitted, setSubmitted] = useState(false);
   const [txHash, setTxHash] = useState("");
   const [submitError, setSubmitError] = useState(null); // null | { type, icon, title, msg }
+  // Score submission overlay stage — drives the full-screen modal that
+  // shows the user WHAT'S HAPPENING at every step. Prior to this, the
+  // only feedback was a tiny "Writing on chain…" text under the game;
+  // mobile users routinely abandoned mid-flow because they didn't know
+  // a wallet popup was even coming. Stages:
+  //   auth       → asking wallet to sign the free JWT challenge
+  //   session    → fetching one-time gameplay session token
+  //   signing    → backend is signing the score (ECDSA)
+  //   wallet     → waiting for user to approve tx in wallet
+  //   confirming → tx broadcast, waiting for on-chain receipt
+  //   success    → done — auto-dismisses after 2.5s
+  const [submitStage, setSubmitStage] = useState(null);
   const [gameLoading, setGameLoading] = useState(true);
   const [tokensEarned, setTokensEarned] = useState(0);
   const [totalPlays, setTotalPlays] = useState(0);
@@ -796,19 +814,61 @@ export default function GamePlay() {
       // small native-token amounts still show up.
       const playerReward = Math.round(rewardRate * playerSplit / 100 * 100) / 100;
 
-      // SH0009: session token required — no fallback, hard block karo
-      const _jwt = localStorage.getItem("arcadex_jwt");
-      const _session = sessionTokenRef.current;
-
-      if (!_jwt) {
-        setSubmitError({ type: "auth", soft: false, icon: "🔐", title: "Not Signed In", msg: "Please connect your wallet and sign in to submit scores." });
-        setSubmitting(false); submittingRef.current = false; return;
+      // ── STEP 1: Ensure JWT (sign-in if missing/expired) ──────────
+      // OLD: hard-errored "Not Signed In" and asked user to reconnect
+      // wallet — mobile users had no idea what to do. NEW: trigger
+      // sign-in inline via the shared helper. Overlay tells them
+      // exactly what's happening ("Check your wallet for a signature
+      // request — it's free, no gas").
+      let _jwt = localStorage.getItem("arcadex_jwt");
+      if (!_jwt || !hasValidJwtForWallet(address)) {
+        setSubmitStage("auth");
+        try {
+          _jwt = await signInAndGetJwt(address, walletClient);
+        } catch (authErr) {
+          // User rejected the signature — dismiss overlay, show soft
+          // error explaining what the signature was for so they'll try
+          // again next time. (Point 4 from the roadmap.)
+          setSubmitStage(null);
+          setSubmitError({
+            type: "auth", soft: true, icon: "🔐",
+            title: "Sign-In Cancelled",
+            msg: "You need to sign a free message (no gas, no cost) to prove your wallet owns this score. Tap Submit again to retry."
+          });
+          setSubmitting(false); submittingRef.current = false; return;
+        }
       }
+
+      // ── STEP 2: Ensure gameplay session token ────────────────────
+      // OLD: hard-errored "Session Expired, reload the page" if the
+      // on-mount startSession didn't run (e.g. JWT was missing then).
+      // NEW: fetch one inline — now we definitely have a JWT.
+      let _session = sessionTokenRef.current;
       if (!_session) {
-        setSubmitError({ type: "session", soft: true, icon: "🔄", title: "Session Expired", msg: "Your game session has expired. Please reload the page and play again." });
-        setSubmitting(false); submittingRef.current = false; return;
+        setSubmitStage("session");
+        try {
+          const sRes = await fetch("/api/games?action=start-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${_jwt}` },
+            body: JSON.stringify({ gameId: onChainGameId, chain: chainKey }),
+          });
+          if (!sRes.ok) throw new Error("Session start failed");
+          const { sessionToken } = await sRes.json();
+          _session = sessionToken;
+          sessionTokenRef.current = sessionToken;
+        } catch (sessErr) {
+          setSubmitStage(null);
+          setSubmitError({
+            type: "session", soft: false, icon: "🔄",
+            title: "Session Setup Failed",
+            msg: "Could not prepare your gameplay session. Please reload the page and try again."
+          });
+          setSubmitting(false); submittingRef.current = false; return;
+        }
       }
 
+      // ── STEP 3: Backend sign-score (ECDSA proof) ─────────────────
+      setSubmitStage("signing");
       let nonce, signature;
       let tNonce = null, tSig = null;   // tournament proof (set below if tournamentId)
       try {
@@ -822,6 +882,7 @@ export default function GamePlay() {
         });
         if (!sigRes.ok) {
           const errData = await sigRes.json().catch(() => ({}));
+          setSubmitStage(null);
           setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: errData.error || "Could not verify gameplay session. Reload the page and try again." });
           setSubmitting(false); submittingRef.current = false; return;
         }
@@ -850,10 +911,13 @@ export default function GamePlay() {
           } catch (e) { console.warn("[session] renew failed:", e); }
         })();
       } catch (sigErr) {
+        setSubmitStage(null);
         setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: "Network error while verifying score. Please try again." });
         setSubmitting(false); submittingRef.current = false; return;
       }
 
+      // ── STEP 4: Wallet — user approves the tx ────────────────────
+      setSubmitStage("wallet");
       const hash = await writeContract(wagmiAdapter.wagmiConfig, {
         address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
         functionName: "recordPlayAndEarn",
@@ -861,6 +925,9 @@ export default function GamePlay() {
         gas: BigInt(500000),
         chainId: CHAIN_ID,
       });
+
+      // ── STEP 5: Wait for on-chain receipt ────────────────────────
+      setSubmitStage("confirming");
       await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
 
       if (tournamentId && tSig) {
@@ -888,7 +955,15 @@ export default function GamePlay() {
       await saveScore({ player: address, score: finalScore, gameId: game.id, gameName: game.name, txHash: hash, chain: chainKey, earned: playerReward, earnedSymbol: rewardSymbol });
       setTxHash(hash); setSubmitted(true);
       sendToGame("TRANSACTION_SUCCESS", { txHash: hash });
+
+      // ── STEP 6: Success flash, then auto-dismiss ─────────────────
+      setSubmitStage("success");
+      setTimeout(() => setSubmitStage(null), 2500);
     } catch (err) {
+      // Wallet reject, tx failure, network drop — dismiss overlay
+      // immediately so the existing error card can take over. This is
+      // the "agar transaction cancel kre to overlay hat jaye" behaviour.
+      setSubmitStage(null);
       const parsed = parseContractError(err);
       setSubmitError(parsed);
       sendToGame("TRANSACTION_FAILED", { error: parsed.msg });
@@ -934,6 +1009,139 @@ export default function GamePlay() {
   };
 
   // ── Error card helper — called in JSX ────────────────────────────────────
+  // ── Full-screen submit-flow overlay ─────────────────────────────
+  // Modal-style overlay covering the whole viewport (fixed + high
+  // z-index so it works even when GameFrame is in fake-FS mode).
+  // Each stage tells the user EXACTLY what's happening so no one is
+  // sitting there wondering whether the wallet popup is coming.
+  //
+  // Design decision: no in-overlay Cancel button. Trying to add one
+  // that "cancels" would be a lie — once the wallet popup is up, only
+  // the wallet itself can dismiss it. If the user rejects in-wallet,
+  // our catch block runs, sets submitStage=null, and the existing
+  // error card takes over. This is the same pattern Uniswap/OpenSea
+  // use for their tx-confirmation modals.
+  const renderSubmitOverlay = () => {
+    if (!submitStage) return null;
+    const stages = {
+      auth: {
+        icon: "🔐",
+        title: "Sign in your wallet",
+        msg: "Check your wallet for a signature request — it's free (no gas). This just proves your wallet owns the score.",
+        accent: "#7B2FFF",
+        spin: true,
+      },
+      session: {
+        icon: "⚙️",
+        title: "Preparing your score",
+        msg: "Setting up a secure gameplay session…",
+        accent: "#7B2FFF",
+        spin: true,
+      },
+      signing: {
+        icon: "📝",
+        title: "Verifying your score",
+        msg: "Our server is signing your score so the blockchain can trust it…",
+        accent: "#7B2FFF",
+        spin: true,
+      },
+      wallet: {
+        icon: "⛓️",
+        title: "Confirm in your wallet",
+        msg: "Approve the transaction in your wallet to record your score on-chain. On mobile, check for a notification from your wallet app.",
+        accent: "#00d4ff",
+        spin: true,
+      },
+      confirming: {
+        icon: "⏳",
+        title: "Confirming on-chain",
+        msg: "Your transaction is being mined. Please don't refresh — this usually takes a few seconds.",
+        accent: "#00d4ff",
+        spin: true,
+      },
+      success: {
+        icon: "✅",
+        title: "Score submitted!",
+        msg: tokensEarned > 0 ? `+${tokensEarned} ${rewardSymbol} earned` : "Your score is now on-chain.",
+        accent: "#00e676",
+        spin: false,
+      },
+    };
+    const s = stages[submitStage] || stages.wallet;
+    return (
+      <>
+        <style>{`
+          @keyframes soFadeIn { from { opacity: 0 } to { opacity: 1 } }
+          @keyframes soCardIn { from { opacity: 0; transform: translate(-50%,-50%) scale(0.94) } to { opacity: 1; transform: translate(-50%,-50%) scale(1) } }
+          @keyframes soSpin { to { transform: rotate(360deg) } }
+          @keyframes soFloat { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-4px) } }
+          @keyframes soCheck { 0% { transform: scale(0.3); opacity: 0 } 60% { transform: scale(1.15) } 100% { transform: scale(1); opacity: 1 } }
+        `}</style>
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 20000,
+          background: "rgba(4,3,10,0.82)", backdropFilter: "blur(10px)",
+          animation: "soFadeIn 0.22s ease",
+        }} />
+        <div style={{
+          position: "fixed", top: "50%", left: "50%",
+          transform: "translate(-50%,-50%)",
+          zIndex: 20001, width: "min(370px, 90vw)",
+          background: "linear-gradient(160deg, #141021, #0d0a17)",
+          border: `1px solid ${s.accent}44`, borderRadius: 20,
+          padding: "34px 28px 30px",
+          textAlign: "center",
+          boxShadow: `0 20px 70px rgba(0,0,0,0.6), 0 0 40px ${s.accent}22`,
+          fontFamily: "'Rajdhani',sans-serif",
+          animation: "soCardIn 0.32s cubic-bezier(0.34,1.56,0.64,1)",
+        }}>
+          {/* Icon + spinner ring */}
+          <div style={{
+            width: 72, height: 72, margin: "0 auto 20px",
+            borderRadius: "50%",
+            background: `linear-gradient(135deg, ${s.accent}, ${s.accent}bb)`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 32,
+            boxShadow: `0 0 30px ${s.accent}55`,
+            animation: submitStage === "success" ? "soCheck 0.5s ease" : "soFloat 2.6s ease-in-out infinite",
+            position: "relative",
+          }}>
+            <span style={{ position: "relative", zIndex: 2 }}>{s.icon}</span>
+            {s.spin && (
+              <div style={{
+                position: "absolute", inset: -6,
+                borderRadius: "50%",
+                border: "2px solid transparent",
+                borderTopColor: s.accent,
+                borderRightColor: `${s.accent}66`,
+                animation: "soSpin 1.1s linear infinite",
+              }} />
+            )}
+          </div>
+          <div style={{
+            fontSize: 20, fontWeight: 800,
+            color: submitStage === "success" ? s.accent : "#fff",
+            marginBottom: 10, letterSpacing: "0.3px",
+          }}>{s.title}</div>
+          <div style={{
+            fontSize: 13, color: "#b8b0d0", lineHeight: 1.6,
+          }}>{s.msg}</div>
+          {/* Wallet-stage hint on mobile — small nudge in case wallet popup didn't autofocus */}
+          {submitStage === "wallet" && isMobile && (
+            <div style={{
+              marginTop: 16, padding: "8px 12px",
+              background: "rgba(0,212,255,0.06)",
+              border: "1px solid rgba(0,212,255,0.15)",
+              borderRadius: 8,
+              fontSize: 11, color: "#a67fff", lineHeight: 1.5,
+            }}>
+              💡 If your wallet didn't open automatically, switch to your wallet app manually.
+            </div>
+          )}
+        </div>
+      </>
+    );
+  };
+
   const renderErrorCard = () => {
     if (!submitError) return null;
     const isSoft = submitError.soft;
@@ -1339,6 +1547,9 @@ export default function GamePlay() {
           </div>
         </div>
       )}
+
+      {/* ── Score-submit overlay (renders across everything, incl. fake FS) ── */}
+      {renderSubmitOverlay()}
     </div>
   );
 }
