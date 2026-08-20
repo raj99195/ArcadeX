@@ -88,21 +88,45 @@ function DiceBearAvatar({ address, style, size = 28 }) {
 // is what caused the 2-3 restarts; memo + a single stable element stops that.
 // Fullscreen restyles THIS same element instead of mounting a second iframe.
 const GameFrame = memo(forwardRef(function GameFrame({ url, title, isMobile, isFullscreen, onToggleFullscreen }, ref) {
+  // Fake-FS container: `inset: 0` is viewport-relative so it survives iOS
+  // Safari's address-bar collapse. No `transform` on any ancestor (checked)
+  // so fixed positioning holds. `env(safe-area-inset-*)` keeps the game
+  // canvas away from the notch/dynamic-island on iPhone and the status bar
+  // on Android — otherwise the top of the game clips under the notch.
   const containerStyle = isFullscreen
-    ? { position: "fixed", inset: 0, zIndex: 9999, background: "#000", display: "flex", flexDirection: "column" }
+    ? {
+        position: "fixed", inset: 0, zIndex: 9999, background: "#000",
+        display: "flex", flexDirection: "column",
+        paddingTop: "env(safe-area-inset-top, 0px)",
+        paddingBottom: "env(safe-area-inset-bottom, 0px)",
+        paddingLeft: "env(safe-area-inset-left, 0px)",
+        paddingRight: "env(safe-area-inset-right, 0px)",
+      }
     : { position: "relative" };
   const iframeStyle = isFullscreen
     ? { flex: 1, width: "100%", border: "none", display: "block" }
     : { width: "100%", height: isMobile ? "75vw" : "calc(100vh - 54px - 160px)", minHeight: isMobile ? 300 : 480, border: "none", display: "block" };
   const btnBase = { padding: "6px 12px", background: "rgba(0,0,0,0.8)", border: `1px solid ${C.border2}`, borderRadius: 7, color: "#a67fff", fontSize: 11, cursor: "pointer", fontFamily: C.raj, fontWeight: 700, backdropFilter: "blur(8px)", display: "flex", alignItems: "center", gap: 5 };
+  // Exit button in fake-FS: bigger tap target on mobile + safe-area top offset
+  // so it doesn't sit under the notch. Native FS on desktop uses the same
+  // absolute position — no notch to worry about there.
+  const exitBtnStyle = isFullscreen
+    ? {
+        ...btnBase,
+        position: "absolute",
+        top: `calc(12px + env(safe-area-inset-top, 0px))`,
+        right: `calc(12px + env(safe-area-inset-right, 0px))`,
+        zIndex: 10000,
+        padding: isMobile ? "10px 16px" : "6px 12px",
+        fontSize: isMobile ? 13 : 11,
+      }
+    : { ...btnBase, position: "absolute", bottom: 10, right: 10 };
   return (
     <div style={containerStyle}>
       <iframe ref={ref} src={url}
         style={iframeStyle}
-        allow="fullscreen" allowFullScreen title={title} />
-      <button onClick={onToggleFullscreen} style={isFullscreen
-        ? { ...btnBase, position: "absolute", top: 12, right: 12, zIndex: 10000 }
-        : { ...btnBase, position: "absolute", bottom: 10, right: 10 }}>
+        allow="fullscreen; autoplay; gyroscope; accelerometer" allowFullScreen title={title} />
+      <button onClick={onToggleFullscreen} style={exitBtnStyle}>
         <span>{isFullscreen ? "✕" : "⛶"}</span> {isFullscreen ? "Exit" : "Fullscreen"}
       </button>
     </div>
@@ -158,18 +182,82 @@ export default function GamePlay() {
   const sessionTokenRef = useRef(null); // SH0009: gameplay session token
   const { balance } = useArcadeBalance();
 
-  // SH0003: native fullscreen on desktop; iOS blocks iframe fullscreen so we fall
-  // back to CSS "fake" fullscreen. Stable identity (refs + setter only) so the
-  // memoized GameFrame never re-renders on toggle — the iframe won't reload.
+  // SH0003: fullscreen — reality of shipping this cross-platform:
+  //   • Desktop Chrome/Firefox/Safari → iframe.requestFullscreen() works.
+  //   • iOS Safari → iframe FS is fully blocked by WebKit (no debate).
+  //   • Android Chrome → mostly works, but flaky on some OEM browsers.
+  //   • MetaMask browser, Trust, Coinbase Wallet, Instagram/FB in-app,
+  //     Telegram in-app → Fullscreen API is either stripped OR rejects
+  //     the promise silently. Ritik's screenshot = MetaMask browser.
+  //
+  // Old bug: nativeFS.call(iframe) returns a Promise. If it rejects async
+  // (which is exactly what MM browser does), the try/catch NEVER fires
+  // because it only catches sync throws → fake-FS fallback never ran →
+  // "Fullscreen" button appeared dead. This is the reported bug.
+  //
+  // New strategy: on mobile ALWAYS use fake FS (a CSS `position:fixed`
+  // overlay). It works in every mobile browser + in-app wallet browser
+  // ever shipped. On desktop try native first, catch the promise reject,
+  // fall back to fake. document.fullscreenchange keeps the state honest
+  // when the user hits ESC or the Android back button.
+  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
+  const isFullscreen = isNativeFullscreen || isFakeFullscreen;
+
+  useEffect(() => {
+    const onFsChange = () => {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      setIsNativeFullscreen(!!fsEl);
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFsChange);
+      document.removeEventListener("webkitfullscreenchange", onFsChange);
+    };
+  }, []);
+
+  // Body-scroll lock during fake FS. Without this, iOS Safari lets you
+  // rubber-band-scroll behind the overlay and stray touches can slip past
+  // the game canvas edges.
+  useEffect(() => {
+    if (!isFakeFullscreen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [isFakeFullscreen]);
+
+  // Stable identity (refs + setters + isMobile only). Deps intentionally
+  // exclude isFakeFullscreen — we read the latest value from setter callback.
   const handleToggleFullscreen = useCallback(() => {
+    // Already in native FS? Exit natively.
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fsEl) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      try { exit?.call(document); } catch { /* no-op */ }
+      return;
+    }
+    // Already in fake FS? Exit.
+    if (isFakeFullscreen) { setIsFakeFullscreen(false); return; }
+
+    // Mobile → straight to fake FS. Skip the native attempt entirely —
+    // MetaMask/Trust/Coinbase in-app browsers reject it silently and
+    // there's no reliable UA sniff for "am I in an in-app browser".
+    if (isMobile) { setIsFakeFullscreen(true); return; }
+
+    // Desktop → try native FS on iframe, fall back to fake if the
+    // browser rejects (some Firefox configs, embedded browsers, etc.)
     const iframe = iframeRef.current;
     const nativeFS = iframe?.requestFullscreen || iframe?.webkitRequestFullscreen;
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-    if (!isIOS && nativeFS) {
-      try { nativeFS.call(iframe); return; } catch (e) { /* fall back to fake FS */ }
+    if (!nativeFS) { setIsFakeFullscreen(true); return; }
+    try {
+      const p = nativeFS.call(iframe);
+      if (p && typeof p.then === "function") {
+        p.catch(() => setIsFakeFullscreen(true)); // ← the fix
+      }
+    } catch {
+      setIsFakeFullscreen(true);
     }
-    setIsFakeFullscreen(fs => !fs);
-  }, []);
+  }, [isMobile, isFakeFullscreen]);
 
   useEffect(() => {
     const h = () => setIsMobile(window.innerWidth <= 768);
@@ -177,7 +265,8 @@ export default function GamePlay() {
     return () => window.removeEventListener("resize", h);
   }, []);
 
-  // SH0003: ESC exits fake fullscreen (desktop convenience)
+  // SH0003: ESC exits fake fullscreen (desktop convenience — native FS
+  // already exits on ESC by the browser itself).
   useEffect(() => {
     if (!isFakeFullscreen) return;
     const onKey = (e) => { if (e.key === "Escape") setIsFakeFullscreen(false); };
@@ -962,7 +1051,7 @@ export default function GamePlay() {
                 url={game.iframeUrl}
                 title={game.name}
                 isMobile={isMobile}
-                isFullscreen={isFakeFullscreen}
+                isFullscreen={isFullscreen}
                 onToggleFullscreen={handleToggleFullscreen}
               />
             ) : (
