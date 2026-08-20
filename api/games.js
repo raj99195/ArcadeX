@@ -366,6 +366,17 @@ export default async function handler(req, res) {
   // ── POST start-session (SH0009: JWT required) ────────────────────────────────
   // Game open hone pe GamePlay.jsx call karta hai.
   // Ek one-time sessionToken generate hota hai — sign-score tabhi milega jab yeh token ho.
+  //
+  // sessionToken ko document ID ke roop mein use karte hain (`.doc(token).set()`)
+  // instead of `.add({sessionToken, ...})`. Reason:
+  //   .where("sessionToken","==",token) query indexes use karta hai — index
+  //   update mein 50-500ms lag sakta hai after a write. Old flow me issue
+  //   nahi tha kyunki user 30s+ khelta tha before submitting. But new inline
+  //   submitScore flow (user rejects auto-auth, later signs & submits) creates
+  //   the session and IMMEDIATELY calls sign-score ~100ms later — index abhi
+  //   update nahi hua hota → query returns empty → 403 "Invalid or expired
+  //   session". Single-doc .doc(id).get() lookups are ALWAYS strongly
+  //   consistent — no index dependency, no race.
   if (req.method === "POST" && action === "start-session") {
     const ssUser = verifyToken(req);
     if (!ssUser) return res.status(401).json({ error: "Unauthorized" });
@@ -376,8 +387,8 @@ export default async function handler(req, res) {
     try {
       const { randomUUID } = await import("crypto");
       const sessionToken = randomUUID();
-      await db.collection("gameSessions").add({
-        sessionToken,
+      await db.collection("gameSessions").doc(sessionToken).set({
+        sessionToken,                       // keep field too for backward compat / debug
         player:    ssUser.address.toLowerCase(),
         gameId:    String(gameId),
         chain,
@@ -431,25 +442,39 @@ export default async function handler(req, res) {
       return res.status(429).json({ error: "Too many sign requests" });
 
     try {
-      // Session validate + burn
-      const sessSnap = await db.collection("gameSessions")
-        .where("sessionToken", "==", sessionToken)
-        .where("player",       "==", signUser.address.toLowerCase())
-        .where("gameId",       "==", String(gameId))
-        .where("used",         "==", false)
-        .limit(1)
-        .get();
+      // Session validate via strongly-consistent doc lookup (no index lag,
+      // no race with a just-created session). Fields are validated in-memory
+      // after the fetch — same semantics as the old .where() chain.
+      const sessDocRef  = db.collection("gameSessions").doc(sessionToken);
+      const sessDocSnap = await sessDocRef.get();
 
-      if (sessSnap.empty)
+      if (!sessDocSnap.exists)
         return res.status(403).json({ error: "Invalid or expired session. Open the game page and play first." });
 
-      const sessDoc  = sessSnap.docs[0];
-      const expiresAt = sessDoc.data().expiresAt?.toDate?.() || new Date(sessDoc.data().expiresAt);
+      const sessData = sessDocSnap.data();
+
+      // Session must belong to the same wallet as the JWT (defence-in-depth:
+      // even if someone leaks a sessionToken UUID, they can't spend it from a
+      // different wallet — every field is checked, no shortcut).
+      if (sessData.player !== signUser.address.toLowerCase())
+        return res.status(403).json({ error: "Invalid or expired session. Open the game page and play first." });
+
+      if (sessData.gameId !== String(gameId))
+        return res.status(403).json({ error: "Invalid or expired session. Open the game page and play first." });
+
+      if (sessData.used === true)
+        return res.status(403).json({ error: "Invalid or expired session. Open the game page and play first." });
+
+      const expiresAt = sessData.expiresAt?.toDate?.() || new Date(sessData.expiresAt);
       if (expiresAt < new Date())
         return res.status(403).json({ error: "Session expired. Reload the game page." });
 
-      if (sessDoc.data().chain !== chain)
+      if (sessData.chain !== chain)
         return res.status(403).json({ error: "Session chain mismatch." });
+
+      // Shim so the rest of this handler (which reads sessDoc.data()) keeps
+      // working unchanged — sessDoc has the same shape as the old query result.
+      const sessDoc = sessDocSnap;
 
       // ═══════════════════════════════════════════════════════════════════════
       // LAYER 1 — Server-authoritative score validation (anti-cheat gates)
