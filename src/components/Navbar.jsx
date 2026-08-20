@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAppKit } from "@reown/appkit/react";
-import { useAccount, useConnect, usePublicClient } from "wagmi";
-import { injected } from "wagmi/connectors";
+import { useAccount, useSwitchChain, useChainId, usePublicClient } from "wagmi";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useChain } from "../context/ChainContext";
@@ -13,7 +12,8 @@ const LOGO_SIZE = 28;
 export default function Navbar() {
   const { open } = useAppKit();
   const { isConnected, address } = useAccount();
-  const { connectAsync } = useConnect();
+  const { switchChainAsync } = useSwitchChain();
+  const walletChainId = useChainId();
   const navigate = useNavigate();
   const location = useLocation();
   const { balance } = useArcadeBalance();
@@ -106,61 +106,41 @@ export default function Navbar() {
       setFaucetError("Something went wrong. Try again.");
     }
   };
-  // 1. Agar MetaMask available hai → directly wagmi injected connector use karo
-  //    with correct chainId. AppKit ka open() internally BOTChain (networks[0])
-  //    pe switchChain call karta hai — yeh bypass karta hai woh problem.
-  // 2. Agar MetaMask nahi (mobile/WalletConnect) → AppKit open() fallback.
-  const handleConnect = async () => {
-    if (!activeChain) { open(); return; }
+  // ── Wallet connect ────────────────────────────────────────────────
+  // Single source of truth: AppKit open() handles EVERYTHING —
+  //   • injected wallets (MetaMask, Bridge Key, Rabby…)
+  //   • WalletConnect / mobile deeplinks
+  //   • chain add + switch
+  //   • wagmi state sync (top-right updates correctly)
+  //
+  // Previously we ran window.ethereum.request(wallet_switchEthereumChain)
+  // AND wagmi connectAsync(injected()) back-to-back. That produced:
+  //   1) two connect popups (Ritik / MST team bug report)
+  //   2) top-right state not updating (second popup owned the session,
+  //      wagmi never saw the accountsChanged event from the first)
+  //   3) Bridge Key wallet disconnect within ~1s (race between the two
+  //      connection attempts)
+  //
+  // Providers.jsx already puts savedNetwork FIRST in appKitNetworks,
+  // so open() connects to the correct chain — no manual switch needed.
+  // For chain changes AFTER connect, the useEffect below auto-syncs.
+  const handleConnect = () => open();
 
-    if (window.ethereum) {
-      const chainIdHex = "0x" + activeChain.chainId.toString(16);
-
-      // Step 1: Pehle MetaMask mein correct chain ensure karo
-      try {
-        await window.ethereum.request({
-          method: "wallet_switchEthereumChain",
-          params: [{ chainId: chainIdHex }],
-        });
-      } catch (switchErr) {
-        if (switchErr.code === 4902 || switchErr.code === -32603) {
-          try {
-            await window.ethereum.request({
-              method: "wallet_addEthereumChain",
-              params: [{
-                chainId: chainIdHex,
-                chainName: activeChain.name,
-                rpcUrls: [activeChain.rpcUrl],
-                nativeCurrency: activeChain.nativeCurrency,
-                blockExplorerUrls: activeChain.explorerUrl ? [activeChain.explorerUrl] : [],
-              }],
-            });
-          } catch (_) { open(); return; } // user rejected add → AppKit fallback
-        } else if (switchErr.code === 4001) {
-          return; // user rejected switch → do nothing
-        }
-      }
-
-      // Step 2: Ab wagmi ko directly connect karo injected connector se.
-      // AppKit open() NAHI — woh internally switchChain(BOTChain) karta hai.
-      // wagmi connectAsync with chainId = MetaMask pehle se correct chain pe hai,
-      // toh koi extra switch request nahi aayegi.
-      try {
-        await connectAsync({
-          connector: injected(),
-          chainId: activeChain.chainId,
-        });
-      } catch (connErr) {
-        if (!connErr?.message?.includes("Already connected")) {
-          console.warn("connectAsync failed, falling back to AppKit:", connErr.message);
-          open(); // last resort fallback
-        }
-      }
-    } else {
-      // No MetaMask (mobile browser, WalletConnect etc.) → AppKit handle kare
-      open();
+  // ── Auto-sync wallet chain to activeChain ─────────────────────────
+  // If the user is already connected and then switches chain selection
+  // via ChainSelector, quietly ask the wallet to switch. User only sees
+  // ONE prompt (the wallet's native switch), no duplicate connect popup.
+  useEffect(() => {
+    if (!isConnected || !activeChain?.chainId) return;
+    if (walletChainId && walletChainId !== activeChain.chainId) {
+      switchChainAsync({ chainId: activeChain.chainId }).catch(err => {
+        // User rejected, or chain not added yet — no-op. Next on-chain
+        // tx will re-prompt via wagmi's built-in switch, so we don't
+        // spam popups here.
+        console.warn("Chain auto-sync skipped:", err?.shortMessage || err?.message);
+      });
     }
-  };
+  }, [isConnected, walletChainId, activeChain?.chainId, switchChainAsync]);
 
   const shortAddress = (addr) => addr ? addr.slice(0, 5) + "..." + addr.slice(-3) : "";
   const isActive = (path) => location.pathname === path;
