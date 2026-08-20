@@ -8,8 +8,14 @@ function verifyToken(req) {
   try { return jwt.verify(auth.split(" ")[1], process.env.JWT_SECRET); }
   catch { return null; }
 }
+// ── CORS ────────────────────────────────────────────────────────────
+// FAIL-CLOSED: pehle "*" fallback tha. Vercel pe ALLOWED_ORIGIN accidentally
+// unset ho jaaye toh koi bhi website APIs call kar sakti thi → JWT theft aur
+// admin actions cross-origin trigger ho sakte the. Ab env missing → CORS
+// header hi nahi lagta → browser same-origin ke alawa sab block karega.
 function cors(res) {
-  res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN || "*");
+  const allowed = process.env.ALLOWED_ORIGIN;
+  if (allowed) res.setHeader("Access-Control-Allow-Origin", allowed);
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
@@ -172,9 +178,15 @@ export default async function handler(req, res) {
   }
 
   // ── GET check-gas-claim (public) ──
+  // Public → koi bhi random address bhej ke MST RPC hammer kar sakta hai
+  // (RPC quota drain + Vercel function budget). IP-scoped rate limit.
   if (req.method === "GET" && action === "check-gas-claim") {
+    const cgcIp = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
+    if (!rateLimit(`check-claim:${cgcIp}`, 20))
+      return res.status(429).json({ error: "Too many requests" });
     const { address: claimAddr } = req.query;
-    if (!claimAddr) return res.status(400).json({ error: "address required" });
+    if (!claimAddr || !ethers.isAddress(claimAddr))
+      return res.status(400).json({ error: "Valid address required" });
     try {
       const provider = new ethers.JsonRpcProvider(process.env.MST_RPC_URL);
       const faucet   = new ethers.Contract(
@@ -208,6 +220,16 @@ export default async function handler(req, res) {
     if (!gameId || seconds == null) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+    // SH0025 — input caps. Pehle koi bhi authenticated user Number.MAX_VALUE
+    // seconds / nested-object value / random gameIds bhej ke Firestore mein
+    // 60/min × warm-instances writes bha sakta tha. Storage cost DoS.
+    // gameId must be a positive number, seconds capped to 24h.
+    const gidNum = Number(gameId);
+    if (!Number.isFinite(gidNum) || gidNum < 0 || gidNum > 1e9)
+      return res.status(400).json({ error: "Invalid gameId" });
+    const secNum = Number(seconds);
+    if (!Number.isFinite(secNum) || secNum < 0 || secNum > 86400)
+      return res.status(400).json({ error: "Invalid seconds (0-86400)" });
     // player JWT token se lo — client-supplied player address trust mat karo
     const player = rtUser.address;
     if (!rateLimit(`record-time:${player}`, 60)) {
@@ -215,7 +237,7 @@ export default async function handler(req, res) {
     }
     try {
       await db.collection("gameTimes").add({
-        gameId, player, seconds,
+        gameId: String(gameId), player, seconds: secNum,
         chainId: chainId ?? null,
         timestamp: timestamp ?? Date.now(),
         recordedAt: new Date(),
@@ -232,6 +254,29 @@ export default async function handler(req, res) {
     if (!gameId || !eventType) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+    // SH0025 — input caps (see record-time comment). eventType allowlisted,
+    // value serialized-length capped so nested-object attacks can't bloat
+    // Firestore. gameId format validated. Add new event types to the set
+    // as your SDK / games expand — anything else is rejected.
+    const gidNum2 = Number(gameId);
+    if (!Number.isFinite(gidNum2) || gidNum2 < 0 || gidNum2 > 1e9)
+      return res.status(400).json({ error: "Invalid gameId" });
+    const ALLOWED_EVENTS = new Set([
+      "level_start", "level_complete", "level_fail", "death",
+      "powerup_used", "purchase", "tutorial_complete", "share",
+      "achievement", "session_end",
+    ]);
+    if (typeof eventType !== "string" || eventType.length > 64 || !ALLOWED_EVENTS.has(eventType))
+      return res.status(400).json({ error: "Unknown eventType" });
+    // value can be number/string/small object — serialize and cap.
+    let valueClean = null;
+    if (value != null) {
+      try {
+        const valStr = JSON.stringify(value);
+        if (valStr.length > 500) return res.status(400).json({ error: "value too large" });
+        valueClean = value;
+      } catch { return res.status(400).json({ error: "Invalid value (must be JSON-serializable)" }); }
+    }
     // player JWT token se lo — client-supplied player address trust mat karo
     const player = reUser.address;
     if (!rateLimit(`record-event:${player}`, 60)) {
@@ -239,8 +284,8 @@ export default async function handler(req, res) {
     }
     try {
       await db.collection("gameEvents").add({
-        gameId, player, eventType,
-        value: value ?? null,
+        gameId: String(gameId), player, eventType,
+        value: valueClean,
         chainId: chainId ?? null,
         timestamp: timestamp ?? Date.now(),
         recordedAt: new Date(),
@@ -359,7 +404,15 @@ export default async function handler(req, res) {
       }
       const { price, active } = itemDoc.data();
       if (!active) return res.status(403).json({ error: "Item not available", approved: false });
-      return res.status(200).json({ canonicalPrice: price, approved: true });
+      // SH0026 — sanity cap. Firestore mein galat / tampered price (creator
+      // misconfig, admin typo) frontend tak pahunch ke priceWei = price * 1e18
+      // banata hai. Bina cap ke user ki wallet drain ho sakti hai agar wo
+      // approve dabaye. Ye ceiling business-logic ke hisaab se adjust karo.
+      const MAX_ITEM_PRICE = 10000; // whole tokens (ARCADE or MSTC)
+      const pnum = Number(price);
+      if (!Number.isFinite(pnum) || pnum < 0 || pnum > MAX_ITEM_PRICE)
+        return res.status(500).json({ error: "Item price out of allowed range" });
+      return res.status(200).json({ canonicalPrice: pnum, approved: true });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
@@ -462,8 +515,13 @@ export default async function handler(req, res) {
       if (sessData.gameId !== String(gameId))
         return res.status(403).json({ error: "Invalid or expired session. Open the game page and play first." });
 
-      if (sessData.used === true)
-        return res.status(403).json({ error: "Invalid or expired session. Open the game page and play first." });
+      // NOTE: session ka `used` field kabhi true set nahi hota (dekho line ~565
+      // ka intentional "not burned" comment). Anti-replay guarantee ON-CHAIN
+      // se aati hai — nonce = keccak256("sess:" + sessionToken) deterministic
+      // hai, aur contract ka usedScoreProofs[nonce] mapping same nonce ko
+      // dobara accept nahi karta. Isliye yahan `used` check remove kar diya
+      // — dead code tha aur mental model confuse karta tha ("one-time use"
+      // kehna galat lagta jab actually rely kar rahe hain contract pe).
 
       const expiresAt = sessData.expiresAt?.toDate?.() || new Date(sessData.expiresAt);
       if (expiresAt < new Date())
@@ -637,13 +695,46 @@ export default async function handler(req, res) {
   }
 
   // ── POST like ──
+  // SH0024 — pehle `rateLimit('like:...', 2)` tha with 60-sec window: user
+  // har minute 2 baar like kar sakta tha → 60+ likes/hr per game. Ab
+  // Firestore mein permanent doc create karte hain (gameLikes/{gameId}_{addr}).
+  // `.create()` fails if exists (atomic), so double-like exactly = 1 like
+  // globally, no per-instance rate-limit fudge factor.
   if (req.method === "POST" && action === "like") {
     const { gameId } = req.body;
-    if (!rateLimit(`like:${user.address}:${gameId}`, 2)) {
-      return res.status(429).json({ error: "Already liked" });
-    }
+    if (!gameId) return res.status(400).json({ error: "gameId required" });
+    const likeId = `${String(gameId)}_${user.address.toLowerCase()}`;
     try {
+      // Atomic create — Firestore rejects if doc exists (code 6 = ALREADY_EXISTS)
+      await db.collection("gameLikes").doc(likeId).create({
+        gameId: String(gameId),
+        player: user.address.toLowerCase(),
+        at: new Date(),
+      });
       await db.collection("games").doc(String(gameId)).update({ likes: FV.increment(1) });
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      // code 6 = ALREADY_EXISTS (Firestore Admin SDK)
+      if (err.code === 6 || /already exists/i.test(err.message || ""))
+        return res.status(409).json({ error: "Already liked" });
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST unlike ──
+  // Companion to `like` — delete the idempotency doc and decrement the count.
+  // No-op if the user never liked. Kept simple; if you want optimistic UI,
+  // frontend can flip state and trust the 200 that comes back.
+  if (req.method === "POST" && action === "unlike") {
+    const { gameId } = req.body;
+    if (!gameId) return res.status(400).json({ error: "gameId required" });
+    const likeId = `${String(gameId)}_${user.address.toLowerCase()}`;
+    try {
+      const likeRef = db.collection("gameLikes").doc(likeId);
+      const existing = await likeRef.get();
+      if (!existing.exists) return res.status(200).json({ success: true, alreadyUnliked: true });
+      await likeRef.delete();
+      await db.collection("games").doc(String(gameId)).update({ likes: FV.increment(-1) });
       return res.status(200).json({ success: true });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
@@ -733,25 +824,89 @@ export default async function handler(req, res) {
   }
 
   // ── POST save-game (creator) ──
+  // SH0027 — three fixes bundled here:
+  //   1. OWNERSHIP CHECK on existing games. Pehle koi bhi authenticated user
+  //      kisi bhi live game ka name / iframeUrl / thumbnail / rewardRate
+  //      overwrite kar sakta tha (attacker swaps Arrow Out iframe to a
+  //      phishing site — critical). Now: existing.creator must match caller.
+  //   2. iframeUrl VALIDATION — https-only, parses as URL, length cap. Pehle
+  //      creator kuch bhi bhej sakta tha (http://, javascript:, typo-squat
+  //      domain). Admin approval loop can still miss subtle phishing URLs.
+  //   3. rewardRate SANITY CAP — pehle backend accepted anything
+  //      (frontend UI enforced limits, easily bypassed). Malicious creator
+  //      could self-set rate = 1e9 to drain the platform's reward pool as
+  //      soon as their game got approved.
   if (req.method === "POST" && action === "save-game") {
     const { gameId, name, description, iframeUrl, thumbnailUrl, category, rewardRate, rewardRateNative, txHash } = req.body;
+
+    // gameId sanity — pehle "undefined" doc ID create ho sakti thi
+    if (gameId == null) return res.status(400).json({ error: "gameId required" });
+    const gidNum3 = Number(gameId);
+    if (!Number.isFinite(gidNum3) || gidNum3 < 0 || gidNum3 > 1e9)
+      return res.status(400).json({ error: "Invalid gameId" });
+
+    // iframeUrl — https-only, valid URL, length cap. javascript: aur data:
+    // schemes reject; http:// reject (mixed-content warnings anyway).
+    if (!iframeUrl || typeof iframeUrl !== "string" || iframeUrl.length > 500)
+      return res.status(400).json({ error: "iframeUrl required (max 500 chars)" });
+    try {
+      const u = new URL(iframeUrl);
+      if (u.protocol !== "https:")
+        return res.status(400).json({ error: "iframeUrl must use https://" });
+    } catch { return res.status(400).json({ error: "Invalid iframeUrl" }); }
+
+    // thumbnailUrl (optional) — same treatment
+    if (thumbnailUrl) {
+      if (typeof thumbnailUrl !== "string" || thumbnailUrl.length > 500)
+        return res.status(400).json({ error: "Invalid thumbnailUrl" });
+      try {
+        const tu = new URL(thumbnailUrl);
+        if (tu.protocol !== "https:" && tu.protocol !== "http:")
+          return res.status(400).json({ error: "thumbnailUrl must be http(s)://" });
+      } catch { return res.status(400).json({ error: "Invalid thumbnailUrl" }); }
+    }
+
+    // Text field caps
+    if (name && (typeof name !== "string" || name.length > 100))
+      return res.status(400).json({ error: "name too long (max 100)" });
+    if (description && (typeof description !== "string" || description.length > 1000))
+      return res.status(400).json({ error: "description too long (max 1000)" });
+    if (category && (typeof category !== "string" || category.length > 50))
+      return res.status(400).json({ error: "category too long" });
+
+    // Reward-rate caps — realistic upper bounds per business logic. Adjust
+    // if your economy legitimately needs higher rates for specific games,
+    // but do NOT accept unbounded input from creators.
+    const MAX_REWARD_RATE        = 500;   // ARCADE per play
+    const MAX_REWARD_RATE_NATIVE = 10;    // native (MSTC) per play
+    const clampedRate       = Math.min(Math.max(parseInt(rewardRate) || 50, 0), MAX_REWARD_RATE);
+    const clampedRateNative = rewardRateNative != null
+      ? Math.min(Math.max(parseInt(rewardRateNative) || 1, 0), MAX_REWARD_RATE_NATIVE)
+      : null;
+
     try {
       const gameRef = db.collection("games").doc(String(gameId));
       const existing = await gameRef.get();
       if (existing.exists) {
+        // OWNERSHIP CHECK — this is the critical fix. Without it, any
+        // authenticated wallet could hijack any live game.
+        const existingCreator = existing.data().creator?.toLowerCase();
+        if (existingCreator && existingCreator !== user.address?.toLowerCase())
+          return res.status(403).json({ error: "Not your game" });
+
         await gameRef.update({
           name, description, iframeUrl,
           thumbnailUrl: thumbnailUrl || existing.data().thumbnailUrl || "",
-          category, rewardRate: parseInt(rewardRate) || 50,
-          rewardRateNative: rewardRateNative != null ? parseInt(rewardRateNative) : (existing.data().rewardRateNative ?? 1),
+          category, rewardRate: clampedRate,
+          rewardRateNative: clampedRateNative != null ? clampedRateNative : (existing.data().rewardRateNative ?? 1),
           txHash, status: "pending", updatedAt: new Date(),
         });
       } else {
         await gameRef.set({
-          gameId, name, description, iframeUrl,
+          gameId: gidNum3, name, description, iframeUrl,
           thumbnailUrl: thumbnailUrl || "",
-          category, rewardRate: parseInt(rewardRate) || 50,
-          rewardRateNative: rewardRateNative != null ? parseInt(rewardRateNative) : 1,
+          category, rewardRate: clampedRate,
+          rewardRateNative: clampedRateNative != null ? clampedRateNative : 1,
           creator: user.address, txHash,
           status: "pending", plays: 0, earned: 0,
           createdAt: new Date(),
@@ -770,15 +925,43 @@ export default async function handler(req, res) {
       if (!game.exists) return res.status(404).json({ error: "Game not found" });
       if (game.data().creator?.toLowerCase() !== user.address?.toLowerCase()) return res.status(403).json({ error: "Not your game" });
       const updates = {};
-      if (rewardRate != null) updates.rewardRate = parseInt(rewardRate);
-      if (rewardRateNative != null) updates.rewardRateNative = parseInt(rewardRateNative);
+      // Reward-rate caps — same ceilings as save-game (SH0027)
+      const MAX_REWARD_RATE        = 500;
+      const MAX_REWARD_RATE_NATIVE = 10;
+      if (rewardRate != null)
+        updates.rewardRate = Math.min(Math.max(parseInt(rewardRate) || 0, 0), MAX_REWARD_RATE);
+      if (rewardRateNative != null)
+        updates.rewardRateNative = Math.min(Math.max(parseInt(rewardRateNative) || 0, 0), MAX_REWARD_RATE_NATIVE);
       if (helpContent != null) {
+        // SH0028 — videoUrl XSS fix. Pehle creator "javascript:fetch(...jwt)"
+        // set kar sakta tha; frontend <a href={videoUrl}> raw insert karta
+        // hai. Modern browsers mostly block javascript: in target=_blank,
+        // but not guaranteed on older Android WebViews (in-app wallet
+        // browsers on old Android). Backend fail-closed check: https-only
+        // OR empty string (empty = "no video, hide the link").
+        const videoUrl = (helpContent.videoUrl || "").trim();
+        if (videoUrl) {
+          if (videoUrl.length > 500)
+            return res.status(400).json({ error: "videoUrl too long" });
+          try {
+            const vu = new URL(videoUrl);
+            if (vu.protocol !== "https:")
+              return res.status(400).json({ error: "videoUrl must use https://" });
+          } catch { return res.status(400).json({ error: "Invalid videoUrl" }); }
+        }
+        // Text field caps for the other helpContent sub-fields
+        const capText = (v, max) => {
+          if (v == null) return "";
+          if (typeof v !== "string") return "";
+          const t = v.trim();
+          return t.length > max ? t.slice(0, max) : t;
+        };
         updates.helpContent = {
-          objective: (helpContent.objective || "").trim(),
-          controls: (helpContent.controls || "").trim(),
-          instructions: (helpContent.instructions || "").trim(),
-          tips: (helpContent.tips || "").trim(),
-          videoUrl: (helpContent.videoUrl || "").trim(),
+          objective:    capText(helpContent.objective,    500),
+          controls:     capText(helpContent.controls,     500),
+          instructions: capText(helpContent.instructions, 1000),
+          tips:         capText(helpContent.tips,         500),
+          videoUrl,
         };
       }
       if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
@@ -910,6 +1093,14 @@ export default async function handler(req, res) {
   // faucet.withdrawFunds is onlyOwner; the server PRIVATE_KEY is that owner
   // (same key claim-gas uses), so an on-chain admin can trigger a withdrawal
   // without ever holding/connecting the owner wallet in a browser.
+  //
+  // SH0029 — SAFETY CAPS. Pehle admin authenticated ho toh full faucet balance
+  // in one call withdraw kar sakta tha to any address. Admin wallet compromise
+  // (phishing sig, malicious extension, seed leak) = instant drain. Now:
+  //   • per-call cap (MAX_WITHDRAW_MSTC)
+  //   • rolling 24h aggregate cap (DAILY_WITHDRAW_CAP), tracked in Firestore
+  //   • audit log entry per withdrawal (who / when / how much / where / tx)
+  // Adjust the caps to whatever legitimate withdrawal needs actually require.
   if (req.method === "POST" && action === "admin-faucet-withdraw") {
     if (!(await checkOnChainAdmin(user.address)))
       return res.status(403).json({ error: "Admin only" });
@@ -918,6 +1109,21 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Valid 'to' address required" });
     if (amount == null || isNaN(Number(amount)) || Number(amount) <= 0)
       return res.status(400).json({ error: "Valid amount required" });
+
+    const MAX_WITHDRAW_MSTC   = 500;   // per-call ceiling
+    const DAILY_WITHDRAW_CAP  = 2000;  // rolling-24h aggregate ceiling
+    const amtNum = Number(amount);
+    if (amtNum > MAX_WITHDRAW_MSTC)
+      return res.status(400).json({ error: `Max ${MAX_WITHDRAW_MSTC} MSTC per call — split into multiple withdrawals` });
+
+    // Daily-cap check via Firestore. Key by UTC date so cap resets at 00:00 UTC.
+    const todayKey  = new Date().toISOString().split("T")[0];
+    const dailyRef  = db.collection("adminAudit").doc(`faucetWithdraw_${todayKey}`);
+    const dailySnap = await dailyRef.get();
+    const usedToday = dailySnap.exists ? (dailySnap.data().totalMSTC || 0) : 0;
+    if (usedToday + amtNum > DAILY_WITHDRAW_CAP)
+      return res.status(400).json({ error: `Daily cap (${DAILY_WITHDRAW_CAP} MSTC) would be exceeded — used ${usedToday} today` });
+
     try {
       const rpcUrl     = process.env.MST_RPC_URL;
       const pk         = process.env.PRIVATE_KEY;
@@ -945,7 +1151,30 @@ export default async function handler(req, res) {
 
       const tx = await faucet.withdrawFunds(to, amountWei, { gasLimit: 120000 });
       await tx.wait();
-      return res.status(200).json({ success: true, txHash: tx.hash, amount: String(amount), to });
+
+      // Audit + daily cap accounting (append-only). If this fails, the tx
+      // has already gone through — log it and continue so the admin sees
+      // success rather than a confusing 500 after money moved.
+      try {
+        await dailyRef.set({
+          totalMSTC: usedToday + amtNum,
+          lastAdmin: user.address.toLowerCase(),
+          lastAmount: amtNum,
+          lastTo: to.toLowerCase(),
+          lastTxHash: tx.hash,
+          lastAt: new Date(),
+        }, { merge: true });
+        await db.collection("adminAudit").add({
+          kind: "faucetWithdraw",
+          admin: user.address.toLowerCase(),
+          amount: amtNum, to: to.toLowerCase(),
+          txHash: tx.hash, at: new Date(),
+        });
+      } catch (auditErr) {
+        console.error("[audit] faucetWithdraw log failed:", auditErr);
+      }
+
+      return res.status(200).json({ success: true, txHash: tx.hash, amount: String(amount), to, usedToday: usedToday + amtNum, dailyCap: DAILY_WITHDRAW_CAP });
     } catch (err) {
       return res.status(500).json({ error: err.shortMessage || err.message });
     }
