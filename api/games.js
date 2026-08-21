@@ -103,19 +103,33 @@ export default async function handler(req, res) {
   const db = getDb();
 
   // ── GET stats (public) ──
+  // SH0030 — cost-explosion fix. Pehle har call mein PLAYERS SUBCOLLECTION
+  // fully read hoti thi (`.collection("players").get()`) sirf `.size` count
+  // ke liye — matlab 500 unique players wale game ka har stats call = 500+
+  // reads. Har GamePlay mount, har home page card, har navigation. 300 users
+  // × 20 games × 50-500 players = MILLIONS of reads per day. Yeh WAS the
+  // 17M-reads bill.
+  //
+  // Fix: uniquePlayers count is now tracked as a scalar field on the games
+  // doc itself (incremented by `play` action). One doc read instead of a
+  // subcollection scan. Plus 60-sec Vercel Edge cache — same gameId hit karo
+  // 100 baar, sirf 1 baar Firestore hit hota hai.
   if (req.method === "GET" && action === "stats") {
     const { gameId } = req.query;
     if (!gameId) return res.status(400).json({ error: "gameId required" });
     try {
+      // Edge/CDN cache — public read, no auth, safe to share across users
+      res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+
       const gDoc = await db.collection("games").doc(String(gameId)).get();
       const data = gDoc.exists ? gDoc.data() : {};
-      const pSnap = await db.collection("games").doc(String(gameId)).collection("players").get();
+      // Comments capped at 50 already — fine as-is
       const cSnap = await db.collection("games").doc(String(gameId)).collection("comments")
         .orderBy("createdAt", "desc").limit(50).get();
       return res.status(200).json({
         plays: data.plays || 0,
         likes: data.likes || 0,
-        uniquePlayers: pSnap.size,
+        uniquePlayers: data.uniquePlayers || 0,   // scalar field, no subcollection read
         comments: cSnap.docs.map(d => ({
           id: d.id, ...d.data(),
           createdAt: d.data().createdAt?.toDate?.() || null
@@ -125,8 +139,14 @@ export default async function handler(req, res) {
   }
 
   // ── GET list (public — approved games) ──
+  // SH0030 — Edge cache added. useGames.js har page mount pe hit karta hai
+  // (Home, Games, Leaderboard, Marketplace, etc.). 300 users × 15 pages
+  // = 4500 calls/day, each fetching all games. With 60-sec CDN cache, same
+  // response ka 99% Vercel Edge se serve hoga — Firestore hit only when
+  // cache expires (~1440 times/day max).
   if (req.method === "GET" && action === "list") {
     try {
+      res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
       const snap = await db.collection("games").where("status", "==", "approved").get();
       const games = snap.docs.map(d => ({ id: d.data().gameId, ...d.data() }));
       return res.status(200).json({ games });
@@ -160,17 +180,22 @@ export default async function handler(req, res) {
   }
 
   // ── GET creator-games ──
+  // SH0030 — pehle POORI games collection read hoti thi (`.get()` without
+  // filter) aur client-side `.filter()` se creator match hota tha. Matlab
+  // 500 games hain aur creator ke 3 hain — reads 500, useful 3.
+  // Ab server-side where("creator", "==", addr) — sirf 3 reads.
+  //
+  // Firestore mein `creator` field pe automatic single-field index hota hai,
+  // so no manual index setup needed. Address JWT se lowercase aata hai, aur
+  // save-game bhi lowercase mein store karta hai, so query direct match kare.
   if (req.method === "GET" && action === "creator-games") {
     const user = verifyToken(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     try {
       const lowerAddress = user.address.toLowerCase();
-      const allGamesSnap = await db.collection("games").get();
-      const uniqueDocs = allGamesSnap.docs.filter(d => {
-        const creator = d.data().creator;
-        return creator && creator.toLowerCase() === lowerAddress;
-      });
-      const games = uniqueDocs
+      // Server-side filter — Firestore reads only matching docs
+      const snap = await db.collection("games").where("creator", "==", lowerAddress).get();
+      const games = snap.docs
         .map(d => ({ id: d.data().gameId || d.id, ...d.data() }))
         .sort((a, b) => (b.gameId || 0) - (a.gameId || 0));
       return res.status(200).json({ games });
@@ -180,6 +205,13 @@ export default async function handler(req, res) {
   // ── GET check-gas-claim (public) ──
   // Public → koi bhi random address bhej ke MST RPC hammer kar sakta hai
   // (RPC quota drain + Vercel function budget). IP-scoped rate limit.
+  //
+  // SH0030 — 5-minute in-memory cache added. Navbar mount pe hit hota hai;
+  // hasClaimed status once claimed never changes back to false. Cache
+  // hit → skip RPC entirely. Reduces MST RPC calls from 12K/day to
+  // ~500-1000/day (24x reduction). In-memory = per-instance, but per-warm-
+  // instance ka bhi savings massive hai. Once-per-address hits at cold
+  // start; subsequent hits are cache-served for 5 min.
   if (req.method === "GET" && action === "check-gas-claim") {
     const cgcIp = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
     if (!rateLimit(`check-claim:${cgcIp}`, 20))
@@ -187,6 +219,18 @@ export default async function handler(req, res) {
     const { address: claimAddr } = req.query;
     if (!claimAddr || !ethers.isAddress(claimAddr))
       return res.status(400).json({ error: "Valid address required" });
+
+    // Cache lookup — hasClaimed = true never reverts, so 5-min cache is
+    // safe for both true and false values. If false and user claims soon
+    // after, cache miss on next lookup after 5 min will pick up the change.
+    const addrLc = claimAddr.toLowerCase();
+    const cached = checkClaimCache.get(addrLc);
+    if (cached && Date.now() - cached.at < 5 * 60 * 1000) {
+      // Also set browser cache to prevent Navbar re-fires within the same session
+      res.setHeader("Cache-Control", "private, max-age=60");
+      return res.status(200).json({ claimed: cached.value, cached: true });
+    }
+
     try {
       const provider = new ethers.JsonRpcProvider(process.env.MST_RPC_URL);
       const faucet   = new ethers.Contract(
@@ -195,6 +239,15 @@ export default async function handler(req, res) {
         provider
       );
       const claimed = await faucet.hasClaimed(claimAddr);
+      // Save to cache
+      checkClaimCache.set(addrLc, { value: claimed, at: Date.now() });
+      // Bound cache size — prevent memory bloat over long-running instance
+      if (checkClaimCache.size > 5000) {
+        // Delete oldest 500 entries
+        const entries = [...checkClaimCache.entries()].sort((a, b) => a[1].at - b[1].at);
+        entries.slice(0, 500).forEach(([k]) => checkClaimCache.delete(k));
+      }
+      res.setHeader("Cache-Control", "private, max-age=60");
       return res.status(200).json({ claimed });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
