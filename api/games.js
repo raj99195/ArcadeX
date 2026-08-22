@@ -271,7 +271,14 @@ export default async function handler(req, res) {
   //     se aayenge (user-scores).
   //   • orderBy createdAt desc — sabse recent pehle, deterministic
   //   • Edge cache 30 sec — same query result 30-sec tak CDN se serve
-  //   • Optional gameId filter — per-game leaderboard ke liye
+  //   • Optional gameId + chain filters — server-side, saves reads
+  //
+  // SH0031 — Firestore composite-index fallback. `.where() + .orderBy()`
+  // combo ke liye composite index chahiye (chain+createdAt, gameId+createdAt,
+  // etc.). Deploy ke turant baad index nahi hoti → query fail → frontend
+  // empty state. Try-catch se fallback: index missing ho toh sirf `.where()`
+  // + JS-side sort. Slower + slightly more reads, but keeps the endpoint
+  // functional while indexes build in background (5-10 min after creation).
   if (req.method === "GET" && action === "scores") {
     try {
       // Edge/CDN cache — safe because response is same for all users
@@ -283,15 +290,26 @@ export default async function handler(req, res) {
       let ref = db.collection("scores");
       if (chain)  ref = ref.where("chain",  "==", chain);
       if (gameId) ref = ref.where("gameId", "==", parseInt(gameId));
-      ref = ref.orderBy("createdAt", "desc").limit(lim);
 
-      const snap = await ref.get();
-      const scores = snap.docs.map(d => ({
-        id: d.id, ...d.data(),
-        createdAt: d.data().createdAt?.toDate?.() || null,
-      }));
-      // Client can sort by `score` field if needed for leaderboard;
-      // primary order is time-based here.
+      let scores = [];
+      try {
+        // Preferred — needs composite index (chain+createdAt, gameId+createdAt)
+        const snap = await ref.orderBy("createdAt", "desc").limit(lim).get();
+        scores = snap.docs.map(d => ({
+          id: d.id, ...d.data(),
+          createdAt: d.data().createdAt?.toDate?.() || null,
+        }));
+      } catch (indexErr) {
+        // Firestore code 9 = FAILED_PRECONDITION (index missing / building)
+        console.warn("[scores] orderBy fallback:", indexErr.code, indexErr.message);
+        const snap = await ref.limit(lim).get();
+        scores = snap.docs
+          .map(d => ({
+            id: d.id, ...d.data(),
+            createdAt: d.data().createdAt?.toDate?.() || null,
+          }))
+          .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      }
       return res.status(200).json({ scores });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
@@ -300,21 +318,38 @@ export default async function handler(req, res) {
   // SH0030 — new endpoint. Navbar earnings panel pehle full scores collection
   // fetch karke client-side filter karta tha (user's wallet ka match). Ab
   // server-side where("player", "==", wallet) — reads sirf user ke scores.
+  //
+  // SH0031 — same composite-index fallback as scores endpoint (player + createdAt)
   if (req.method === "GET" && action === "user-scores") {
     const uUser = verifyToken(req);
     if (!uUser) return res.status(401).json({ error: "Unauthorized" });
     try {
       res.setHeader("Cache-Control", "private, max-age=30");
       const wallet = uUser.address.toLowerCase();
-      const snap = await db.collection("scores")
-        .where("player", "==", wallet)
-        .orderBy("createdAt", "desc")
-        .limit(200)
-        .get();
-      const scores = snap.docs.map(d => ({
-        id: d.id, ...d.data(),
-        createdAt: d.data().createdAt?.toDate?.() || null,
-      }));
+      let scores = [];
+      try {
+        const snap = await db.collection("scores")
+          .where("player", "==", wallet)
+          .orderBy("createdAt", "desc")
+          .limit(200)
+          .get();
+        scores = snap.docs.map(d => ({
+          id: d.id, ...d.data(),
+          createdAt: d.data().createdAt?.toDate?.() || null,
+        }));
+      } catch (indexErr) {
+        console.warn("[user-scores] orderBy fallback:", indexErr.code, indexErr.message);
+        const snap = await db.collection("scores")
+          .where("player", "==", wallet)
+          .limit(200)
+          .get();
+        scores = snap.docs
+          .map(d => ({
+            id: d.id, ...d.data(),
+            createdAt: d.data().createdAt?.toDate?.() || null,
+          }))
+          .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      }
       return res.status(200).json({ scores });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
