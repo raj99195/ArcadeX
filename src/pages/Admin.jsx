@@ -142,10 +142,16 @@ export default function Admin() {
   const fetchAnalytics = async () => {
     setAnalyticsLoading(true);
     try {
-      // SH0030 — admin analytics ke liye limit 2000 scores. Kaafi hai
-      // charts/aggregate stats ke liye. Pehle full collection scan tha
-      // (100K+ scores possible) — admin dashboard mount pe massive read.
-      const scoresRes = await fetch("/api/games?action=scores&limit=2000");
+      // SH0030/SH0032 — admin analytics ke liye limit 10000 scores. Pehle
+      // full collection scan tha (100K+ scores) — massive read on every
+      // admin mount. Backend anonymous cap 500 hai (public leaderboard),
+      // authenticated cap 10000 (admin/creator). JWT bhejna zaroori hai
+      // warna backend anonymous manega → 500 cap → analytics chart aur
+      // aggregates (total players, total plays) galat under-counted honge.
+      const token = localStorage.getItem("arcadex_jwt");
+      const scoresRes = await fetch("/api/games?action=scores&limit=10000", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const scoresData = await scoresRes.json();
       const allScores = scoresData.scores || [];
       setScores(allScores);
