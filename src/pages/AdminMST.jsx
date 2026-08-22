@@ -233,6 +233,16 @@ export default function AdminMST() {
   const [scores, setScores] = useState([]);
   const [loadingData, setLoadingData] = useState(true);
 
+  // SH0033 — Date range filter (MST team feature request).
+  // Default: last 14 days. Quick buttons + custom picker on Player Activity.
+  // ISO date strings (YYYY-MM-DD) — HTML5 date input compatible.
+  const isoDate = (d) => d.toISOString().slice(0, 10);
+  const _today = new Date();
+  const _14dAgo = new Date(_today.getTime() - 14 * 86400000);
+  const [dateFrom, setDateFrom] = useState(isoDate(_14dAgo));
+  const [dateTo,   setDateTo]   = useState(isoDate(_today));
+  const [rangePreset, setRangePreset] = useState("14d"); // "7d" | "14d" | "30d" | "all" | "custom"
+
   // ── Saved state — button goes green after tx, resets when input changes ──
   const [savedSplit, setSavedSplit] = useState(false);
   const [savedCaps, setSavedCaps] = useState(false);
@@ -356,14 +366,18 @@ try {
     (async () => {
       setLoadingData(true);
       try {
-        // SH0030/SH0032 — MST Player Activity tab ke stats sahi dikhaane
-        // ke liye 10000 tak scores fetch. JWT bhejna ZAROORI hai — anonymous
-        // requests backend pe 500 hard-cap hoti hain (public leaderboard
-        // safety). Bina JWT → Player Activity mein 500 plays clip dikhega
-        // even if actual plays 5000+ hain, aur "Payout (14D)", "Active
-        // Players", "Top Earners" sab under-counted honge.
+        // SH0030/SH0032/SH0033 — Admin Player Activity fetch:
+        //   • JWT header → authenticated cap 10000 (anon 500)
+        //   • from/to params → server-side date range filter (Firestore query)
+        //   • rangePreset "all" → skip date params, fetch recent 10000 all-time
+        // MST team feature request: "one date selection field there where
+        // can put custom date and can check the activity data from
+        // (date to date)".
         const token = localStorage.getItem("arcadex_jwt");
-        const res = await fetch("/api/games?action=scores&chain=mst&limit=10000", {
+        const params = new URLSearchParams({ action: "scores", chain: "mst", limit: "10000" });
+        if (rangePreset !== "all" && dateFrom) params.set("from", dateFrom);
+        if (rangePreset !== "all" && dateTo)   params.set("to",   dateTo);
+        const res = await fetch(`/api/games?${params.toString()}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         const data = await res.json();
@@ -374,7 +388,7 @@ try {
         setLoadingData(false);
       }
     })();
-  }, [hasAccess]);
+  }, [hasAccess, dateFrom, dateTo, rangePreset]);
 
   useEffect(() => {
     if (hasAccess && activeTab === "tournament") fetchMyTournaments();
@@ -519,6 +533,10 @@ try {
 
   // ── Derived data for Player Activity ──
   // MST chain pe rewardRateNative use karo — rewardRate BOTChain (ARCADE) ka hai
+  // SH0033 — only APPROVED games count in aggregates. `useGames()` hook already
+  // returns only status=approved games (backend filter). Non-approved games ke
+  // scores skip kar diye (koi legacy score jo pending/rejected game se hai wo
+  // total plays / payout mein nahi ginega).
   const gameRateMap = Object.fromEntries(
     games.map(g => {
       // rewardRateNative = Firestore value in MSTC (e.g. 0.5)
@@ -531,7 +549,11 @@ try {
   );
   const playerAgg = {};
   const dayAgg = {};
+  let filteredPlaysCount = 0;
   for (const s of scores) {
+    // Approved games only — score's gameId must exist in approved games map.
+    // Legacy/pending game scores ignore ho jaate hain totals se.
+    if (!(s.gameId in gameRateMap)) continue;
     const rate = gameRateMap[s.gameId] ?? 0;
     const playerShare = settings ? Number(settings.playerPct) : 80;
     const estEarned = rate * (playerShare / 100);
@@ -540,14 +562,44 @@ try {
     playerAgg[s.player].estEarned += estEarned;
     const day = s.createdAt ? new Date(s.createdAt).toISOString().slice(0, 10) : "unknown";
     dayAgg[day] = (dayAgg[day] || 0) + estEarned;
+    filteredPlaysCount += 1;
   }
   const playerRows = Object.entries(playerAgg).sort((a, b) => b[1].estEarned - a[1].estEarned);
-  const dayRows = Object.entries(dayAgg).sort((a, b) => a[0].localeCompare(b[0])).slice(-14)
-    .map(([day, val]) => ({ day: day.slice(5), full: day, mstc: Number(val.toFixed(3)) }));
+  // Chart: full selected date range (not just last 14 days). Fills missing
+  // days with 0 so chart shows continuous timeline.
+  const dayRows = (() => {
+    if (rangePreset === "all") {
+      // All-time — just show whatever days have data, up to last 90
+      return Object.entries(dayAgg)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .slice(-90)
+        .map(([day, val]) => ({ day: day.slice(5), full: day, mstc: Number(val.toFixed(3)) }));
+    }
+    // Custom/preset range — fill gaps with 0 so the chart is continuous
+    const fromD = new Date(dateFrom);
+    const toD   = new Date(dateTo);
+    const days  = [];
+    for (let d = new Date(fromD); d <= toD; d.setDate(d.getDate() + 1)) {
+      const iso = d.toISOString().slice(0, 10);
+      days.push({ day: iso.slice(5), full: iso, mstc: Number((dayAgg[iso] || 0).toFixed(3)) });
+    }
+    return days;
+  })();
   const totalPayout14d = dayRows.reduce((s, d) => s + d.mstc, 0);
-  const totalPlays = scores.length;
+  const totalPlays = filteredPlaysCount;
   const activePlayers = playerRows.length;
   const avgPerPlayer = activePlayers > 0 ? totalPayout14d / activePlayers : 0;
+
+  // SH0033 — Quick-range button helper
+  const applyRangePreset = (preset) => {
+    const now = new Date();
+    setRangePreset(preset);
+    if (preset === "all") { setDateFrom(""); setDateTo(""); return; }
+    const daysBack = { "7d": 7, "14d": 14, "30d": 30 }[preset] || 14;
+    const from = new Date(now.getTime() - daysBack * 86400000);
+    setDateFrom(isoDate(from));
+    setDateTo(isoDate(now));
+  };
 
   if (!isConnected) {
     return <div style={{ minHeight: "100vh", background: P.bg, display: "flex", alignItems: "center", justifyContent: "center", color: P.dim, fontFamily: P.raj, fontSize: 13 }}>Connect your wallet to continue.</div>;
@@ -1012,16 +1064,81 @@ try {
         {/* ══════════════ PLAYERS TAB ══════════════ */}
         {activeTab === "players" && (
           <>
+            {/* SH0033 — Date range picker (MST team feature request).
+                Quick preset buttons + custom from/to date inputs.
+                Refetches scores on change (useEffect deps include date state). */}
+            <div style={{
+              background: P.card, border: `1px solid ${P.border}`, borderRadius: 12,
+              padding: "14px 18px", marginBottom: 16,
+              display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12,
+            }}>
+              <div style={{ fontFamily: P.raj, fontSize: 11, color: P.dimMore, textTransform: "uppercase", letterSpacing: "0.6px", marginRight: 4 }}>
+                📅 Range:
+              </div>
+              {/* Quick preset buttons */}
+              {["7d", "14d", "30d", "all"].map(p => (
+                <button
+                  key={p}
+                  onClick={() => applyRangePreset(p)}
+                  style={{
+                    padding: "6px 12px",
+                    background: rangePreset === p ? `linear-gradient(135deg, ${P.purple}, #4a1a9c)` : "transparent",
+                    color: rangePreset === p ? "#fff" : P.dim,
+                    border: `1px solid ${rangePreset === p ? P.purple : P.border}`,
+                    borderRadius: 6,
+                    fontFamily: P.raj, fontSize: 11, fontWeight: 700,
+                    cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.4px",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {p === "all" ? "All Time" : p}
+                </button>
+              ))}
+              {/* Custom date inputs */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  disabled={rangePreset === "all"}
+                  onChange={(e) => { setDateFrom(e.target.value); setRangePreset("custom"); }}
+                  max={dateTo || undefined}
+                  style={{
+                    padding: "6px 10px", background: P.bg, color: "#fff",
+                    border: `1px solid ${P.border}`, borderRadius: 6,
+                    fontFamily: P.raj, fontSize: 12,
+                    opacity: rangePreset === "all" ? 0.4 : 1,
+                    colorScheme: "dark",
+                  }}
+                />
+                <span style={{ fontFamily: P.raj, fontSize: 11, color: P.dimMore }}>to</span>
+                <input
+                  type="date"
+                  value={dateTo}
+                  disabled={rangePreset === "all"}
+                  onChange={(e) => { setDateTo(e.target.value); setRangePreset("custom"); }}
+                  min={dateFrom || undefined}
+                  max={isoDate(new Date())}
+                  style={{
+                    padding: "6px 10px", background: P.bg, color: "#fff",
+                    border: `1px solid ${P.border}`, borderRadius: 6,
+                    fontFamily: P.raj, fontSize: 12,
+                    opacity: rangePreset === "all" ? 0.4 : 1,
+                    colorScheme: "dark",
+                  }}
+                />
+              </div>
+            </div>
+
             {loadingData ? (
               <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 16 }}><EmptyState icon="⏳" text="Loading activity..." /></div>
             ) : scores.length === 0 ? (
-              <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 16 }}><EmptyState icon="📊" text="No plays recorded on this chain yet." /></div>
+              <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 16 }}><EmptyState icon="📊" text={rangePreset === "all" ? "No plays recorded on this chain yet." : "No plays in this date range. Try a wider range."} /></div>
             ) : (
               <>
-                {/* Summary stat row */}
+                {/* Summary stat row — SH0033 labels reflect selected range */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 20 }}>
                   {[
-                    { label: "Payout (14d)", value: `${totalPayout14d.toFixed(2)} MSTC`, accent: P.purple },
+                    { label: rangePreset === "all" ? "Payout (All Time)" : `Payout (${rangePreset === "custom" ? "Range" : rangePreset})`, value: `${totalPayout14d.toFixed(2)} MSTC`, accent: P.purple },
                     { label: "Total Plays", value: totalPlays.toLocaleString(), accent: P.cyan },
                     { label: "Active Players", value: activePlayers.toLocaleString(), accent: P.green },
                     { label: "Avg / Player", value: `${avgPerPlayer.toFixed(2)} MSTC`, accent: P.amber },
@@ -1036,7 +1153,11 @@ try {
                 {/* Chart */}
                 <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 16, padding: 26, marginBottom: 20 }}>
                   <div style={{ fontFamily: P.orb, fontSize: 13, color: "#fff", marginBottom: 2 }}>Daily Payout</div>
-                  <div style={{ ...hintStyle, marginBottom: 18 }}>Last 14 days, estimated MSTC paid out platform-wide.</div>
+                  <div style={{ ...hintStyle, marginBottom: 18 }}>
+                    {rangePreset === "all" ? "All-time daily payouts (last 90 days shown)" :
+                     rangePreset === "custom" ? `${dateFrom} to ${dateTo} — estimated MSTC paid out platform-wide.` :
+                     `Last ${rangePreset === "7d" ? "7" : rangePreset === "14d" ? "14" : "30"} days, estimated MSTC paid out platform-wide.`}
+                  </div>
                   <ResponsiveContainer width="100%" height={220}>
                     <AreaChart data={dayRows} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
                       <defs>
