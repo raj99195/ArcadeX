@@ -173,6 +173,20 @@ export default function GamePlay() {
   //   • Game restart (raw < baseline) → baseline resets to 0
   const [rawGameScore, setRawGameScore] = useState(0);
   const [scoreBaseline, setScoreBaseline] = useState(0);
+  // SH0037 — refs for values that submitScore reads. The message-listener
+  // useEffect deps only includes a subset of state (address, game, submitted,
+  // chainId, contracts, isNativeToken) to avoid churning the listener on every
+  // score tick. But submitScore captured in that closure was reading STALE
+  // playerSplit (default 80), stale minScore, stale rawGameScore, etc. Result:
+  //   • Sidebar "You earn" showed +0.5 (correct, from latest render)
+  //   • Success overlay "earned!" showed +0.4 (stale closure with playerSplit=80)
+  //   • MST minScore gate could bypass with old value
+  // Fix: keep listener deps minimal, refs sync latest on every render, and
+  // submitScore reads *from refs* — always current, no listener re-registration.
+  const playerSplitRef   = useRef(80);
+  const minScoreRef      = useRef(null);
+  const rawGameScoreRef  = useRef(0);
+  const scoreBaselineRef = useRef(0);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [isFakeFullscreen, setIsFakeFullscreen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -308,6 +322,13 @@ export default function GamePlay() {
   }, [games]);
 
   useEffect(() => { if (game) setLikeCount(game.likes || 0); }, [game]);
+
+  // SH0037 — keep refs in sync with state so submitScore always reads latest
+  // (see ref declarations above for full explanation of the closure bug).
+  useEffect(() => { playerSplitRef.current   = playerSplit;   }, [playerSplit]);
+  useEffect(() => { minScoreRef.current      = minScore;      }, [minScore]);
+  useEffect(() => { rawGameScoreRef.current  = rawGameScore;  }, [rawGameScore]);
+  useEffect(() => { scoreBaselineRef.current = scoreBaseline; }, [scoreBaseline]);
 
   // SH0036 — load persisted score baseline for THIS game+wallet from
   // localStorage. Ensures baseline survives page reloads (user submits,
@@ -786,10 +807,11 @@ export default function GamePlay() {
         if (!Number.isFinite(sc) || sc < 0) return; // garbage score ignore
         if (submitted) { setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false; }
         setRawGameScore(sc);
-        // SH0036 — baseline transform. Displayed score = raw - baseline.
+        // SH0036/SH0037 — baseline transform via ref (avoids stale-closure).
         // If raw < baseline, game restarted (or new session) → reset baseline to 0.
-        let effectiveBaseline = scoreBaseline;
-        if (sc < scoreBaseline) {
+        const currentBaseline = scoreBaselineRef.current;
+        let effectiveBaseline = currentBaseline;
+        if (sc < currentBaseline) {
           effectiveBaseline = 0;
           setScoreBaseline(0);
           try {
@@ -804,8 +826,9 @@ export default function GamePlay() {
         if (!Number.isFinite(sc) || sc < 0) return; // garbage score ignore
         setRawGameScore(sc);
         // Baseline transform for GAME_OVER too
-        let effectiveBaseline = scoreBaseline;
-        if (sc < scoreBaseline) {
+        const currentBaseline = scoreBaselineRef.current;
+        let effectiveBaseline = currentBaseline;
+        if (sc < currentBaseline) {
           effectiveBaseline = 0;
           setScoreBaseline(0);
           try {
@@ -886,11 +909,16 @@ export default function GamePlay() {
     // score se dobara claim kar sakta tha (multiple rewards, koi extra
     // effort nahi). Ab har claim ke liye fresh 500 points earn karne hi
     // padenge — reward pool drain rate slow ho jayegi drastically.
-    if (minScore !== null && Number(finalScore) < Number(minScore)) {
+    //
+    // SH0037 — read minScore from ref, not closure. Message-listener
+    // useEffect deps don't include minScore, so the listener's captured
+    // submitScore had stale null/undefined value → gate silently bypassed.
+    const currentMinScore = minScoreRef.current;
+    if (currentMinScore !== null && Number(finalScore) < Number(currentMinScore)) {
       setSubmitError({
         type: "min-score", soft: true, icon: "🎯",
         title: "Earn more points to claim",
-        msg: `You need ${Number(minScore).toLocaleString()} points since your last claim. Current: ${Number(finalScore).toLocaleString()} — keep playing!`,
+        msg: `You need ${Number(currentMinScore).toLocaleString()} points since your last claim. Current: ${Number(finalScore).toLocaleString()} — keep playing!`,
       });
       return;
     }
@@ -901,10 +929,16 @@ export default function GamePlay() {
       const onChainGameId = game.gameId;
       if (!onChainGameId) throw new Error("Game not registered on-chain");
       const rewardRate = (isNativeToken ? game.rewardRateNative : game.rewardRate) || (isNativeToken ? 1 : 50);
+      // SH0037 — read playerSplit from ref. Message-listener useEffect deps
+      // don't include playerSplit, so the listener's captured submitScore
+      // had stale default 80 → sidebar showed "+0.5 You earn" (from fresh
+      // render with playerSplit=100) but success overlay showed "+0.4"
+      // (from stale closure). Ref sync guarantees latest value.
+      const currentSplit = playerSplitRef.current;
       // Math.floor() was rounding native-chain estimates (rate 1-2) straight
       // to 0 — 80% of 1 is 0.8, floors to 0. Round to 2 decimals instead so
       // small native-token amounts still show up.
-      const playerReward = Math.round(rewardRate * playerSplit / 100 * 100) / 100;
+      const playerReward = Math.round(rewardRate * currentSplit / 100 * 100) / 100;
 
       // ── STEP 1: Ensure JWT (sign-in if missing/expired) ──────────
       // OLD: hard-errored "Not Signed In" and asked user to reconnect
@@ -1052,10 +1086,15 @@ export default function GamePlay() {
       // claim. Persist baseline = current raw game score, so next SCORE_UPDATE
       // from iframe shows only NEW points earned since this claim. User has
       // to earn a fresh minScore worth of points before next submit is allowed.
+      //
+      // SH0037 — read rawGameScore from ref. Message-listener closure had
+      // stale rawGameScore from when useEffect ran (usually 0). Ref sync
+      // ensures we save the latest actual score as baseline.
       try {
+        const currentRaw = rawGameScoreRef.current;
         const key = `arcadex_score_baseline_${address.toLowerCase()}_${game.id}`;
-        localStorage.setItem(key, String(rawGameScore));
-        setScoreBaseline(rawGameScore);
+        localStorage.setItem(key, String(currentRaw));
+        setScoreBaseline(currentRaw);
         setScore(0);   // display resets to 0 immediately
       } catch { /* silent — baseline sync will just re-fetch from raw */ }
 
