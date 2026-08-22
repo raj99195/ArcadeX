@@ -356,7 +356,10 @@ try {
     (async () => {
       setLoadingData(true);
       try {
-        const res = await fetch("/api/games?action=scores&chain=mst");
+        // SH0030 — capped at 2000 scores. Pehle full MST scores collection
+        // read hoti thi (potentially 50K+ docs). Ye MST dashboard mount pe
+        // hit hota hai — sabse mehnga admin call tha.
+        const res = await fetch("/api/games?action=scores&chain=mst&limit=2000");
         const data = await res.json();
         setScores(data.scores || []);
       } catch (err) {

@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAppKit } from "@reown/appkit/react";
-import { useAccount, useSwitchChain, useChainId, usePublicClient } from "wagmi";
+import { useAccount, useConnect, usePublicClient } from "wagmi";
+import { injected } from "wagmi/connectors";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useChain } from "../context/ChainContext";
@@ -12,8 +13,7 @@ const LOGO_SIZE = 28;
 export default function Navbar() {
   const { open } = useAppKit();
   const { isConnected, address } = useAccount();
-  const { switchChainAsync } = useSwitchChain();
-  const walletChainId = useChainId();
+  const { connectAsync } = useConnect();
   const navigate = useNavigate();
   const location = useLocation();
   const { balance } = useArcadeBalance();
@@ -106,41 +106,61 @@ export default function Navbar() {
       setFaucetError("Something went wrong. Try again.");
     }
   };
-  // ── Wallet connect ────────────────────────────────────────────────
-  // Single source of truth: AppKit open() handles EVERYTHING —
-  //   • injected wallets (MetaMask, Bridge Key, Rabby…)
-  //   • WalletConnect / mobile deeplinks
-  //   • chain add + switch
-  //   • wagmi state sync (top-right updates correctly)
-  //
-  // Previously we ran window.ethereum.request(wallet_switchEthereumChain)
-  // AND wagmi connectAsync(injected()) back-to-back. That produced:
-  //   1) two connect popups (Ritik / MST team bug report)
-  //   2) top-right state not updating (second popup owned the session,
-  //      wagmi never saw the accountsChanged event from the first)
-  //   3) Bridge Key wallet disconnect within ~1s (race between the two
-  //      connection attempts)
-  //
-  // Providers.jsx already puts savedNetwork FIRST in appKitNetworks,
-  // so open() connects to the correct chain — no manual switch needed.
-  // For chain changes AFTER connect, the useEffect below auto-syncs.
-  const handleConnect = () => open();
+  // 1. Agar MetaMask available hai → directly wagmi injected connector use karo
+  //    with correct chainId. AppKit ka open() internally BOTChain (networks[0])
+  //    pe switchChain call karta hai — yeh bypass karta hai woh problem.
+  // 2. Agar MetaMask nahi (mobile/WalletConnect) → AppKit open() fallback.
+  const handleConnect = async () => {
+    if (!activeChain) { open(); return; }
 
-  // ── Auto-sync wallet chain to activeChain ─────────────────────────
-  // If the user is already connected and then switches chain selection
-  // via ChainSelector, quietly ask the wallet to switch. User only sees
-  // ONE prompt (the wallet's native switch), no duplicate connect popup.
-  useEffect(() => {
-    if (!isConnected || !activeChain?.chainId) return;
-    if (walletChainId && walletChainId !== activeChain.chainId) {
-      switchChainAsync({ chainId: activeChain.chainId }).catch(err => {
-        // User rejected, or chain not added yet — no-op. Next on-chain
-        // tx will re-prompt via wagmi's built-in switch, so we don't
-        // spam popups here.
-        console.warn("Chain auto-sync skipped:", err?.shortMessage || err?.message);
-      });
+    if (window.ethereum) {
+      const chainIdHex = "0x" + activeChain.chainId.toString(16);
+
+      // Step 1: Pehle MetaMask mein correct chain ensure karo
+      try {
+        await window.ethereum.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: chainIdHex }],
+        });
+      } catch (switchErr) {
+        if (switchErr.code === 4902 || switchErr.code === -32603) {
+          try {
+            await window.ethereum.request({
+              method: "wallet_addEthereumChain",
+              params: [{
+                chainId: chainIdHex,
+                chainName: activeChain.name,
+                rpcUrls: [activeChain.rpcUrl],
+                nativeCurrency: activeChain.nativeCurrency,
+                blockExplorerUrls: activeChain.explorerUrl ? [activeChain.explorerUrl] : [],
+              }],
+            });
+          } catch (_) { open(); return; } // user rejected add → AppKit fallback
+        } else if (switchErr.code === 4001) {
+          return; // user rejected switch → do nothing
+        }
+      }
+
+      // Step 2: Ab wagmi ko directly connect karo injected connector se.
+      // AppKit open() NAHI — woh internally switchChain(BOTChain) karta hai.
+      // wagmi connectAsync with chainId = MetaMask pehle se correct chain pe hai,
+      // toh koi extra switch request nahi aayegi.
+      try {
+        await connectAsync({
+          connector: injected(),
+          chainId: activeChain.chainId,
+        });
+      } catch (connErr) {
+        if (!connErr?.message?.includes("Already connected")) {
+          console.warn("connectAsync failed, falling back to AppKit:", connErr.message);
+          open(); // last resort fallback
+        }
+      }
+    } else {
+      // No MetaMask (mobile browser, WalletConnect etc.) → AppKit handle kare
+      open();
     }
-  }, [isConnected, walletChainId, activeChain?.chainId, switchChainAsync]);
+  };
 
   const shortAddress = (addr) => addr ? addr.slice(0, 5) + "..." + addr.slice(-3) : "";
   const isActive = (path) => location.pathname === path;
@@ -176,12 +196,23 @@ export default function Navbar() {
   useEffect(() => { setMenuOpen(false); }, [location.pathname]);
 
   // ── Earnings fetch ───────────────────────────────────────────────────
+  // SH0030 — cost fix. Pehle `/api/games?action=scores` full scores collection
+  // fetch karta tha (100K+ docs possible) sirf user ke apne scores filter
+  // karne ke liye. Ab dedicated `user-scores` endpoint jo backend pe
+  // `where("player", "==", wallet)` karta hai — reads sirf user ke docs.
+  // Har user ke ~5-50 scores, not 100K.
   const fetchEarnings = async () => {
     if (!address) return;
     setEarningsLoading(true);
     try {
+      const token = localStorage.getItem("arcadex_jwt");
       const [scoresRes, gamesRes] = await Promise.all([
-        fetch(`/api/games?action=scores`),
+        // user-scores requires JWT; if missing (user rejected auto-auth),
+        // return empty gracefully — earnings panel just shows "no data"
+        // instead of failing / exposing everyone's scores.
+        token
+          ? fetch(`/api/games?action=user-scores`, { headers: { Authorization: `Bearer ${token}` } })
+          : Promise.resolve({ json: async () => ({ scores: [] }) }),
         fetch(`/api/games?action=list`),
       ]);
       const scoresData = await scoresRes.json();
@@ -209,9 +240,9 @@ export default function Navbar() {
         }
       } catch (e) { /* keep default 80 */ }
 
-      // Filter only this player's scores
+      // user-scores endpoint already returns only this player's scores —
+      // no client-side .filter() needed anymore. Just sort by recency.
       const mine = (scoresData.scores || [])
-        .filter(s => s.player?.toLowerCase() === address.toLowerCase())
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       setEarningsData(mine);
     } catch (e) {
@@ -285,7 +316,7 @@ export default function Navbar() {
       <div ref={ddRef} style={{ position: "relative", display: "flex", alignItems: "center" }}>
         <div onClick={() => isMobile ? navigate("/") : setDdOpen(p => !p)} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", userSelect: "none" }}>
           
-          <img src="/IA-logo.webp" alt="ArcadeX Logo" style={{ width: 30, height: 30, objectFit: "contain", filter: "drop-shadow(0 0 12px rgba(150,80,255,0.9)) drop-shadow(0 0 22px rgba(0,212,255,0.35))" }} />
+          <img src="/IA-logo.png" alt="ArcadeX Logo" style={{ width: 30, height: 30, objectFit: "contain", filter: "drop-shadow(0 0 12px rgba(150,80,255,0.9)) drop-shadow(0 0 22px rgba(0,212,255,0.35))" }} />
           
           <span style={{ fontSize: 14.5, fontWeight: 800, color: "#fff", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "0.6px", background: "linear-gradient(90deg,#fff,#d8bfff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>ArcadeX</span>
           {!isMobile && (

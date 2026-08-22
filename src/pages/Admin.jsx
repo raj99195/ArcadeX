@@ -142,7 +142,10 @@ export default function Admin() {
   const fetchAnalytics = async () => {
     setAnalyticsLoading(true);
     try {
-      const scoresRes = await fetch("/api/games?action=scores");
+      // SH0030 — admin analytics ke liye limit 2000 scores. Kaafi hai
+      // charts/aggregate stats ke liye. Pehle full collection scan tha
+      // (100K+ scores possible) — admin dashboard mount pe massive read.
+      const scoresRes = await fetch("/api/games?action=scores&limit=2000");
       const scoresData = await scoresRes.json();
       const allScores = scoresData.scores || [];
       setScores(allScores);

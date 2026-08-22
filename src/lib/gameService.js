@@ -139,24 +139,40 @@ export async function saveScore({ player, score, gameId, gameName, txHash, chain
   } catch (err) { console.error("Score save failed:", err); }
 }
 // ── Get all scores ──
-// chainKey optional — scores mein chain field directly filter hoga
-export async function getScores(chainKey) {
+// SH0030 — chain filter aur limit ab server-side hote hain. Pehle full
+// scores collection fetch hoke JS mein filter hota tha — cost explosion.
+// Ab query params se backend pe filter → sirf matching docs read.
+// Default limit 500 — leaderboards/recent activity ke liye kaafi hai.
+export async function getScores(chainKey, limit = 500) {
   try {
-    const data = await apiCall("/api/games?action=scores");
-    const scores = data.scores || [];
-    if (chainKey) {
-      return scores.filter(s => s.chain === chainKey);
-    }
-    return scores;
+    const params = new URLSearchParams();
+    if (chainKey) params.set("chain", chainKey);
+    if (limit)    params.set("limit", String(limit));
+    const data = await apiCall(`/api/games?action=scores&${params}`);
+    return data.scores || [];
   } catch {
     console.error("Scores fetch failed");
     return [];
   }
 }
 // ── Get scores by game ──
-export async function getScoresByGame(gameId) {
+// SH0030 — server-side filter with limit. Pehle full collection scan +
+// client-side .filter() hota tha. Ab backend Firestore query kare
+// where("gameId","==",X).orderBy("createdAt").limit(100) — per-game
+// leaderboard ke liye ~100 reads instead of 100K+.
+export async function getScoresByGame(gameId, limit = 100) {
   try {
-    const data = await apiCall("/api/games?action=scores");
-    return (data.scores || []).filter(s => s.gameId === parseInt(gameId));
+    const data = await apiCall(`/api/games?action=scores&gameId=${gameId}&limit=${limit}`);
+    return data.scores || [];
+  } catch { return []; }
+}
+// ── Get logged-in user's own scores ──
+// SH0030 — new helper. Navbar earnings panel aur profile page ke liye.
+// Backend `user-scores` endpoint JWT se player identify karke sirf user
+// ke scores return karta hai — no full collection scan.
+export async function getUserScores() {
+  try {
+    const data = await apiCall("/api/games?action=user-scores");
+    return data.scores || [];
   } catch { return []; }
 }
