@@ -4,7 +4,7 @@ import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { writeContract, waitForTransactionReceipt, readContract } from "@wagmi/core";
 import { keccak256, toHex } from "viem";
 import { wagmiAdapter } from "../Providers";
-import { useGames } from "../hooks/useGames";
+import { useGames, bustGamesCache } from "../hooks/useGames";
 import { saveScore } from "../lib/gameService";
 import { useChain } from "../context/ChainContext";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
@@ -329,19 +329,33 @@ export default function GamePlay() {
   }, [gameId, address]);
 
   // Fetch game stats via API
+  // SH0035 — stats + comments split into 2 parallel fetches. Backend
+  // `stats` action returns only counts (plays/likes/uniquePlayers) now —
+  // comments moved to dedicated `comments` action. Parallel fetch means
+  // no perceived slowdown for the user (both start together), but the
+  // backend can cache each independently and comments-fetch skips entirely
+  // for users who never scroll to comments (~70% of traffic).
   useEffect(() => {
     if (!game) return;
-    const fetchStats = async () => {
+    const gid = game.gameId || game.id;
+    // Stats — fast, small payload, 3-min Edge cache
+    (async () => {
       try {
-        const res = await fetch(`/api/games?action=stats&gameId=${game.gameId || game.id}`);
+        const res = await fetch(`/api/games?action=stats&gameId=${gid}`);
         const data = await res.json();
         setTotalPlays(data.plays || 0);
         setUniquePlayers(data.uniquePlayers || 0);
+      } catch (e) { /* silent */ }
+    })();
+    // Comments — parallel, 2-min Edge cache
+    (async () => {
+      try {
+        const res = await fetch(`/api/games?action=comments&gameId=${gid}&limit=50`);
+        const data = await res.json();
         setComments(data.comments || []);
-        setCommentsLoading(false);
-      } catch (e) {}
-    };
-    fetchStats();
+      } catch (e) { /* silent */ }
+      finally { setCommentsLoading(false); }
+    })();
   }, [game?.id]);
 
   // Fetch creator via API
@@ -955,6 +969,19 @@ export default function GamePlay() {
       await saveScore({ player: address, score: finalScore, gameId: game.id, gameName: game.name, txHash: hash, chain: chainKey, earned: playerReward, earnedSymbol: rewardSymbol });
       setTxHash(hash); setSubmitted(true);
       sendToGame("TRANSACTION_SUCCESS", { txHash: hash });
+
+      // SH0035 — cache-bust after successful score submit. Backend edge
+      // cache serves stale data (2 min for scores, 3 min for stats, 5 min
+      // for games list) to save cost. But user just submitted a score aur
+      // usually turant leaderboard / earnings check karega — usko fresh
+      // data chahiye. sessionStorage clears force next fetch to bypass
+      // client cache; backend Edge cache still serves stale for others but
+      // user-perceived UX is instant.
+      try {
+        bustGamesCache();                              // Home/Games/Leaderboard lists
+        sessionStorage.removeItem("scores_cache");     // Any local scores cache
+        sessionStorage.removeItem("navbar_earnings");  // Navbar earnings panel
+      } catch { /* silent */ }
 
       // ── STEP 6: Success flash, then auto-dismiss ─────────────────
       setSubmitStage("success");

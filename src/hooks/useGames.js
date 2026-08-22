@@ -2,12 +2,17 @@
 import { useState, useEffect } from "react";
 
 // ── sessionStorage helpers ──
-// SH0030 — cost-explosion fix. Har page navigation pe useGames() re-fire
-// hoke same list fetch karta tha — 300 users × 15 navigations = 4500
-// duplicate calls/day. Backend pe bhi Edge cache (60 sec) added hai, but
-// client-side sessionStorage 60-sec cache means users ka apna session bhi
-// duplicate calls nahi karta — CDN hit bhi save hote hain.
-const CACHE_TTL_MS = 60 * 1000; // 60 seconds — same as backend s-maxage
+// SH0030/SH0035 — cost-explosion fix + longer TTL. Har page navigation pe
+// useGames() re-fire hoke same list fetch karta tha — 300 users × 15
+// navigations = 4500 duplicate calls/day. Backend pe bhi Edge cache
+// (5 min) added hai, but client-side sessionStorage 10-min cache means
+// users ka apna session bhi duplicate calls nahi karta — CDN hit bhi
+// save hote hain.
+//
+// TTL choice: 10 min. Approved games ki list rarely changes hourly.
+// User apna tab 10+ min tak open rakhe (rare), phir action-driven cache-
+// bust hai (post-submit, admin actions).
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 function readCache(key) {
   try {
@@ -23,6 +28,25 @@ function writeCache(key, data) {
   try {
     sessionStorage.setItem(key, JSON.stringify({ data, at: Date.now() }));
   } catch { /* quota exceeded / private mode — silently skip */ }
+}
+
+// ── Public helper: force cache invalidation ─────────────────────────
+// SH0035 — call this after user-initiated actions that should reflect
+// immediately (score submit, game create, like, etc.) so the next
+// useGames() re-fetches fresh data. Usage:
+//   import { bustGamesCache } from "../hooks/useGames";
+//   bustGamesCache();
+export function bustGamesCache() {
+  try {
+    sessionStorage.removeItem("useGames:list");
+    // Also clear any per-user caches — key prefix scan
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i);
+      if (key && key.startsWith("useCreatorGames:")) {
+        sessionStorage.removeItem(key);
+      }
+    }
+  } catch { /* silent */ }
 }
 
 // ── Public games (approved only) — Home, Leaderboard, etc. ──

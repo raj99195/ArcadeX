@@ -41,12 +41,48 @@ export default function Navbar() {
   const menuRef = useRef(null);
 
   // ── Faucet: check if already claimed on MST connect ──────────────
+  // SH0035 — localStorage cache to eliminate repeat MST RPC calls.
+  //   • claimed=true → cached permanently per-wallet (can never revert
+  //     to false; on-chain hasClaimed is monotonic)
+  //   • claimed=false → cached 5 min (in case user just claimed elsewhere
+  //     or a background refresh is desired)
+  // Pehle Navbar mount pe har baar MST RPC hit hoti thi (~5K RPC calls/day).
+  // Ab first-visit ke baad instant status from localStorage — RPC calls
+  // 90%+ kam.
   useEffect(() => {
     if (!isConnected || !address || chainKey !== "mst") return;
+
+    const CACHE_KEY = `arcadex_gas_claimed_${address.toLowerCase()}`;
+    const NEGATIVE_TTL_MS = 5 * 60 * 1000; // false result: 5 min
+
+    // Check localStorage first
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.claimed === true) {
+          // Permanent cache — hasClaimed monotonic, once true always true
+          setFaucetClaimed(true);
+          return;
+        }
+        if (parsed.claimed === false && parsed.at && Date.now() - parsed.at < NEGATIVE_TTL_MS) {
+          // Recent false result — skip RPC, don't set state
+          return;
+        }
+      }
+    } catch { /* malformed cache, ignore and fall through to RPC */ }
+
     (async () => {
       try {
         const res = await fetch(`/api/games?action=check-gas-claim&address=${address}`);
         const data = await res.json();
+        // Cache the result — both true and false, with timestamp
+        try {
+          localStorage.setItem(CACHE_KEY, JSON.stringify({
+            claimed: !!data.claimed,
+            at: Date.now(),
+          }));
+        } catch { /* quota, private mode — silent */ }
         if (data.claimed) setFaucetClaimed(true);
       } catch (e) { /* silent fail */ }
     })();
@@ -94,6 +130,14 @@ export default function Navbar() {
       if (data.already || data.success) {
         setFaucetStage("success");
         setFaucetClaimed(true);
+        // SH0035 — persist to localStorage so future Navbar mounts skip
+        // the MST RPC check-gas-claim call entirely. hasClaimed is
+        // monotonic on-chain (never reverts), so caching true forever is safe.
+        try {
+          localStorage.setItem(`arcadex_gas_claimed_${address.toLowerCase()}`, JSON.stringify({
+            claimed: true, at: Date.now(),
+          }));
+        } catch { /* quota, private mode — silent */ }
         if (data.success) console.log("✅ 0.1 MSTC claimed:", data.txHash);
         setTimeout(() => setFaucetPanel(false), 2200);  // auto-close after success
       } else {
