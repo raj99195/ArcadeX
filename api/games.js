@@ -284,7 +284,7 @@ export default async function handler(req, res) {
       // Edge/CDN cache — safe because response is same for all users
       res.setHeader("Cache-Control", "public, s-maxage=30, stale-while-revalidate=120");
 
-      const { chain, gameId, limit: limitStr } = req.query;
+      const { chain, gameId, limit: limitStr, from, to } = req.query;
 
       // SH0032 — split cap: anonymous users get 500 (public leaderboard/casual
       // reads); authenticated users get up to 10000 (admin analytics dashboards,
@@ -303,10 +303,24 @@ export default async function handler(req, res) {
       if (chain)  ref = ref.where("chain",  "==", chain);
       if (gameId) ref = ref.where("gameId", "==", parseInt(gameId));
 
+      // SH0033 — date range filter for admin Player Activity dashboards.
+      // MST team ka feature request: "date to date" custom range.
+      // Firestore: equality-on-many-fields + range-on-ONE-field allowed —
+      // chain equality + createdAt range works within same composite index.
+      // Fallback (JS filter) covers missing-index case.
+      const fromDate = from ? new Date(from) : null;
+      const toDate   = to   ? new Date(to)   : null;
+      // Include full "to" day (end-of-day) — user picks 2026-08-22, matlab
+      // us din 23:59:59 tak ke scores include ho
+      if (toDate && !isNaN(toDate)) toDate.setHours(23, 59, 59, 999);
+
       let scores = [];
       try {
         // Preferred — needs composite index (chain+createdAt, gameId+createdAt)
-        const snap = await ref.orderBy("createdAt", "desc").limit(lim).get();
+        let q = ref.orderBy("createdAt", "desc");
+        if (fromDate && !isNaN(fromDate)) q = q.where("createdAt", ">=", fromDate);
+        if (toDate   && !isNaN(toDate))   q = q.where("createdAt", "<=", toDate);
+        const snap = await q.limit(lim).get();
         scores = snap.docs.map(d => ({
           id: d.id, ...d.data(),
           createdAt: d.data().createdAt?.toDate?.() || null,
@@ -320,6 +334,14 @@ export default async function handler(req, res) {
             id: d.id, ...d.data(),
             createdAt: d.data().createdAt?.toDate?.() || null,
           }))
+          // JS-side date filter — same semantics as Firestore range query
+          .filter(s => {
+            if (!s.createdAt) return false;
+            const d = new Date(s.createdAt);
+            if (fromDate && !isNaN(fromDate) && d < fromDate) return false;
+            if (toDate   && !isNaN(toDate)   && d > toDate)   return false;
+            return true;
+          })
           .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
       }
       return res.status(200).json({ scores });
