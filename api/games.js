@@ -285,7 +285,19 @@ export default async function handler(req, res) {
       res.setHeader("Cache-Control", "public, s-maxage=30, stale-while-revalidate=120");
 
       const { chain, gameId, limit: limitStr } = req.query;
-      const lim = Math.min(parseInt(limitStr) || 500, 500); // hard cap 500
+
+      // SH0032 — split cap: anonymous users get 500 (public leaderboard/casual
+      // reads); authenticated users get up to 10000 (admin analytics dashboards,
+      // creator earnings, etc.). Pehle hard cap 500 tha for everyone — Admin
+      // panel ka Player Activity tab galat data dikhata tha (500 se zyada
+      // plays wale platform pe sirf 500 clipped total mila, matlab payout /
+      // active players sab under-counted). JWT presence = trust signal;
+      // anonymous scrapers still capped, admins get real numbers.
+      const scUser = verifyToken(req);
+      const requestedLim = parseInt(limitStr) || 500;
+      const lim = scUser
+        ? Math.min(requestedLim, 10000)   // authenticated (admin/creator)
+        : Math.min(requestedLim, 500);    // anonymous (public leaderboard)
 
       let ref = db.collection("scores");
       if (chain)  ref = ref.where("chain",  "==", chain);
