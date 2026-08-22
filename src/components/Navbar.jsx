@@ -360,7 +360,7 @@ export default function Navbar() {
       <div ref={ddRef} style={{ position: "relative", display: "flex", alignItems: "center" }}>
         <div onClick={() => isMobile ? navigate("/") : setDdOpen(p => !p)} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", userSelect: "none" }}>
           
-          <img src="/IA-logo.png" alt="ArcadeX Logo" style={{ width: 30, height: 30, objectFit: "contain", filter: "drop-shadow(0 0 12px rgba(150,80,255,0.9)) drop-shadow(0 0 22px rgba(0,212,255,0.35))" }} />
+          <img src="/IA-logo.webp" alt="ArcadeX Logo" style={{ width: 30, height: 30, objectFit: "contain", filter: "drop-shadow(0 0 12px rgba(150,80,255,0.9)) drop-shadow(0 0 22px rgba(0,212,255,0.35))" }} />
           
           <span style={{ fontSize: 14.5, fontWeight: 800, color: "#fff", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "0.6px", background: "linear-gradient(90deg,#fff,#d8bfff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>ArcadeX</span>
           {!isMobile && (
