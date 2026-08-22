@@ -162,6 +162,17 @@ export default function GamePlay() {
   const { data: walletClient } = useWalletClient();
 
   const [score, setScore] = useState(0);
+  // SH0036 — MST team request: "score resets to 0 after every claim; next
+  // claim needs another 500 fresh points from reset". Frontend-side fix
+  // (SDK/game-side reset baad mein weekend pe). Design:
+  //   • `rawGameScore` = actual cumulative game score (from iframe SCORE_UPDATE)
+  //   • `scoreBaseline` = last submitted score (persisted per wallet+game)
+  //   • `score` (displayed) = rawGameScore - scoreBaseline
+  //   • Submit blocks if displayed score < minScore
+  //   • After success, baseline updates to raw → display resets to 0
+  //   • Game restart (raw < baseline) → baseline resets to 0
+  const [rawGameScore, setRawGameScore] = useState(0);
+  const [scoreBaseline, setScoreBaseline] = useState(0);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [isFakeFullscreen, setIsFakeFullscreen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -297,6 +308,28 @@ export default function GamePlay() {
   }, [games]);
 
   useEffect(() => { if (game) setLikeCount(game.likes || 0); }, [game]);
+
+  // SH0036 — load persisted score baseline for THIS game+wallet from
+  // localStorage. Ensures baseline survives page reloads (user submits,
+  // closes tab, comes back → next play starts from where they left off,
+  // not accumulated old score). Cleared on wallet-switch (different key).
+  useEffect(() => {
+    if (!game?.id || !address) {
+      setScoreBaseline(0);
+      setRawGameScore(0);
+      setScore(0);
+      return;
+    }
+    try {
+      const key = `arcadex_score_baseline_${address.toLowerCase()}_${game.id}`;
+      const stored = localStorage.getItem(key);
+      const baseline = stored ? Number(stored) || 0 : 0;
+      setScoreBaseline(baseline);
+    } catch { setScoreBaseline(0); }
+    // Reset display state — fresh game session view
+    setRawGameScore(0);
+    setScore(0);
+  }, [game?.id, address]);
 
   // Fetch on-chain reward split so UI reflects what admin set
   useEffect(() => {
@@ -752,13 +785,38 @@ export default function GamePlay() {
         const sc = Number(event.data.score);
         if (!Number.isFinite(sc) || sc < 0) return; // garbage score ignore
         if (submitted) { setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false; }
-        setScore(sc);
+        setRawGameScore(sc);
+        // SH0036 — baseline transform. Displayed score = raw - baseline.
+        // If raw < baseline, game restarted (or new session) → reset baseline to 0.
+        let effectiveBaseline = scoreBaseline;
+        if (sc < scoreBaseline) {
+          effectiveBaseline = 0;
+          setScoreBaseline(0);
+          try {
+            const key = `arcadex_score_baseline_${address?.toLowerCase()}_${game?.id}`;
+            localStorage.removeItem(key);
+          } catch { /* silent */ }
+        }
+        setScore(Math.max(0, sc - effectiveBaseline));
       }
       if (event.data?.type === "GAME_OVER") {
         const sc = Number(event.data.score);
         if (!Number.isFinite(sc) || sc < 0) return; // garbage score ignore
-        setScore(sc); setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false;
-        submitScore(sc);
+        setRawGameScore(sc);
+        // Baseline transform for GAME_OVER too
+        let effectiveBaseline = scoreBaseline;
+        if (sc < scoreBaseline) {
+          effectiveBaseline = 0;
+          setScoreBaseline(0);
+          try {
+            const key = `arcadex_score_baseline_${address?.toLowerCase()}_${game?.id}`;
+            localStorage.removeItem(key);
+          } catch { /* silent */ }
+        }
+        const displayScore = Math.max(0, sc - effectiveBaseline);
+        setScore(displayScore); setSubmitted(false); setTxHash(""); setSubmitError(null); submittingRef.current = false;
+        // Auto-submit with the DELTA score (what user actually earned since last claim)
+        submitScore(displayScore);
       }
       if (event.data?.type === "GET_PLAYER_INFO") {
         // allowedOrigin guaranteed truthy yahan (upar check kiya) — "*" fallback nahi
@@ -817,6 +875,26 @@ export default function GamePlay() {
 
   const submitScore = async (finalScore) => {
     if (submittingRef.current || !address || !game) return;
+
+    // SH0036 — MST team's requested gate: block submission if user hasn't
+    // earned fresh minScore points since last claim. `finalScore` at this
+    // point is ALREADY the delta (SCORE_UPDATE/GAME_OVER handlers subtract
+    // baseline before passing here, and the manual submit button uses
+    // `score` state which is also baseline-adjusted). So a simple
+    // "score >= minScore" check enforces the "earn 500 fresh points"
+    // requirement. Pehle user Level 7 pe claim → Level 15 pe accumulated
+    // score se dobara claim kar sakta tha (multiple rewards, koi extra
+    // effort nahi). Ab har claim ke liye fresh 500 points earn karne hi
+    // padenge — reward pool drain rate slow ho jayegi drastically.
+    if (minScore !== null && Number(finalScore) < Number(minScore)) {
+      setSubmitError({
+        type: "min-score", soft: true, icon: "🎯",
+        title: "Earn more points to claim",
+        msg: `You need ${Number(minScore).toLocaleString()} points since your last claim. Current: ${Number(finalScore).toLocaleString()} — keep playing!`,
+      });
+      return;
+    }
+
     submittingRef.current = true;
     setSubmitting(true); setSubmitError(null);
     try {
@@ -969,6 +1047,17 @@ export default function GamePlay() {
       await saveScore({ player: address, score: finalScore, gameId: game.id, gameName: game.name, txHash: hash, chain: chainKey, earned: playerReward, earnedSymbol: rewardSymbol });
       setTxHash(hash); setSubmitted(true);
       sendToGame("TRANSACTION_SUCCESS", { txHash: hash });
+
+      // SH0036 — MST team fix: reset displayed score to 0 after successful
+      // claim. Persist baseline = current raw game score, so next SCORE_UPDATE
+      // from iframe shows only NEW points earned since this claim. User has
+      // to earn a fresh minScore worth of points before next submit is allowed.
+      try {
+        const key = `arcadex_score_baseline_${address.toLowerCase()}_${game.id}`;
+        localStorage.setItem(key, String(rawGameScore));
+        setScoreBaseline(rawGameScore);
+        setScore(0);   // display resets to 0 immediately
+      } catch { /* silent — baseline sync will just re-fetch from raw */ }
 
       // SH0035 — cache-bust after successful score submit. Backend edge
       // cache serves stale data (2 min for scores, 3 min for stats, 5 min
