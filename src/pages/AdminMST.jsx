@@ -356,10 +356,16 @@ try {
     (async () => {
       setLoadingData(true);
       try {
-        // SH0030 — capped at 2000 scores. Pehle full MST scores collection
-        // read hoti thi (potentially 50K+ docs). Ye MST dashboard mount pe
-        // hit hota hai — sabse mehnga admin call tha.
-        const res = await fetch("/api/games?action=scores&chain=mst&limit=2000");
+        // SH0030/SH0032 — MST Player Activity tab ke stats sahi dikhaane
+        // ke liye 10000 tak scores fetch. JWT bhejna ZAROORI hai — anonymous
+        // requests backend pe 500 hard-cap hoti hain (public leaderboard
+        // safety). Bina JWT → Player Activity mein 500 plays clip dikhega
+        // even if actual plays 5000+ hain, aur "Payout (14D)", "Active
+        // Players", "Top Earners" sab under-counted honge.
+        const token = localStorage.getItem("arcadex_jwt");
+        const res = await fetch("/api/games?action=scores&chain=mst&limit=10000", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
         const data = await res.json();
         setScores(data.scores || []);
       } catch (err) {
