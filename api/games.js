@@ -1199,7 +1199,198 @@ export default async function handler(req, res) {
   // and returns success — the Edge TTL is short enough (2-5 min) that most
   // scenarios don't need explicit purge. Full Vercel cache-tag integration
   // is future work.
-  if (req.method === "POST" && action === "admin-purge-cache") {
+  // ── GET admin-player-analytics (admin-only, PROPER data — no limit) ──
+  // SH0038 — MST team ka critical requirement: dashboard pe 100% accurate
+  // real all-time data dikhna chahiye, koi cap nahi. Pehle scores endpoint
+  // 10K docs pe cap tha (public leaderboard safety) — matlab 25K+ plays wale
+  // platform pe admin panel galat aggregate dikhata tha (payout 5K vs actual
+  // 11K, total plays 10K vs actual 19K).
+  //
+  // Ye dedicated endpoint:
+  //   • Admin-only (checkOnChainAdmin gate — sirf grant kiye admins)
+  //   • NO limit — full scores collection paginate karke aggregate karta hai
+  //   • Server-side aggregation → response payload chhota (bandwidth save)
+  //   • 5-min Edge cache → same admin bar-bar refresh kare toh Firestore
+  //     ek hi baar hit hoti hai (cost control despite no doc limit)
+  //   • CSV-ready data: per-wallet totals included for export
+  //   • Filters approved games only (junk games ke scores skip)
+  //
+  // Cost impact per call: ~25K reads (full scores scan). With 5-min cache
+  // and typical admin usage (3-5 dashboard opens/day), effective daily
+  // cost = ~25K reads/day. Sustainable at your current scale. Long-term,
+  // proper aggregate architecture (platformStats/dailyStats/playerStats
+  // pre-computed docs) will bring this to <100 reads/day.
+  if (req.method === "GET" && action === "admin-player-analytics") {
+    const aUser = verifyToken(req);
+    if (!aUser) return res.status(401).json({ error: "Unauthorized" });
+    if (!(await checkOnChainAdmin(aUser.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    try {
+      // 5-min cache — same admin refreshes safe, Firestore hit only every 5 min
+      res.setHeader("Cache-Control", "private, max-age=300");
+
+      const { chain, from, to } = req.query;
+      if (!chain) return res.status(400).json({ error: "chain required" });
+
+      const fromDate = from ? new Date(from) : null;
+      const toDate   = to   ? new Date(to)   : null;
+      if (toDate && !isNaN(toDate)) toDate.setHours(23, 59, 59, 999);
+
+      // Step 1: Fetch approved games for this chain — filter map + reward rates
+      const gamesSnap = await db.collection("games")
+        .where("status", "==", "approved").get();
+      const approvedGames = {};
+      gamesSnap.docs.forEach(d => {
+        const g = d.data();
+        const rate = g.rewardRateNative != null
+          ? Number(g.rewardRateNative)
+          : Number(g.rewardRate || 0) / 1e18;
+        approvedGames[g.gameId] = { name: g.name, rate };
+      });
+
+      // Step 2: Paginate through ALL scores for this chain in date range.
+      // Firestore doesn't allow offset pagination cheaply, use cursor via
+      // startAfter on the last doc. Batch size 1000, max 100 batches
+      // (100K scores safety ceiling — well beyond current scale).
+      let ref = db.collection("scores").where("chain", "==", chain);
+      if (fromDate && !isNaN(fromDate)) ref = ref.where("createdAt", ">=", fromDate);
+      if (toDate   && !isNaN(toDate))   ref = ref.where("createdAt", "<=", toDate);
+
+      const BATCH_SIZE = 1000;
+      const MAX_BATCHES = 100; // 100K scores hard safety
+      let allScores = [];
+      let lastDoc = null;
+
+      // ── Composite index required for chain+createdAt orderBy pagination.
+      // Fallback: no orderBy, just paginate by doc ID.
+      try {
+        ref = ref.orderBy("createdAt", "desc");
+        for (let i = 0; i < MAX_BATCHES; i++) {
+          let q = ref.limit(BATCH_SIZE);
+          if (lastDoc) q = q.startAfter(lastDoc);
+          const snap = await q.get();
+          if (snap.empty) break;
+          allScores.push(...snap.docs);
+          lastDoc = snap.docs[snap.docs.length - 1];
+          if (snap.docs.length < BATCH_SIZE) break; // no more pages
+        }
+      } catch (indexErr) {
+        console.warn("[admin-analytics] orderBy fallback:", indexErr.message);
+        // No cursor without orderBy — just get first big batch
+        const snap = await db.collection("scores")
+          .where("chain", "==", chain).limit(50000).get();
+        allScores = snap.docs;
+      }
+
+      // Step 3: Aggregate in-memory
+      const playerAgg = {};        // wallet → { plays, earned, lastPlayed, games:Set }
+      const dailyAgg  = {};        // "YYYY-MM-DD" → { plays, earned, playersSet }
+      const gameAgg   = {};        // gameId → { plays, earned }
+      let totalPlays = 0;
+      let totalPayout = 0;
+      let skippedNonApproved = 0;
+
+      // Server-side player-share fetch (settings collection)
+      let playerSharePct = 100; // MST default from your earlier setup
+      try {
+        const settingsDoc = await db.collection("chainSettings").doc(chain).get();
+        if (settingsDoc.exists) {
+          const s = settingsDoc.data();
+          if (s.playerPct != null) playerSharePct = Number(s.playerPct);
+        }
+      } catch { /* keep default */ }
+
+      for (const doc of allScores) {
+        const s = doc.data();
+        const gameInfo = approvedGames[s.gameId];
+        if (!gameInfo) { skippedNonApproved++; continue; }
+
+        // Use stored `earned` if present (accurate), else calculate from rate * share
+        const earned = (s.earned != null && !isNaN(s.earned))
+          ? Number(s.earned)
+          : gameInfo.rate * (playerSharePct / 100);
+
+        totalPlays += 1;
+        totalPayout += earned;
+
+        // Player aggregation
+        const w = s.player;
+        if (!playerAgg[w]) {
+          playerAgg[w] = { wallet: w, plays: 0, earned: 0, lastPlayed: null, games: new Set() };
+        }
+        playerAgg[w].plays += 1;
+        playerAgg[w].earned += earned;
+        playerAgg[w].games.add(s.gameId);
+        const scoreDate = s.createdAt?.toDate?.() || new Date(s.createdAt);
+        if (!playerAgg[w].lastPlayed || scoreDate > playerAgg[w].lastPlayed) {
+          playerAgg[w].lastPlayed = scoreDate;
+        }
+
+        // Daily aggregation
+        const dayKey = scoreDate.toISOString().slice(0, 10);
+        if (!dailyAgg[dayKey]) dailyAgg[dayKey] = { plays: 0, earned: 0, playersSet: new Set() };
+        dailyAgg[dayKey].plays += 1;
+        dailyAgg[dayKey].earned += earned;
+        dailyAgg[dayKey].playersSet.add(w);
+
+        // Game aggregation
+        if (!gameAgg[s.gameId]) gameAgg[s.gameId] = { name: gameInfo.name, plays: 0, earned: 0 };
+        gameAgg[s.gameId].plays += 1;
+        gameAgg[s.gameId].earned += earned;
+      }
+
+      // Step 4: Serialize for response
+      const playerRows = Object.values(playerAgg)
+        .map(p => ({
+          wallet: p.wallet,
+          plays: p.plays,
+          earned: Number(p.earned.toFixed(4)),
+          gamesPlayed: p.games.size,
+          lastPlayed: p.lastPlayed?.toISOString() || null,
+        }))
+        .sort((a, b) => b.earned - a.earned);
+
+      const dailyRows = Object.entries(dailyAgg)
+        .map(([date, d]) => ({
+          date,
+          plays: d.plays,
+          earned: Number(d.earned.toFixed(4)),
+          uniquePlayers: d.playersSet.size,
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      const gameRows = Object.entries(gameAgg)
+        .map(([gameId, g]) => ({
+          gameId: Number(gameId),
+          name: g.name,
+          plays: g.plays,
+          earned: Number(g.earned.toFixed(4)),
+        }))
+        .sort((a, b) => b.plays - a.plays);
+
+      return res.status(200).json({
+        summary: {
+          totalPlays,
+          totalPayout: Number(totalPayout.toFixed(4)),
+          activePlayers: playerRows.length,
+          totalGames: gameRows.length,
+          avgPerPlayer: playerRows.length > 0 ? Number((totalPayout / playerRows.length).toFixed(4)) : 0,
+          skippedNonApproved,
+          scannedScores: allScores.length,
+          playerSharePct,
+        },
+        players: playerRows,          // ALL players for CSV export
+        daily: dailyRows,             // for chart
+        games: gameRows,              // per-game breakdown
+      });
+    } catch (err) {
+      console.error("[admin-analytics] error:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+
     if (!(await checkOnChainAdmin(user.address)))
       return res.status(403).json({ error: "Admin only" });
     try {

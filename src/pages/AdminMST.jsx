@@ -360,30 +360,45 @@ try {
     })();
   }, [hasAccess, PLATFORM, chainId, publicClient]);
 
-  // ── Load player score/earning data ──
+  // ── Load player analytics (server-aggregated, no limit) ──
+  // SH0038 — Switched from raw `scores` endpoint (10K hard cap → showed
+  // wrong totals for MST team; 19K real plays looked like 10K, 11K real
+  // payout looked like 5K) to dedicated `admin-player-analytics` which:
+  //   • Paginates through ALL scores server-side (no cap, up to 100K safety)
+  //   • Aggregates in-memory server-side (returns compact summary +
+  //     player rows + daily breakdown, not raw docs)
+  //   • Filters approved games only (junk skipped)
+  //   • Cached 5 min → repeated refreshes cheap
+  //   • CSV export uses `players` array directly (wallet, plays, earned)
+  const [analytics, setAnalytics] = useState(null); // { summary, players, daily, games }
+
   useEffect(() => {
     if (!hasAccess) return;
     (async () => {
       setLoadingData(true);
       try {
-        // SH0030/SH0032/SH0033 — Admin Player Activity fetch:
-        //   • JWT header → authenticated cap 10000 (anon 500)
-        //   • from/to params → server-side date range filter (Firestore query)
-        //   • rangePreset "all" → skip date params, fetch recent 10000 all-time
-        // MST team feature request: "one date selection field there where
-        // can put custom date and can check the activity data from
-        // (date to date)".
         const token = localStorage.getItem("arcadex_jwt");
-        const params = new URLSearchParams({ action: "scores", chain: "mst", limit: "10000" });
+        const params = new URLSearchParams({ action: "admin-player-analytics", chain: "mst" });
         if (rangePreset !== "all" && dateFrom) params.set("from", dateFrom);
         if (rangePreset !== "all" && dateTo)   params.set("to",   dateTo);
         const res = await fetch(`/api/games?${params.toString()}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        const data = await res.json();
-        setScores(data.scores || []);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          console.error("Analytics fetch failed:", res.status, err.error);
+          setAnalytics(null);
+        } else {
+          const data = await res.json();
+          setAnalytics(data);
+          // Keep `scores` state populated with player rows for backwards
+          // compat with any existing UI that reads `scores` — but now it's
+          // aggregated per-player, not raw score records.
+          setScores(data.players || []);
+        }
       } catch (err) {
-        console.error("Failed to load scores:", err);
+        console.error("Failed to load analytics:", err);
+        setAnalytics(null);
       } finally {
         setLoadingData(false);
       }
@@ -531,64 +546,81 @@ try {
     }
   };
 
-  // ── Derived data for Player Activity ──
-  // MST chain pe rewardRateNative use karo — rewardRate BOTChain (ARCADE) ka hai
-  // SH0033 — only APPROVED games count in aggregates. `useGames()` hook already
-  // returns only status=approved games (backend filter). Non-approved games ke
-  // scores skip kar diye (koi legacy score jo pending/rejected game se hai wo
-  // total plays / payout mein nahi ginega).
-  const gameRateMap = Object.fromEntries(
-    games.map(g => {
-      // rewardRateNative = Firestore value in MSTC (e.g. 0.5)
-      // rewardRate = on-chain value in wei (e.g. 500000000000000000) → divide by 1e18
-      const rate = g.rewardRateNative != null
-        ? Number(g.rewardRateNative)
-        : Number(g.rewardRate) / 1e18;
-      return [g.id, rate];
-    })
-  );
-  const playerAgg = {};
-  const dayAgg = {};
-  let filteredPlaysCount = 0;
-  for (const s of scores) {
-    // Approved games only — score's gameId must exist in approved games map.
-    // Legacy/pending game scores ignore ho jaate hain totals se.
-    if (!(s.gameId in gameRateMap)) continue;
-    const rate = gameRateMap[s.gameId] ?? 0;
-    const playerShare = settings ? Number(settings.playerPct) : 80;
-    const estEarned = rate * (playerShare / 100);
-    if (!playerAgg[s.player]) playerAgg[s.player] = { plays: 0, estEarned: 0 };
-    playerAgg[s.player].plays += 1;
-    playerAgg[s.player].estEarned += estEarned;
-    const day = s.createdAt ? new Date(s.createdAt).toISOString().slice(0, 10) : "unknown";
-    dayAgg[day] = (dayAgg[day] || 0) + estEarned;
-    filteredPlaysCount += 1;
-  }
-  const playerRows = Object.entries(playerAgg).sort((a, b) => b[1].estEarned - a[1].estEarned);
-  // Chart: full selected date range (not just last 14 days). Fills missing
-  // days with 0 so chart shows continuous timeline.
+  // ── Derived data for Player Activity (from server aggregates) ──
+  // SH0038 — All aggregation now happens server-side in admin-player-analytics
+  // endpoint. Frontend just reads pre-computed `summary`, `players`, `daily`,
+  // `games` arrays. No client-side scan through raw scores → no cap issues,
+  // no wrong totals. `analytics` is null while loading or if fetch failed.
+  const summary = analytics?.summary || {
+    totalPlays: 0, totalPayout: 0, activePlayers: 0,
+    avgPerPlayer: 0, totalGames: 0, playerSharePct: 100,
+  };
+  const playerRows = (analytics?.players || [])
+    .map(p => [p.wallet, { plays: p.plays, estEarned: p.earned, lastPlayed: p.lastPlayed, gamesPlayed: p.gamesPlayed }]);
+
+  // Chart: build from server's daily breakdown. For preset/custom ranges,
+  // fill missing days with 0 so timeline is continuous. All Time = show
+  // whatever days have data (last 90 for readability).
+  const dailyMap = Object.fromEntries((analytics?.daily || []).map(d => [d.date, d]));
   const dayRows = (() => {
     if (rangePreset === "all") {
-      // All-time — just show whatever days have data, up to last 90
-      return Object.entries(dayAgg)
-        .sort((a, b) => a[0].localeCompare(b[0]))
+      return (analytics?.daily || [])
         .slice(-90)
-        .map(([day, val]) => ({ day: day.slice(5), full: day, mstc: Number(val.toFixed(3)) }));
+        .map(d => ({ day: d.date.slice(5), full: d.date, mstc: Number(d.earned.toFixed(3)) }));
     }
-    // Custom/preset range — fill gaps with 0 so the chart is continuous
     const fromD = new Date(dateFrom);
     const toD   = new Date(dateTo);
     const days  = [];
     for (let d = new Date(fromD); d <= toD; d.setDate(d.getDate() + 1)) {
       const iso = d.toISOString().slice(0, 10);
-      days.push({ day: iso.slice(5), full: iso, mstc: Number((dayAgg[iso] || 0).toFixed(3)) });
+      const dayData = dailyMap[iso];
+      days.push({ day: iso.slice(5), full: iso, mstc: dayData ? Number(dayData.earned.toFixed(3)) : 0 });
     }
     return days;
   })();
-  const totalPayout14d = dayRows.reduce((s, d) => s + d.mstc, 0);
-  const totalPlays = filteredPlaysCount;
-  const activePlayers = playerRows.length;
-  const avgPerPlayer = activePlayers > 0 ? totalPayout14d / activePlayers : 0;
+  const totalPayout14d = summary.totalPayout;
+  const totalPlays = summary.totalPlays;
+  const activePlayers = summary.activePlayers;
+  const avgPerPlayer = summary.avgPerPlayer;
+
+  // SH0038 — CSV export helper. MST team's explicit request: download
+  // wallet-level data (wallet, plays, MSTC earned). Runs client-side from
+  // `analytics.players` (server already aggregated everything, no extra
+  // API call needed). Filename encodes chain + date range so multiple
+  // exports don't collide.
+  const downloadPlayerCSV = () => {
+    if (!analytics?.players?.length) {
+      alert("No player data to export yet.");
+      return;
+    }
+    const rows = [
+      ["Wallet Address", "Total Plays", "MSTC Earned", "Games Played", "Last Played (UTC)"],
+      ...analytics.players.map(p => [
+        p.wallet,
+        String(p.plays),
+        String(p.earned),
+        String(p.gamesPlayed),
+        p.lastPlayed || "",
+      ]),
+    ];
+    // Escape CSV: wrap in quotes if contains comma/quote/newline, double-up quotes inside
+    const csvEsc = (v) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = rows.map(r => r.map(csvEsc).join(",")).join("\n");
+    const rangeLabel = rangePreset === "all" ? "alltime" : `${dateFrom}_to_${dateTo}`;
+    const filename = `arcadex_mst_players_${rangeLabel}.csv`;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   // SH0033 — Quick-range button helper
   const applyRangePreset = (preset) => {
@@ -1126,6 +1158,31 @@ try {
                     colorScheme: "dark",
                   }}
                 />
+                {/* SH0038 — CSV export: MST team's request. Client-side
+                    generation from analytics.players (no extra API call). */}
+                <button
+                  onClick={downloadPlayerCSV}
+                  disabled={!analytics?.players?.length}
+                  title={analytics?.players?.length
+                    ? `Download ${analytics.players.length} player rows as CSV`
+                    : "Load data first"}
+                  style={{
+                    padding: "6px 14px",
+                    background: analytics?.players?.length
+                      ? `linear-gradient(135deg, ${P.green}, #00a86b)`
+                      : "transparent",
+                    color: analytics?.players?.length ? "#fff" : P.dim,
+                    border: `1px solid ${analytics?.players?.length ? P.green : P.border}`,
+                    borderRadius: 6,
+                    fontFamily: P.raj, fontSize: 11, fontWeight: 700,
+                    cursor: analytics?.players?.length ? "pointer" : "not-allowed",
+                    textTransform: "uppercase", letterSpacing: "0.4px",
+                    display: "flex", alignItems: "center", gap: 5,
+                    marginLeft: 4,
+                  }}
+                >
+                  ⬇ CSV
+                </button>
               </div>
             </div>
 
