@@ -1249,25 +1249,30 @@ export default async function handler(req, res) {
         approvedGames[g.gameId] = { name: g.name, rate };
       });
 
-      // Step 2: Paginate through ALL scores for this chain in date range.
-      // Firestore doesn't allow offset pagination cheaply, use cursor via
-      // startAfter on the last doc. Batch size 1000, max 100 batches
-      // (100K scores safety ceiling — well beyond current scale).
-      let ref = db.collection("scores").where("chain", "==", chain);
-      if (fromDate && !isNaN(fromDate)) ref = ref.where("createdAt", ">=", fromDate);
-      if (toDate   && !isNaN(toDate))   ref = ref.where("createdAt", "<=", toDate);
+      // Step 2: Fetch ALL scores for this chain. Strategy chosen for
+      // reliability over efficiency — we filter by date IN MEMORY after,
+      // so no composite index (chain+createdAt) is ever required. The
+      // only auto-index used is the single-field `chain` index which
+      // Firestore creates automatically for every collection field.
+      //
+      // Pagination by document ID via `orderBy(FieldPath.documentId())`
+      // is guaranteed to work without any custom index. Batch size 500
+      // (Firestore's recommended read batch), max 200 batches = 100K
+      // scores hard safety.
+      const FieldPath = admin.firestore.FieldPath;
+      const BATCH_SIZE  = 500;
+      const MAX_BATCHES = 200; // 100K score safety ceiling
 
-      const BATCH_SIZE = 1000;
-      const MAX_BATCHES = 100; // 100K scores hard safety
       let allScores = [];
-      let lastDoc = null;
+      let lastDoc   = null;
+      let batchNum  = 0;
 
-      // ── Composite index required for chain+createdAt orderBy pagination.
-      // Fallback: no orderBy, just paginate by doc ID.
       try {
-        ref = ref.orderBy("createdAt", "desc");
-        for (let i = 0; i < MAX_BATCHES; i++) {
-          let q = ref.limit(BATCH_SIZE);
+        for (batchNum = 0; batchNum < MAX_BATCHES; batchNum++) {
+          let q = db.collection("scores")
+            .where("chain", "==", chain)
+            .orderBy(FieldPath.documentId())
+            .limit(BATCH_SIZE);
           if (lastDoc) q = q.startAfter(lastDoc);
           const snap = await q.get();
           if (snap.empty) break;
@@ -1275,12 +1280,34 @@ export default async function handler(req, res) {
           lastDoc = snap.docs[snap.docs.length - 1];
           if (snap.docs.length < BATCH_SIZE) break; // no more pages
         }
-      } catch (indexErr) {
-        console.warn("[admin-analytics] orderBy fallback:", indexErr.message);
-        // No cursor without orderBy — just get first big batch
-        const snap = await db.collection("scores")
-          .where("chain", "==", chain).limit(50000).get();
-        allScores = snap.docs;
+      } catch (paginationErr) {
+        // Log the exact error for debugging but don't fail — return partial
+        // aggregation if we got any batches through.
+        console.error(
+          "[admin-analytics] pagination error at batch", batchNum,
+          "— scores fetched so far:", allScores.length,
+          "— error:", paginationErr?.message || paginationErr?.code || paginationErr
+        );
+        if (allScores.length === 0) {
+          return res.status(500).json({
+            error: "Firestore pagination failed",
+            detail: paginationErr?.message || String(paginationErr),
+            hint: "Check Vercel logs for full stack trace; may need to increase function timeout.",
+          });
+        }
+        // Partial data — continue with what we have, note it in response
+      }
+
+      // In-memory date filter (avoids needing chain+createdAt composite index)
+      if (fromDate || toDate) {
+        allScores = allScores.filter(doc => {
+          const s = doc.data();
+          const scoreDate = s.createdAt?.toDate?.() || new Date(s.createdAt);
+          if (!scoreDate || isNaN(scoreDate)) return false;
+          if (fromDate && !isNaN(fromDate) && scoreDate < fromDate) return false;
+          if (toDate   && !isNaN(toDate)   && scoreDate > toDate)   return false;
+          return true;
+        });
       }
 
       // Step 3: Aggregate in-memory
@@ -1385,12 +1412,16 @@ export default async function handler(req, res) {
         games: gameRows,              // per-game breakdown
       });
     } catch (err) {
-      console.error("[admin-analytics] error:", err);
-      return res.status(500).json({ error: err.message });
+      console.error("[admin-analytics] fatal error:", err);
+      return res.status(500).json({
+        error: err?.message || err?.code || "Unknown server error",
+        detail: err?.stack ? err.stack.split("\n").slice(0, 3).join(" | ") : undefined,
+      });
     }
   }
 
-
+  // ── POST admin-purge-cache (admin-only) ──
+  if (req.method === "POST" && action === "admin-purge-cache") {
     if (!(await checkOnChainAdmin(user.address)))
       return res.status(403).json({ error: "Admin only" });
     try {
