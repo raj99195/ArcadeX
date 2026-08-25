@@ -978,19 +978,35 @@ export default async function handler(req, res) {
       // vary wildly — a 5s puzzle and a 3-min runner can't share one number.
       // Cold start: only block near-instant (bot/no-play) submits via a small
       // floor. Once learned: require a fraction of THIS game's typical duration.
-      // Fully automatic, per-game, permanent — no per-game config needed.
       //
-      // Probation-aware floor: trusted users need 3s (blocks 0s/instant only),
-      // probation users need 15s + 50% of the learned average. A real player
-      // on probation still passes easily (any legit round exceeds 15s); a bot
-      // that was polling sign-score every ~4s hits the wall.
-      const MIN_PLAY_FLOOR    = signUser.probation ? 15   : 3;
-      const MIN_PLAY_FRACTION = signUser.probation ? 0.5  : 0.25;
-      const minPlayRequired = (count >= LEARN_SAMPLES && avgPlaySec)
-        ? Math.max(MIN_PLAY_FLOOR, avgPlaySec * MIN_PLAY_FRACTION)
-        : MIN_PLAY_FLOOR;
-      if (playSec < minPlayRequired)
-        return res.status(400).json({ error: "Play a little longer before submitting.", minPlaySeconds: Math.ceil(minPlayRequired), softReject: true });
+      // Ceiling matters as much as floor. Popular games learn very long
+      // avgPlaySec (Arrow Out: ~3-4 min), and MIN_PLAY_FRACTION was
+      // multiplying that into 60-120s minimums — which then blocked
+      // legit users who submitted between rounds. Ceiling caps at what
+      // the on-chain 30s cooldown already enforces (normal) / doubles it
+      // for probation. Legit users always pass; bots that submit every
+      // few seconds still get caught.
+      //
+      // Probation-aware: trusted users need 3s floor, probation 15s;
+      // ceiling 30s / 60s respectively.
+      const MIN_PLAY_FLOOR    = signUser.probation ? 15  : 3;
+      const MIN_PLAY_CEILING  = signUser.probation ? 60  : 30;
+      const MIN_PLAY_FRACTION = signUser.probation ? 0.5 : 0.25;
+      const learnedRequirement = (count >= LEARN_SAMPLES && avgPlaySec)
+        ? avgPlaySec * MIN_PLAY_FRACTION
+        : 0;
+      const minPlayRequired = Math.min(
+        MIN_PLAY_CEILING,
+        Math.max(MIN_PLAY_FLOOR, learnedRequirement)
+      );
+      if (playSec < minPlayRequired) {
+        const secondsNeeded = Math.ceil(minPlayRequired);
+        return res.status(400).json({
+          error: `Play at least ${secondsNeeded} seconds before submitting.`,
+          minPlaySeconds: secondsNeeded,
+          softReject: true,
+        });
+      }
 
       // GATE 2 — absolute impossible-rate ceiling (bootstrap safety net)
       // Koi bhi game realistically 500 pts/sec cross nahi karega.
