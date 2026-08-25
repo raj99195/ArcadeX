@@ -1,35 +1,35 @@
 // src/hooks/useAutoAuth.js
 //
-// Automatically authenticates the connected wallet against /api/auth the
-// moment it connects, and stores the resulting JWT in localStorage as
-// "arcadex_jwt" — the key every JWT-protected route (comments, likes,
-// score submission, admin actions, badge claims, etc.) reads from.
+// Auto-signs the connected wallet against /api/auth on connect, storing
+// the returned JWT in localStorage as "arcadex_jwt". Everything JWT-gated
+// (comments, likes, score submission, admin actions, badge claims) reads
+// from that key.
 //
-// Before this hook existed, wallet "connect" only gave you an on-chain
-// signer (via wagmi) — it never produced the off-chain JWT that the
-// backend's verifyToken() checks for. Every JWT-gated request was
-// silently failing with "Unauthorized" because arcadex_jwt was always
-// null. This closes that gap with a single MetaMask signature, fired
-// once per wallet connection (not once per page).
+// This version wires in Cloudflare Turnstile: before asking the wallet to
+// sign, we fetch a Turnstile token from the app-wide widget (invisible
+// for legit users) and send it alongside the signature. The backend
+// verifies it before issuing a JWT.
 //
-// Mount this once near the app root (see Providers.jsx) — it has no UI,
-// it just runs the side effect.
+// ── Named exports ───────────────────────────────────────────────────
+//   signInAndGetJwt(address, walletClient, getTurnstileToken?)
+//     Imperative sign-in for on-demand use (e.g. GamePlay's submitScore
+//     when the user dismissed auto-auth or their token expired).
+//     `getTurnstileToken` is an async function returning a Turnstile
+//     token; components should get it from `useTurnstile().getToken`.
 //
-// ── Named exports ──────────────────────────────────────────────────
-// Also exports `signInAndGetJwt(address, walletClient)` and
-// `hasValidJwtForWallet(address)` for imperative use from components
-// (e.g. GamePlay.submitScore triggers sign-in on-demand if the user
-// dismissed the auto-auth prompt earlier or their token expired
-// mid-session).
+//   hasValidJwtForWallet(address)
+//     Cheap sync check — is there a valid, non-expired JWT already
+//     stored for this exact wallet?
 
 import { useEffect, useRef } from "react";
 import { useAccount, useWalletClient } from "wagmi";
+import { useTurnstile } from "../context/TurnstileContext";
 
-const TOKEN_KEY = "arcadex_jwt";
-const TOKEN_ADDRESS_KEY = "arcadex_jwt_address"; // which wallet this token belongs to
+const TOKEN_KEY         = "arcadex_jwt";
+const TOKEN_ADDRESS_KEY = "arcadex_jwt_address";
 
 function getStoredAuth() {
-  const token = localStorage.getItem(TOKEN_KEY);
+  const token        = localStorage.getItem(TOKEN_KEY);
   const tokenAddress = localStorage.getItem(TOKEN_ADDRESS_KEY);
   return { token, tokenAddress };
 }
@@ -37,20 +37,16 @@ function getStoredAuth() {
 function isTokenStillValid(token) {
   if (!token) return false;
   try {
-    // JWTs are base64url header.payload.signature — decode the payload to
-    // check `exp` ourselves rather than waiting for a 401 from the server.
-    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-    if (!payload.exp) return true; // no exp claim — assume valid, server will reject if not
+    const payload = JSON.parse(
+      atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))
+    );
+    if (!payload.exp) return true;
     return Date.now() < payload.exp * 1000;
   } catch {
-    return false; // malformed token — treat as invalid, will re-auth
+    return false;
   }
 }
 
-// ── Public helper ─────────────────────────────────────────────────
-// Cheap sync check — is there a valid JWT already stored for this
-// exact wallet? Callers use this to decide whether to trigger a fresh
-// sign-in flow.
 export function hasValidJwtForWallet(address) {
   if (!address) return false;
   const { token, tokenAddress } = getStoredAuth();
@@ -59,23 +55,40 @@ export function hasValidJwtForWallet(address) {
   return isTokenStillValid(token);
 }
 
-// ── Public helper ─────────────────────────────────────────────────
-// Reusable sign-in: asks the wallet to sign a challenge message, posts
-// it to /api/auth, stores the returned JWT, and returns it. Throws on
-// failure (user rejection, network, invalid signature).
+// ── Imperative sign-in ──────────────────────────────────────────────
+// Called by the hook on wallet-connect, and by components (GamePlay's
+// submitScore) when they need to sign-in on demand.
 //
-// Both `useAutoAuth` (on wallet-connect) and imperative callers like
-// GamePlay's submitScore share this exact flow so behaviour is identical
-// everywhere. Previously the same logic was inlined inside the hook's
-// useEffect and couldn't be re-triggered on demand.
-export async function signInAndGetJwt(address, walletClient) {
+// `getTurnstileToken` is optional so this helper can be called from
+// contexts that don't have Turnstile mounted (tests, error paths). If
+// omitted, no token is sent and the backend decides whether to accept
+// based on its own env config.
+export async function signInAndGetJwt(address, walletClient, getTurnstileToken) {
   if (!address) throw new Error("No wallet address");
+
+  // ── Turnstile first, wallet signature second ──
+  // Order matters: fetching the Turnstile token is invisible for legit
+  // users, so doing it FIRST means they see exactly one prompt (the
+  // wallet signature). If Cloudflare needs interaction, that small
+  // checkbox shows before the wallet popup, not sandwiched into it.
+  let turnstileToken = null;
+  if (typeof getTurnstileToken === "function") {
+    try {
+      turnstileToken = await getTurnstileToken();
+    } catch (e) {
+      // Timeout or widget error — proceed without a token. The backend
+      // will reject if TURNSTILE_SECRET_KEY is set; will accept if not
+      // (letting us deploy the code before flipping the switch).
+      console.warn("Turnstile token fetch failed:", e.message);
+    }
+  }
 
   const message = `Sign in to ArcadeX\n${Date.now()}`;
 
-  // walletClient.signMessage kuch wallets mein EIP-712 format use karta hai
-  // jo ethers.verifyMessage se verify nahi hota — isliye directly
-  // personal_sign use karo jo standard Ethereum prefix lagata hai.
+  // Some wallets (WalletConnect, Coinbase) sign with EIP-712 via
+  // walletClient.signMessage and produce a signature ethers can't
+  // recover. Prefer personal_sign directly when window.ethereum exists —
+  // it always uses the standard Ethereum prefix.
   let signature;
   if (window.ethereum) {
     signature = await window.ethereum.request({
@@ -91,7 +104,7 @@ export async function signInAndGetJwt(address, walletClient) {
   const res = await fetch("/api/auth", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ address, signature, message }),
+    body: JSON.stringify({ address, signature, message, turnstileToken }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Sign-in failed");
@@ -103,32 +116,28 @@ export async function signInAndGetJwt(address, walletClient) {
 
 export function useAutoAuth() {
   const { address, isConnected } = useAccount();
-  const { data: walletClient } = useWalletClient();
-  const signingRef = useRef(false); // guards against double-firing (e.g. fast re-renders, StrictMode)
+  const { data: walletClient }   = useWalletClient();
+  const { getToken: getTurnstileToken } = useTurnstile();
+  const signingRef = useRef(false); // guards against double-firing (StrictMode, fast re-renders)
 
   useEffect(() => {
     if (!isConnected || !address || !walletClient) return;
-    if (hasValidJwtForWallet(address)) return; // already have a valid token for this exact wallet
-    if (signingRef.current) return; // a sign-in attempt is already in flight
+    if (hasValidJwtForWallet(address)) return;
+    if (signingRef.current) return;
     signingRef.current = true;
 
     (async () => {
       try {
-        await signInAndGetJwt(address, walletClient);
+        await signInAndGetJwt(address, walletClient, getTurnstileToken);
       } catch (err) {
-        // User rejecting the signature is a normal, expected outcome (not
-        // an error to surface loudly) — they just won't get JWT-gated
-        // features (comments, badge claims, admin actions) until they
-        // accept it. Everything else (wallet connect, on-chain plays,
-        // reading public data) keeps working fine without it.
-        //
-        // Score submission specifically re-triggers sign-in on-demand
-        // via signInAndGetJwt(), so a rejection here doesn't permanently
-        // lock the user out of submitting scores.
+        // User rejecting the signature is a normal, expected outcome.
+        // They just won't get JWT-gated features until they accept it.
+        // submitScore re-triggers sign-in on demand, so rejection here
+        // doesn't permanently lock them out of submitting scores.
         console.warn("Auto sign-in skipped:", err.message);
       } finally {
         signingRef.current = false;
       }
     })();
-  }, [isConnected, address, walletClient]);
+  }, [isConnected, address, walletClient, getTurnstileToken]);
 }

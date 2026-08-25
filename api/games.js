@@ -33,12 +33,38 @@ function getDb() {
 }
 const FV = admin.firestore.FieldValue;
 const rateLimits = new Map();
-function rateLimit(key, max = 10) {
+// windowMs added as an optional 3rd arg — existing callers unchanged
+// (default 60_000 = 1 min, matching old behaviour). Pass a bigger window
+// for burst checks that shouldn't reset every minute (e.g. IP-based
+// checks on auth-sensitive endpoints).
+function rateLimit(key, max = 10, windowMs = 60_000) {
   const now = Date.now();
-  const calls = (rateLimits.get(key) || []).filter(t => t > now - 60000);
+  const calls = (rateLimits.get(key) || []).filter(t => t > now - windowMs);
   if (calls.length >= max) return false;
   rateLimits.set(key, [...calls, now]);
   return true;
+}
+
+// ── Client IP helper ────────────────────────────────────────────────
+// Vercel proxies through Cloudflare's / Vercel's own edge — real client
+// IP is in x-forwarded-for (first entry).
+function getClientIp(req) {
+  const xff = req.headers["x-forwarded-for"];
+  if (xff) return String(xff).split(",")[0].trim();
+  return req.headers["x-real-ip"] || req.socket?.remoteAddress || null;
+}
+
+// ── Banned wallet check (Firestore) ─────────────────────────────────
+// Wrapped so a Firestore hiccup NEVER blocks legit users — the ban
+// system is best-effort defence in depth on top of Turnstile + on-chain
+// cooldown. Doc path: bannedWallets/{lowercase-address}. Admin sets
+// this via the admin-ban-wallet endpoint below.
+async function isWalletBanned(dbRef, address) {
+  if (!address) return false;
+  try {
+    const snap = await dbRef.collection("bannedWallets").doc(address.toLowerCase()).get();
+    return snap.exists;
+  } catch { return false; }
 }
 
 // SH0030 — check-gas-claim in-memory cache (5-min TTL per address). MST
@@ -632,6 +658,19 @@ export default async function handler(req, res) {
   if (req.method === "POST" && action === "start-session") {
     const ssUser = verifyToken(req);
     if (!ssUser) return res.status(401).json({ error: "Unauthorized" });
+
+    // ── Defence-in-depth checks (added after the drain incident) ──
+    // 1. Banned wallets can't refresh session even if their old JWT is
+    //    still valid — instant kill of an active abuser.
+    // 2. Per-IP burst limit — attacker rotating wallets stays on ONE IP
+    //    (or a small pool); this catches them where per-wallet checks
+    //    can't. Legit user needs at most ~5 session starts/min.
+    if (await isWalletBanned(db, ssUser.address))
+      return res.status(403).json({ error: "This wallet has been suspended." });
+    const ssIp = getClientIp(req);
+    if (!rateLimit(`session-ip:${ssIp}`, 20, 60_000))
+      return res.status(429).json({ error: "Too many session requests from this IP." });
+
     const { gameId, chain } = req.body;
     if (!gameId || !chain) return res.status(400).json({ error: "gameId and chain required" });
     if (!rateLimit(`session:${ssUser.address}:${gameId}`, 10))
@@ -690,7 +729,24 @@ export default async function handler(req, res) {
     if (!platformAddr || !chainId)
       return res.status(400).json({ error: `Unknown chain: ${chain}` });
 
-    if (!rateLimit(`sign:${signUser.address.toLowerCase()}:${gameId}`, 30))
+    // ── Defence-in-depth checks (added after the drain incident) ──
+    // Banned wallet — instant kill even if the attacker's old JWT is still
+    // valid (JWTs live 24h, and revoking them centrally is expensive).
+    if (await isWalletBanned(db, signUser.address))
+      return res.status(403).json({ error: "This wallet has been suspended." });
+
+    // Per-IP burst — catches attacker rotating wallets from same IP,
+    // which per-wallet limits never see.
+    const signIp = getClientIp(req);
+    if (!rateLimit(`sign-ip:${signIp}`, 60, 60_000))
+      return res.status(429).json({ error: "Too many sign requests from this IP." });
+
+    // Probation-aware per-wallet limit: 30/min for trusted users, 5/min
+    // for probation JWTs (issued when auth flagged this wallet as
+    // suspicious — bot UA, fresh wallet, IP burst, etc). Legit users on
+    // probation still get more than they'd ever use in a minute.
+    const signRateMax = signUser.probation ? 5 : 30;
+    if (!rateLimit(`sign:${signUser.address.toLowerCase()}:${gameId}`, signRateMax))
       return res.status(429).json({ error: "Too many sign requests" });
 
     try {
@@ -770,8 +826,13 @@ export default async function handler(req, res) {
       // Cold start: only block near-instant (bot/no-play) submits via a small
       // floor. Once learned: require a fraction of THIS game's typical duration.
       // Fully automatic, per-game, permanent — no per-game config needed.
-      const MIN_PLAY_FLOOR    = 3;      // absolute floor — blocks 0s/instant submits
-      const MIN_PLAY_FRACTION = 0.25;   // must play >= 25% of this game's typical time
+      //
+      // Probation-aware floor: trusted users need 3s (blocks 0s/instant only),
+      // probation users need 15s + 50% of the learned average. A real player
+      // on probation still passes easily (any legit round exceeds 15s); a bot
+      // that was polling sign-score every ~4s hits the wall.
+      const MIN_PLAY_FLOOR    = signUser.probation ? 15   : 3;
+      const MIN_PLAY_FRACTION = signUser.probation ? 0.5  : 0.25;
       const minPlayRequired = (count >= LEARN_SAMPLES && avgPlaySec)
         ? Math.max(MIN_PLAY_FLOOR, avgPlaySec * MIN_PLAY_FRACTION)
         : MIN_PLAY_FLOOR;
@@ -1418,6 +1479,69 @@ export default async function handler(req, res) {
         detail: err?.stack ? err.stack.split("\n").slice(0, 3).join(" | ") : undefined,
       });
     }
+  }
+
+  // ── POST admin-ban-wallet (admin-only) ─────────────────────────────
+  // Adds a wallet to the bannedWallets collection. Effect is immediate:
+  //   • /api/auth refuses to issue new JWTs to this wallet
+  //   • /api/games sign-score and start-session refuse existing JWTs
+  //     from this wallet
+  //   • Their on-chain plays already succeed only via a signature we
+  //     don't hand out anymore, so no further drain is possible
+  // Legit users get a clear "wallet suspended" message and can contact
+  // support. Use for immediate incident response — bulk / long-term
+  // filtering should still go through the flagged review flow.
+  if (req.method === "POST" && action === "admin-ban-wallet") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+    const { wallet, reason } = req.body || {};
+    if (!wallet || !ethers.isAddress(wallet))
+      return res.status(400).json({ error: "Valid wallet address required" });
+    try {
+      await db.collection("bannedWallets").doc(wallet.toLowerCase()).set({
+        wallet:    wallet.toLowerCase(),
+        reason:    (reason || "").toString().slice(0, 500),
+        bannedBy:  user.address.toLowerCase(),
+        bannedAt:  new Date(),
+      });
+      return res.status(200).json({ success: true });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST admin-unban-wallet (admin-only) ───────────────────────────
+  if (req.method === "POST" && action === "admin-unban-wallet") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+    const { wallet } = req.body || {};
+    if (!wallet || !ethers.isAddress(wallet))
+      return res.status(400).json({ error: "Valid wallet address required" });
+    try {
+      await db.collection("bannedWallets").doc(wallet.toLowerCase()).delete();
+      return res.status(200).json({ success: true });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── GET admin-list-banned (admin-only) ─────────────────────────────
+  // Returns all currently-banned wallets. Small collection expected
+  // (dozens, not thousands) — pagination not needed.
+  if (req.method === "GET" && action === "admin-list-banned") {
+    const alUser = verifyToken(req);
+    if (!alUser) return res.status(401).json({ error: "Unauthorized" });
+    if (!(await checkOnChainAdmin(alUser.address)))
+      return res.status(403).json({ error: "Admin only" });
+    try {
+      const snap = await db.collection("bannedWallets").orderBy("bannedAt", "desc").limit(500).get();
+      const rows = snap.docs.map(d => {
+        const x = d.data();
+        return {
+          wallet:   x.wallet,
+          reason:   x.reason || "",
+          bannedBy: x.bannedBy || "",
+          bannedAt: x.bannedAt?.toDate?.().toISOString() || null,
+        };
+      });
+      return res.status(200).json({ banned: rows, count: rows.length });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
   // ── POST admin-purge-cache (admin-only) ──

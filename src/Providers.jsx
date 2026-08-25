@@ -4,6 +4,7 @@ import { createAppKit } from "@reown/appkit/react";
 import { WagmiAdapter } from "@reown/appkit-adapter-wagmi";
 import { defineChain } from "@reown/appkit/networks";
 import { ChainProvider } from "./context/ChainContext";
+import { TurnstileProvider } from "./context/TurnstileContext";
 import { CHAIN_LIST } from "./config/chains";
 import { useAutoAuth } from "./hooks/useAutoAuth";
 
@@ -115,8 +116,13 @@ export default function Providers({ children }) {
     <WagmiProvider config={wagmiAdapter.wagmiConfig}>
       <QueryClientProvider client={queryClient}>
         <ChainProvider>
-          <AutoAuth />
-          {children}
+          {/* TurnstileProvider mounts the invisible widget once and makes
+              getToken() available via useTurnstile() to AutoAuth and to
+              components (e.g. GamePlay.submitScore's on-demand sign-in). */}
+          <TurnstileProvider>
+            <AutoAuth />
+            {children}
+          </TurnstileProvider>
         </ChainProvider>
       </QueryClientProvider>
     </WagmiProvider>
