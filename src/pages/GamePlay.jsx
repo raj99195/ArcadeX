@@ -10,6 +10,7 @@ import { useChain } from "../context/ChainContext";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { signInAndGetJwt, hasValidJwtForWallet } from "../hooks/useAutoAuth";
+import { useTurnstile } from "../context/TurnstileContext";
 import Seo from "../components/Seo";
 
 const TOURNAMENT_SCORE_ABI = [{ name: "submitTournamentScore", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tournamentId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
@@ -160,6 +161,10 @@ export default function GamePlay() {
   // ka fallback use karta hai jab window.ethereum available na ho (rare, but
   // WalletConnect-only flows me hota hai).
   const { data: walletClient } = useWalletClient();
+  // Turnstile token provider — cheap invisible verification wrapping every
+  // sign-in call. getTurnstileToken() returns cached or fresh token; used
+  // by signInAndGetJwt below when we do inline auth-on-submit.
+  const { getToken: getTurnstileToken } = useTurnstile();
 
   const [score, setScore] = useState(0);
   // SH0036 — MST team request: "score resets to 0 after every claim; next
@@ -950,7 +955,7 @@ export default function GamePlay() {
       if (!_jwt || !hasValidJwtForWallet(address)) {
         setSubmitStage("auth");
         try {
-          _jwt = await signInAndGetJwt(address, walletClient);
+          _jwt = await signInAndGetJwt(address, walletClient, getTurnstileToken);
         } catch (authErr) {
           // User rejected the signature — dismiss overlay, show soft
           // error explaining what the signature was for so they'll try
@@ -993,6 +998,37 @@ export default function GamePlay() {
         }
       }
 
+      // ── STEP 2.5: TaskOn campaign gate ──────────────────────────
+      // One-time community task requirement. If the wallet hasn't
+      // completed the TaskOn quest yet, show a panel with an "Open Task"
+      // button instead of proceeding to the score signature. Legit
+      // users see this once per wallet — completion is permanent.
+      // Backend also enforces this in sign-score (defence-in-depth) so
+      // this check can be skipped without compromising security; we do
+      // it here only to give the user a nice panel instead of a raw
+      // 403 error message from the sign-score call.
+      setSubmitStage("taskon");
+      try {
+        const tRes = await fetch("/api/games?action=check-taskon", {
+          headers: { Authorization: `Bearer ${_jwt}` },
+        });
+        const tData = await tRes.json().catch(() => ({}));
+        if (tRes.ok && tData.taskonEnabled && !tData.completed) {
+          setSubmitStage(null);
+          setSubmitError({
+            type: "taskon", soft: true, icon: "🎯",
+            title: "Complete Community Task",
+            msg: "One-time community task on TaskOn to unlock rewards. Click below to open the task page — come back and hit 'I've completed' after.",
+            campaignUrl: tData.campaignUrl,
+          });
+          setSubmitting(false); submittingRef.current = false; return;
+        }
+      } catch (tErr) {
+        // TaskOn network issue — don't block; sign-score will enforce
+        // if it's actually required. Frontend fails open here.
+        console.warn("[taskon] check failed, proceeding:", tErr.message);
+      }
+
       // ── STEP 3: Backend sign-score (ECDSA proof) ─────────────────
       setSubmitStage("signing");
       let nonce, signature;
@@ -1009,7 +1045,19 @@ export default function GamePlay() {
         if (!sigRes.ok) {
           const errData = await sigRes.json().catch(() => ({}));
           setSubmitStage(null);
-          setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: errData.error || "Could not verify gameplay session. Reload the page and try again." });
+          // Backend TaskOn gate — should have been caught in STEP 2.5,
+          // but if the check-taskon call failed we ended up here. Show
+          // the same panel so the user can complete the task.
+          if (errData.requiresTaskOn) {
+            setSubmitError({
+              type: "taskon", soft: true, icon: "🎯",
+              title: "Complete Community Task",
+              msg: errData.error || "One-time community task on TaskOn to unlock rewards.",
+              campaignUrl: errData.campaignUrl,
+            });
+          } else {
+            setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: errData.error || "Could not verify gameplay session. Reload the page and try again." });
+          }
           setSubmitting(false); submittingRef.current = false; return;
         }
         const sigData = await sigRes.json();
@@ -1193,6 +1241,13 @@ export default function GamePlay() {
         accent: "#7B2FFF",
         spin: true,
       },
+      taskon: {
+        icon: "🎯",
+        title: "Checking community task",
+        msg: "Verifying your TaskOn completion…",
+        accent: "#7B2FFF",
+        spin: true,
+      },
       signing: {
         icon: "📝",
         title: "Verifying your score",
@@ -1304,7 +1359,8 @@ export default function GamePlay() {
     const bgColor     = isSoft ? "rgba(255,183,0,0.05)"  : "rgba(255,68,68,0.06)";
     const titleColor  = isSoft ? C.gold                   : "#ff4444";
     // Cap + duplicate: no retry makes sense (must wait). Others: show Try Again.
-    const showRetry   = !["cap", "duplicate", "paused"].includes(submitError.type);
+    const showRetry   = !["cap", "duplicate", "paused", "taskon"].includes(submitError.type);
+    const isTaskon    = submitError.type === "taskon";
     return (
       <div style={{ background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 10, padding: "14px 16px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -1316,6 +1372,25 @@ export default function GamePlay() {
         <div style={{ fontSize: 11, color: "#9977cc", fontFamily: C.raj, lineHeight: 1.6 }}>
           {submitError.msg}
         </div>
+        {isTaskon && submitError.campaignUrl && (
+          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            <button
+              onClick={() => window.open(submitError.campaignUrl, "_blank", "noopener,noreferrer")}
+              style={{ fontSize: 11, color: "#fff", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontFamily: C.raj, fontWeight: 700, letterSpacing: "0.5px", boxShadow: "0 0 12px rgba(123,47,255,0.35)" }}>
+              🔗 Open Task
+            </button>
+            <button
+              onClick={() => { setSubmitError(null); submitScore(score); }}
+              style={{ fontSize: 11, color: C.gold, background: "transparent", border: `1px solid ${C.gold}`, borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontFamily: C.raj, fontWeight: 700, letterSpacing: "0.5px" }}>
+              ✓ I've Completed — Verify
+            </button>
+            <button
+              onClick={() => setSubmitError(null)}
+              style={{ fontSize: 11, color: C.purpleL, background: "transparent", border: `1px solid ${C.border2}`, borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontFamily: C.raj, fontWeight: 700, letterSpacing: "0.5px" }}>
+              Cancel
+            </button>
+          </div>
+        )}
         {showRetry && (
           <button
             onClick={() => setSubmitError(null)}

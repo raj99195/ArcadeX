@@ -67,6 +67,105 @@ async function isWalletBanned(dbRef, address) {
   } catch { return false; }
 }
 
+// ── TaskOn campaign completion check ────────────────────────────────
+// One-time community task gate: user must complete a TaskOn quest
+// (Twitter follow, Discord join, etc.) before they can claim rewards.
+// This raises the per-wallet farming cost for attackers dramatically
+// (each fresh wallet needs a Twitter account + manual task completion),
+// with a clear, explicit UX for legit users.
+//
+// Env vars:
+//   TASKON_CLIENT_ID       — from TaskOn dashboard
+//   TASKON_CLIENT_SECRET   — from TaskOn dashboard (KEEP SECRET, never commit)
+//   TASKON_QUEST_ID        — the campaign quest ID (numeric string)
+//   VITE_TASKON_CAMPAIGN_URL — public URL users visit to complete the task
+//
+// Caching strategy:
+//   • Per-wallet cache: once confirmed, permanent (completion is monotonic —
+//     TaskOn doesn't remove participants who completed).
+//   • Full participant list: 10-min TTL. On cache miss, paginates through
+//     all pages (100 per page, safety-capped at 50 pages / 5K participants).
+//   • Per-instance memory (warm serverless pool). Cold starts refetch.
+//
+// If TASKON_CLIENT_ID is unset, the gate is DISABLED and every wallet
+// passes — lets you deploy the code before flipping the switch.
+const _taskonUserCache = new Map();          // key: wallet, val: { at }
+let   _taskonListCache = { at: 0, wallets: new Set() };
+const TASKON_LIST_TTL  = 10 * 60 * 1000;
+
+async function fetchTaskonParticipants() {
+  const clientId     = process.env.TASKON_CLIENT_ID;
+  const clientSecret = process.env.TASKON_CLIENT_SECRET;
+  const questId      = process.env.TASKON_QUEST_ID;
+  if (!clientId || !clientSecret || !questId) return null;
+
+  const wallets = new Set();
+  let offset = 0;
+  const limit = 100;
+  const MAX_PAGES = 50; // 5000-participant safety cap
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const r = await fetch("https://api.taskon.xyz/v1/exportQuestData", {
+      method: "POST",
+      headers: {
+        "Content-Type":            "application/json",
+        "X-Taskon-Client-Id":      clientId,
+        "X-Taskon-Client-Secret":  clientSecret,
+      },
+      body: JSON.stringify({ scene: "CampaignDataParticipant", ref_id: questId, offset, limit }),
+    });
+    if (!r.ok) throw new Error(`TaskOn API ${r.status}`);
+    const data = await r.json();
+
+    // TaskOn response shape isn't strictly typed on their end. Walk the
+    // whole tree and collect anything that looks like an EVM address.
+    const before = wallets.size;
+    (function walk(v) {
+      if (typeof v === "string") {
+        if (/^0x[a-fA-F0-9]{40}$/.test(v)) wallets.add(v.toLowerCase());
+      } else if (Array.isArray(v)) {
+        v.forEach(walk);
+      } else if (v && typeof v === "object") {
+        Object.values(v).forEach(walk);
+      }
+    })(data);
+
+    // Page had fewer new items than the limit → last page reached
+    if (wallets.size - before < limit) break;
+    offset += limit;
+  }
+  return wallets;
+}
+
+async function isWalletInTaskon(address) {
+  if (!address) return false;
+  const key = address.toLowerCase();
+
+  // Once-confirmed wallets skip the whole fetch — completion is monotonic
+  if (_taskonUserCache.has(key)) return true;
+
+  const now = Date.now();
+  if (now - _taskonListCache.at > TASKON_LIST_TTL) {
+    // Refresh the participant list. If refresh throws, KEEP the old
+    // cache (fail-open on transient TaskOn errors) and let the caller
+    // check membership against the last known set.
+    try {
+      const fresh = await fetchTaskonParticipants();
+      if (fresh !== null) _taskonListCache = { at: now, wallets: fresh };
+    } catch (e) {
+      console.warn("[taskon] refresh failed, using stale cache:", e.message);
+    }
+  }
+
+  const found = _taskonListCache.wallets.has(key);
+  if (found) {
+    _taskonUserCache.set(key, { at: now });
+    // Bound the per-user cache (LRU-ish: clear when it grows too large)
+    if (_taskonUserCache.size > 50_000) _taskonUserCache.clear();
+  }
+  return found;
+}
+
 // SH0030 — check-gas-claim in-memory cache (5-min TTL per address). MST
 // faucet's hasClaimed() is monotonic (false→true, never reverts), so caching
 // is safe. Bounded to 5000 entries — beyond that, oldest 500 evicted. Per
@@ -655,6 +754,38 @@ export default async function handler(req, res) {
   //   update nahi hua hota → query returns empty → 403 "Invalid or expired
   //   session". Single-doc .doc(id).get() lookups are ALWAYS strongly
   //   consistent — no index dependency, no race.
+  // ── GET check-taskon (JWT required) ─────────────────────────────────
+  // Frontend calls this BEFORE opening the sign-score flow. If the wallet
+  // hasn't completed the TaskOn campaign yet, the frontend shows a panel
+  // with an "Open Task" button — user completes off-site and returns.
+  //
+  // If TASKON_CLIENT_ID is unset, the endpoint returns { completed: true,
+  // taskonEnabled: false } so the frontend proceeds normally (feature
+  // disabled). Same fail-open behaviour on TaskOn API errors — we don't
+  // block legit users on our infrastructure issues.
+  if (req.method === "GET" && action === "check-taskon") {
+    const tUser = verifyToken(req);
+    if (!tUser) return res.status(401).json({ error: "Unauthorized" });
+    const campaignUrl = process.env.VITE_TASKON_CAMPAIGN_URL || "https://taskon.xyz/";
+
+    if (!process.env.TASKON_CLIENT_ID) {
+      return res.status(200).json({ completed: true, taskonEnabled: false });
+    }
+    try {
+      const completed = await isWalletInTaskon(tUser.address);
+      return res.status(200).json({
+        completed,
+        taskonEnabled: true,
+        campaignUrl,
+        questId: process.env.TASKON_QUEST_ID || null,
+      });
+    } catch (err) {
+      console.warn("[check-taskon]", err.message);
+      // Fail-open: TaskOn outage shouldn't block legit users
+      return res.status(200).json({ completed: true, taskonEnabled: false, degraded: true });
+    }
+  }
+
   if (req.method === "POST" && action === "start-session") {
     const ssUser = verifyToken(req);
     if (!ssUser) return res.status(401).json({ error: "Unauthorized" });
@@ -748,6 +879,28 @@ export default async function handler(req, res) {
     const signRateMax = signUser.probation ? 5 : 30;
     if (!rateLimit(`sign:${signUser.address.toLowerCase()}:${gameId}`, signRateMax))
       return res.status(429).json({ error: "Too many sign requests" });
+
+    // ── TaskOn campaign gate ──
+    // Defence-in-depth: even if the frontend somehow skips its own
+    // check-taskon step, the backend refuses to sign a score for a wallet
+    // that hasn't completed the campaign. Fail-open on API errors so a
+    // TaskOn outage doesn't block payouts. Once TASKON_CLIENT_ID is unset,
+    // this whole block is a no-op.
+    if (process.env.TASKON_CLIENT_ID) {
+      try {
+        const taskonOk = await isWalletInTaskon(signUser.address);
+        if (!taskonOk) {
+          return res.status(403).json({
+            error: "Complete the community task on TaskOn to claim rewards.",
+            requiresTaskOn: true,
+            campaignUrl: process.env.VITE_TASKON_CAMPAIGN_URL || "https://taskon.xyz/",
+          });
+        }
+      } catch (err) {
+        // Fail-open on TaskOn infra hiccups — logged only
+        console.warn("[sign-score] TaskOn check failed, allowing:", err.message);
+      }
+    }
 
     try {
       // Session validate via strongly-consistent doc lookup (no index lag,
