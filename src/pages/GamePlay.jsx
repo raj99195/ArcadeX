@@ -210,6 +210,19 @@ export default function GamePlay() {
   //   confirming → tx broadcast, waiting for on-chain receipt
   //   success    → done — auto-dismisses after 2.5s
   const [submitStage, setSubmitStage] = useState(null);
+  // ── TaskOn polling state ────────────────────────────────────────
+  // Full-screen overlay when the wallet hasn't completed the TaskOn
+  // campaign yet. Backend is polled every 2s; on completion we resume
+  // the submission using the ORIGINAL jwt + session (not re-issued),
+  // so playSec at sign-score reflects the real gameplay time plus the
+  // TaskOn wait — GATE 1 passes easily.
+  //   taskonPolling = null | { campaignUrl, startedAt }
+  const [taskonPolling, setTaskonPolling] = useState(null);
+  const taskonPollTimerRef    = useRef(null);
+  const taskonCancelledRef    = useRef(false);
+  const taskonResumeStateRef  = useRef(null); // { jwt, session, finalScore }
+  const taskonStartTimeRef    = useRef(0);
+  const [taskonElapsed, setTaskonElapsed] = useState(0); // seconds — for UI counter
   const [gameLoading, setGameLoading] = useState(true);
   const [tokensEarned, setTokensEarned] = useState(0);
   const [totalPlays, setTotalPlays] = useState(0);
@@ -901,7 +914,77 @@ export default function GamePlay() {
     finally { setPostingComment(false); }
   };
 
-  const submitScore = async (finalScore) => {
+  // ── TaskOn polling helpers ─────────────────────────────────────
+  // startTaskonPolling: kicks off a 2s poll loop that pings the backend
+  // check-taskon endpoint. On completion, resumes the submission from
+  // where it paused (STEP 3 onwards) with the SAME jwt + session.
+  // cancelTaskonPolling: user hit Cancel — clears everything, no
+  // submission happens.
+  const startTaskonPolling = (jwt) => {
+    taskonCancelledRef.current = false;
+    const poll = async () => {
+      if (taskonCancelledRef.current) return;
+      try {
+        const r = await fetch("/api/games?action=check-taskon", {
+          headers: { Authorization: `Bearer ${jwt}` },
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.completed) {
+          // Done! Clear overlay, resume submission with preserved state
+          taskonPollTimerRef.current = null;
+          setTaskonPolling(null);
+          const state = taskonResumeStateRef.current;
+          taskonResumeStateRef.current = null;
+          submittingRef.current = false;
+          setSubmitting(false);
+          // Re-enter submitScore with resume state — skips JWT/session
+          // reissue and skips the TaskOn check (we know it passes now)
+          if (state) submitScore(state.finalScore, state);
+          return;
+        }
+      } catch (e) {
+        // Silent — polling is best-effort, next tick will retry
+        console.warn("[taskon-poll]", e.message);
+      }
+      if (!taskonCancelledRef.current) {
+        taskonPollTimerRef.current = setTimeout(poll, 2000);
+      }
+    };
+    // First poll after 2s (gives user time to open task)
+    taskonPollTimerRef.current = setTimeout(poll, 2000);
+  };
+
+  const cancelTaskonPolling = () => {
+    taskonCancelledRef.current = true;
+    if (taskonPollTimerRef.current) {
+      clearTimeout(taskonPollTimerRef.current);
+      taskonPollTimerRef.current = null;
+    }
+    setTaskonPolling(null);
+    taskonResumeStateRef.current = null;
+    submittingRef.current = false;
+    setSubmitting(false);
+  };
+
+  // Update elapsed-time counter while polling (for the "waiting 0:32" UI)
+  useEffect(() => {
+    if (!taskonPolling) { setTaskonElapsed(0); return; }
+    const start = taskonStartTimeRef.current || Date.now();
+    setTaskonElapsed(Math.floor((Date.now() - start) / 1000));
+    const t = setInterval(() => {
+      setTaskonElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [taskonPolling]);
+
+  // Cleanup poll timer on unmount so it doesn't fire on a dead component
+  useEffect(() => {
+    return () => {
+      if (taskonPollTimerRef.current) clearTimeout(taskonPollTimerRef.current);
+    };
+  }, []);
+
+  const submitScore = async (finalScore, resumeState = null) => {
     if (submittingRef.current || !address || !game) return;
 
     // SH0036 — MST team's requested gate: block submission if user hasn't
@@ -945,88 +1028,109 @@ export default function GamePlay() {
       // small native-token amounts still show up.
       const playerReward = Math.round(rewardRate * currentSplit / 100 * 100) / 100;
 
-      // ── STEP 1: Ensure JWT (sign-in if missing/expired) ──────────
-      // OLD: hard-errored "Not Signed In" and asked user to reconnect
-      // wallet — mobile users had no idea what to do. NEW: trigger
-      // sign-in inline via the shared helper. Overlay tells them
-      // exactly what's happening ("Check your wallet for a signature
-      // request — it's free, no gas").
-      let _jwt = localStorage.getItem("arcadex_jwt");
-      if (!_jwt || !hasValidJwtForWallet(address)) {
-        setSubmitStage("auth");
-        try {
-          _jwt = await signInAndGetJwt(address, walletClient, getTurnstileToken);
-        } catch (authErr) {
-          // User rejected the signature — dismiss overlay, show soft
-          // error explaining what the signature was for so they'll try
-          // again next time. (Point 4 from the roadmap.)
-          setSubmitStage(null);
-          setSubmitError({
-            type: "auth", soft: true, icon: "🔐",
-            title: "Sign-In Cancelled",
-            msg: "You need to sign a free message (no gas, no cost) to prove your wallet owns this score. Tap Submit again to retry."
-          });
-          setSubmitting(false); submittingRef.current = false; return;
+      // ── STEP 1 + STEP 2: Only run on fresh submission ─────────────
+      // When resuming after a TaskOn wait, we intentionally reuse the
+      // ORIGINAL jwt + session captured pre-wait. Reason: session's
+      // createdAt is stored server-side; reusing it means the sign-score
+      // playSec measurement reflects real gameplay + TaskOn wait time,
+      // which comfortably passes GATE 1 (min play time). A fresh session
+      // here would reset playSec to ~0 and fail GATE 1 for a legit user
+      // who just spent minutes completing the community task.
+      let _jwt, _session;
+      if (resumeState) {
+        _jwt     = resumeState.jwt;
+        _session = resumeState.session;
+      } else {
+        // ── STEP 1: Ensure JWT (sign-in if missing/expired) ──────────
+        // OLD: hard-errored "Not Signed In" and asked user to reconnect
+        // wallet — mobile users had no idea what to do. NEW: trigger
+        // sign-in inline via the shared helper. Overlay tells them
+        // exactly what's happening ("Check your wallet for a signature
+        // request — it's free, no gas").
+        _jwt = localStorage.getItem("arcadex_jwt");
+        if (!_jwt || !hasValidJwtForWallet(address)) {
+          setSubmitStage("auth");
+          try {
+            _jwt = await signInAndGetJwt(address, walletClient, getTurnstileToken);
+          } catch (authErr) {
+            // User rejected the signature — dismiss overlay, show soft
+            // error explaining what the signature was for so they'll try
+            // again next time. (Point 4 from the roadmap.)
+            setSubmitStage(null);
+            setSubmitError({
+              type: "auth", soft: true, icon: "🔐",
+              title: "Sign-In Cancelled",
+              msg: "You need to sign a free message (no gas, no cost) to prove your wallet owns this score. Tap Submit again to retry."
+            });
+            setSubmitting(false); submittingRef.current = false; return;
+          }
         }
-      }
 
-      // ── STEP 2: Ensure gameplay session token ────────────────────
-      // OLD: hard-errored "Session Expired, reload the page" if the
-      // on-mount startSession didn't run (e.g. JWT was missing then).
-      // NEW: fetch one inline — now we definitely have a JWT.
-      let _session = sessionTokenRef.current;
-      if (!_session) {
-        setSubmitStage("session");
-        try {
-          const sRes = await fetch("/api/games?action=start-session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${_jwt}` },
-            body: JSON.stringify({ gameId: onChainGameId, chain: chainKey }),
-          });
-          if (!sRes.ok) throw new Error("Session start failed");
-          const { sessionToken } = await sRes.json();
-          _session = sessionToken;
-          sessionTokenRef.current = sessionToken;
-        } catch (sessErr) {
-          setSubmitStage(null);
-          setSubmitError({
-            type: "session", soft: false, icon: "🔄",
-            title: "Session Setup Failed",
-            msg: "Could not prepare your gameplay session. Please reload the page and try again."
-          });
-          setSubmitting(false); submittingRef.current = false; return;
+        // ── STEP 2: Ensure gameplay session token ────────────────────
+        // OLD: hard-errored "Session Expired, reload the page" if the
+        // on-mount startSession didn't run (e.g. JWT was missing then).
+        // NEW: fetch one inline — now we definitely have a JWT.
+        _session = sessionTokenRef.current;
+        if (!_session) {
+          setSubmitStage("session");
+          try {
+            const sRes = await fetch("/api/games?action=start-session", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${_jwt}` },
+              body: JSON.stringify({ gameId: onChainGameId, chain: chainKey }),
+            });
+            if (!sRes.ok) throw new Error("Session start failed");
+            const { sessionToken } = await sRes.json();
+            _session = sessionToken;
+            sessionTokenRef.current = sessionToken;
+          } catch (sessErr) {
+            setSubmitStage(null);
+            setSubmitError({
+              type: "session", soft: false, icon: "🔄",
+              title: "Session Setup Failed",
+              msg: "Could not prepare your gameplay session. Please reload the page and try again."
+            });
+            setSubmitting(false); submittingRef.current = false; return;
+          }
         }
       }
 
       // ── STEP 2.5: TaskOn campaign gate ──────────────────────────
-      // One-time community task requirement. If the wallet hasn't
-      // completed the TaskOn quest yet, show a panel with an "Open Task"
-      // button instead of proceeding to the score signature. Legit
-      // users see this once per wallet — completion is permanent.
-      // Backend also enforces this in sign-score (defence-in-depth) so
-      // this check can be skipped without compromising security; we do
-      // it here only to give the user a nice panel instead of a raw
-      // 403 error message from the sign-score call.
-      setSubmitStage("taskon");
-      try {
-        const tRes = await fetch("/api/games?action=check-taskon", {
-          headers: { Authorization: `Bearer ${_jwt}` },
-        });
-        const tData = await tRes.json().catch(() => ({}));
-        if (tRes.ok && tData.taskonEnabled && !tData.completed) {
-          setSubmitStage(null);
-          setSubmitError({
-            type: "taskon", soft: true, icon: "🎯",
-            title: "Complete Community Task",
-            msg: "One-time community task on TaskOn to unlock rewards. Click below to open the task page — come back and hit 'I've completed' after.",
-            campaignUrl: tData.campaignUrl,
+      // Skipped when resuming — polling already confirmed completion.
+      // On a fresh submission where the wallet hasn't completed yet, we
+      // pause here and hand off to the full-screen taskonPolling overlay,
+      // which polls every 2s and resumes this function on success. The
+      // ORIGINAL _jwt + _session get preserved in taskonResumeStateRef
+      // so the resume call bypasses STEP 1+2 (see block above).
+      if (!resumeState) {
+        setSubmitStage("taskon");
+        try {
+          const tRes = await fetch("/api/games?action=check-taskon", {
+            headers: { Authorization: `Bearer ${_jwt}` },
           });
-          setSubmitting(false); submittingRef.current = false; return;
+          const tData = await tRes.json().catch(() => ({}));
+          if (tRes.ok && tData.taskonEnabled && !tData.completed) {
+            setSubmitStage(null);
+            // Preserve state for the polling callback to resume with
+            taskonResumeStateRef.current = { jwt: _jwt, session: _session, finalScore };
+            taskonStartTimeRef.current = Date.now();
+            setTaskonPolling({
+              campaignUrl: tData.campaignUrl,
+              startedAt:   Date.now(),
+            });
+            startTaskonPolling(_jwt);
+            // IMPORTANT: don't clear submittingRef here — polling overlay
+            // is now the source of truth for "user is mid-submission".
+            // Cancel button clears both state and ref. Success path (in
+            // startTaskonPolling's poll callback) also clears and then
+            // re-enters submitScore with resumeState.
+            return;
+          }
+        } catch (tErr) {
+          // TaskOn network issue — don't block; sign-score will enforce
+          // if it's actually required. Frontend fails open here.
+          console.warn("[taskon] check failed, proceeding:", tErr.message);
         }
-      } catch (tErr) {
-        // TaskOn network issue — don't block; sign-score will enforce
-        // if it's actually required. Frontend fails open here.
-        console.warn("[taskon] check failed, proceeding:", tErr.message);
       }
 
       // ── STEP 3: Backend sign-score (ECDSA proof) ─────────────────
@@ -1046,15 +1150,17 @@ export default function GamePlay() {
           const errData = await sigRes.json().catch(() => ({}));
           setSubmitStage(null);
           // Backend TaskOn gate — should have been caught in STEP 2.5,
-          // but if the check-taskon call failed we ended up here. Show
-          // the same panel so the user can complete the task.
+          // but if the check-taskon call failed we ended up here. Fall
+          // through to the same polling overlay UX instead of a raw error.
           if (errData.requiresTaskOn) {
-            setSubmitError({
-              type: "taskon", soft: true, icon: "🎯",
-              title: "Complete Community Task",
-              msg: errData.error || "One-time community task on TaskOn to unlock rewards.",
-              campaignUrl: errData.campaignUrl,
+            taskonResumeStateRef.current = { jwt: _jwt, session: _session, finalScore };
+            taskonStartTimeRef.current = Date.now();
+            setTaskonPolling({
+              campaignUrl: errData.campaignUrl || "https://taskon.xyz/",
+              startedAt:   Date.now(),
             });
+            startTaskonPolling(_jwt);
+            return; // submittingRef stays true; polling overlay owns lifecycle
           } else {
             setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: errData.error || "Could not verify gameplay session. Reload the page and try again." });
           }
@@ -1352,6 +1458,166 @@ export default function GamePlay() {
     );
   };
 
+  // ── Full-screen TaskOn polling overlay ──────────────────────────
+  // Shown when the wallet hasn't completed the community task yet.
+  // Mirrors renderSubmitOverlay's visual language (backdrop blur, gradient
+  // card, floating icon) but with:
+  //   • prominent gold "Open Task" CTA — opens TaskOn campaign in new tab
+  //   • live polling indicator with elapsed-time counter
+  //   • subtle Cancel that aborts polling and unlocks the Submit button
+  // The overlay stays up until either (a) backend check-taskon returns
+  // completed:true → auto-resumes submission, or (b) user hits Cancel.
+  const renderTaskonOverlay = () => {
+    if (!taskonPolling) return null;
+    const { campaignUrl } = taskonPolling;
+    const mm = String(Math.floor(taskonElapsed / 60)).padStart(1, "0");
+    const ss = String(taskonElapsed % 60).padStart(2, "0");
+    return (
+      <>
+        <style>{`
+          @keyframes tsFadeIn { from { opacity: 0 } to { opacity: 1 } }
+          @keyframes tsCardIn { from { opacity: 0; transform: translate(-50%,-50%) scale(0.94) } to { opacity: 1; transform: translate(-50%,-50%) scale(1) } }
+          @keyframes tsSpin { to { transform: rotate(360deg) } }
+          @keyframes tsFloat { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-5px) } }
+          @keyframes tsGlow { 0%,100% { box-shadow: 0 0 24px rgba(255,183,0,0.4), 0 0 48px rgba(255,183,0,0.15) } 50% { box-shadow: 0 0 32px rgba(255,183,0,0.55), 0 0 64px rgba(255,183,0,0.25) } }
+          @keyframes tsDots { 0%,20% { content: "" } 40% { content: "." } 60% { content: ".." } 80%,100% { content: "..." } }
+          .ts-cta:hover { transform: translateY(-1px); filter: brightness(1.08); }
+          .ts-cta:active { transform: translateY(0); }
+          .ts-cancel:hover { color: #a67fff !important; border-color: rgba(167,127,255,0.4) !important; }
+        `}</style>
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 20000,
+          background: "rgba(4,3,10,0.86)", backdropFilter: "blur(12px)",
+          animation: "tsFadeIn 0.3s ease",
+        }}>
+          <div style={{
+            position: "absolute", top: "50%", left: "50%",
+            transform: "translate(-50%,-50%)",
+            width: isMobile ? "calc(100vw - 28px)" : 440,
+            maxWidth: 440,
+            background: "linear-gradient(180deg, rgba(35,20,70,0.98), rgba(15,10,32,0.98))",
+            border: "1px solid rgba(255,183,0,0.3)",
+            borderRadius: 18,
+            padding: isMobile ? "30px 22px 22px" : "36px 28px 26px",
+            boxShadow: "0 30px 80px rgba(0,0,0,0.7), 0 0 60px rgba(255,183,0,0.12)",
+            animation: "tsCardIn 0.42s cubic-bezier(0.16,1,0.3,1)",
+          }}>
+            {/* Icon */}
+            <div style={{
+              fontSize: 54, textAlign: "center", marginBottom: 14,
+              animation: "tsFloat 2.8s ease-in-out infinite",
+              filter: "drop-shadow(0 4px 20px rgba(255,183,0,0.35))",
+            }}>🎯</div>
+
+            {/* Title */}
+            <div style={{
+              fontFamily: C.raj, fontWeight: 800, fontSize: 20, color: "#fff",
+              textAlign: "center", marginBottom: 8, letterSpacing: "0.3px",
+            }}>
+              Complete Community Task
+            </div>
+
+            {/* Subtitle */}
+            <div style={{
+              fontFamily: C.raj, fontWeight: 700, fontSize: 12, color: C.gold,
+              textAlign: "center", marginBottom: 14, letterSpacing: "0.8px",
+              textTransform: "uppercase",
+            }}>
+              ⚡ One-Time Activity
+            </div>
+
+            {/* Description */}
+            <div style={{
+              fontFamily: C.raj, fontSize: 13, color: "#d9c7ff",
+              textAlign: "center", lineHeight: 1.65, marginBottom: 6,
+            }}>
+              Complete the task on TaskOn to unlock <span style={{ color: C.gold, fontWeight: 700 }}>MSTC rewards</span> from ArcadeX.
+            </div>
+            <div style={{
+              fontFamily: C.raj, fontSize: 11, color: "#9077cc",
+              textAlign: "center", lineHeight: 1.6, marginBottom: 22,
+            }}>
+              You only need to do this once per wallet. We'll auto-detect when you're done.
+            </div>
+
+            {/* Primary CTA */}
+            <button
+              className="ts-cta"
+              onClick={() => window.open(campaignUrl, "_blank", "noopener,noreferrer")}
+              style={{
+                width: "100%",
+                padding: "14px 18px",
+                background: "linear-gradient(135deg, #FFB700, #FF8C00)",
+                border: "none", borderRadius: 12, cursor: "pointer",
+                fontFamily: C.raj, fontWeight: 800, fontSize: 14,
+                color: "#1a0f00", letterSpacing: "0.6px",
+                marginBottom: 16,
+                transition: "transform 0.15s, filter 0.15s",
+                animation: "tsGlow 2.4s ease-in-out infinite",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              }}>
+              <span style={{ fontSize: 16 }}>🔗</span>
+              <span>Open Task on TaskOn</span>
+            </button>
+
+            {/* Polling status card */}
+            <div style={{
+              display: "flex", alignItems: "center", gap: 12,
+              padding: "13px 16px",
+              background: "rgba(123,47,255,0.09)",
+              border: "1px solid rgba(123,47,255,0.22)",
+              borderRadius: 12, marginBottom: 14,
+            }}>
+              <div style={{
+                width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
+                border: `2px solid ${C.purpleL}`, borderTopColor: "transparent",
+                animation: "tsSpin 0.85s linear infinite",
+              }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontFamily: C.raj, fontWeight: 700, fontSize: 12,
+                  color: "#c9b3ff", marginBottom: 2,
+                }}>
+                  Waiting for task completion
+                </div>
+                <div style={{
+                  fontFamily: C.raj, fontSize: 10.5, color: "#7a5aa8",
+                  letterSpacing: "0.3px",
+                }}>
+                  Checking every 2 seconds · {mm}:{ss} elapsed
+                </div>
+              </div>
+            </div>
+
+            {/* Helper text */}
+            <div style={{
+              fontFamily: C.raj, fontSize: 10.5, color: "#6a5292",
+              textAlign: "center", lineHeight: 1.5, marginBottom: 14,
+              fontStyle: "italic",
+            }}>
+              Tip: task usually takes under a minute. Keep this tab open.
+            </div>
+
+            {/* Cancel */}
+            <button
+              className="ts-cancel"
+              onClick={cancelTaskonPolling}
+              style={{
+                width: "100%", padding: "10px",
+                background: "transparent",
+                border: `1px solid ${C.border2}`, borderRadius: 9, cursor: "pointer",
+                fontFamily: C.raj, fontWeight: 600, fontSize: 11,
+                color: "#7a5aa8", letterSpacing: "0.5px",
+                transition: "color 0.15s, border-color 0.15s",
+              }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  };
+
   const renderErrorCard = () => {
     if (!submitError) return null;
     const isSoft = submitError.soft;
@@ -1359,8 +1625,7 @@ export default function GamePlay() {
     const bgColor     = isSoft ? "rgba(255,183,0,0.05)"  : "rgba(255,68,68,0.06)";
     const titleColor  = isSoft ? C.gold                   : "#ff4444";
     // Cap + duplicate: no retry makes sense (must wait). Others: show Try Again.
-    const showRetry   = !["cap", "duplicate", "paused", "taskon"].includes(submitError.type);
-    const isTaskon    = submitError.type === "taskon";
+    const showRetry   = !["cap", "duplicate", "paused"].includes(submitError.type);
     return (
       <div style={{ background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 10, padding: "14px 16px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -1372,25 +1637,6 @@ export default function GamePlay() {
         <div style={{ fontSize: 11, color: "#9977cc", fontFamily: C.raj, lineHeight: 1.6 }}>
           {submitError.msg}
         </div>
-        {isTaskon && submitError.campaignUrl && (
-          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-            <button
-              onClick={() => window.open(submitError.campaignUrl, "_blank", "noopener,noreferrer")}
-              style={{ fontSize: 11, color: "#fff", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontFamily: C.raj, fontWeight: 700, letterSpacing: "0.5px", boxShadow: "0 0 12px rgba(123,47,255,0.35)" }}>
-              🔗 Open Task
-            </button>
-            <button
-              onClick={() => { setSubmitError(null); submitScore(score); }}
-              style={{ fontSize: 11, color: C.gold, background: "transparent", border: `1px solid ${C.gold}`, borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontFamily: C.raj, fontWeight: 700, letterSpacing: "0.5px" }}>
-              ✓ I've Completed — Verify
-            </button>
-            <button
-              onClick={() => setSubmitError(null)}
-              style={{ fontSize: 11, color: C.purpleL, background: "transparent", border: `1px solid ${C.border2}`, borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontFamily: C.raj, fontWeight: 700, letterSpacing: "0.5px" }}>
-              Cancel
-            </button>
-          </div>
-        )}
         {showRetry && (
           <button
             onClick={() => setSubmitError(null)}
@@ -1780,6 +2026,9 @@ export default function GamePlay() {
 
       {/* ── Score-submit overlay (renders across everything, incl. fake FS) ── */}
       {renderSubmitOverlay()}
+
+      {/* ── TaskOn polling overlay (mutually exclusive with above) ── */}
+      {renderTaskonOverlay()}
     </div>
   );
 }
