@@ -143,13 +143,59 @@ export async function saveScore({ player, score, gameId, gameName, txHash, chain
 // scores collection fetch hoke JS mein filter hota tha — cost explosion.
 // Ab query params se backend pe filter → sirf matching docs read.
 // Default limit 500 — leaderboards/recent activity ke liye kaafi hai.
+//
+// SH0039 — client-side sessionStorage cache added (10-min TTL). Home.jsx
+// homepage pe har mount pe 500 reads karta tha sirf top-8 leaderboard
+// dikhane ke liye — 947 executions/day × 500 = 473K Firebase reads/day.
+// Backend pe already Edge cache (s-maxage=120) hai, but wo tab bhi
+// CDN se serve karta hai when reachable. Client cache means user ka
+// apna session hi duplicate calls nahi karta — homepage bounce/return
+// bhi zero-cost. Post-submit ke liye bustScoresCache() export hai.
+const SCORES_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function readScoresCache(key) {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const { data, at } = JSON.parse(raw);
+    if (Date.now() - at > SCORES_CACHE_TTL_MS) return null;
+    return data;
+  } catch { return null; }
+}
+function writeScoresCache(key, data) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ data, at: Date.now() }));
+  } catch { /* quota / private mode — silently skip */ }
+}
+
+// Public helper — call after actions that should reflect immediately
+// (score submit, admin actions). Usage:
+//   import { bustScoresCache } from "../lib/gameService";
+//   bustScoresCache();
+export function bustScoresCache() {
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i);
+      if (key && key.startsWith("scores:")) sessionStorage.removeItem(key);
+    }
+  } catch { /* silent */ }
+}
+
 export async function getScores(chainKey, limit = 500) {
+  const cacheKey = `scores:${chainKey || "all"}:${limit}`;
+
+  // Cache hit → return instantly, zero network / zero Firebase read
+  const cached = readScoresCache(cacheKey);
+  if (cached) return cached;
+
   try {
     const params = new URLSearchParams();
     if (chainKey) params.set("chain", chainKey);
     if (limit)    params.set("limit", String(limit));
     const data = await apiCall(`/api/games?action=scores&${params}`);
-    return data.scores || [];
+    const scores = data.scores || [];
+    writeScoresCache(cacheKey, scores);
+    return scores;
   } catch {
     console.error("Scores fetch failed");
     return [];
@@ -160,10 +206,18 @@ export async function getScores(chainKey, limit = 500) {
 // client-side .filter() hota tha. Ab backend Firestore query kare
 // where("gameId","==",X).orderBy("createdAt").limit(100) — per-game
 // leaderboard ke liye ~100 reads instead of 100K+.
+// SH0039 — sessionStorage cache added (same 10-min TTL as getScores),
+// so per-game leaderboards on GamePlay pages don't re-fetch on every
+// navigation. Cache-bust via bustScoresCache() covers both keys.
 export async function getScoresByGame(gameId, limit = 100) {
+  const cacheKey = `scores:game:${gameId}:${limit}`;
+  const cached = readScoresCache(cacheKey);
+  if (cached) return cached;
   try {
     const data = await apiCall(`/api/games?action=scores&gameId=${gameId}&limit=${limit}`);
-    return data.scores || [];
+    const scores = data.scores || [];
+    writeScoresCache(cacheKey, scores);
+    return scores;
   } catch { return []; }
 }
 // ── Get logged-in user's own scores ──

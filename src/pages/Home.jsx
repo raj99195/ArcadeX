@@ -181,7 +181,12 @@ export default function Home() {
   };
 
   useEffect(() => {
-    getScores().then(setScores).catch(() => {});
+    // SH0039 — homepage leaderboard sirf top 8 players dikhata hai
+    // (see line ~235 .slice(0, 8)). 500 recent scores fetch karna waste
+    // tha — 200 mein bhi wahi top 8 aggregate ho jate hain, aur cache
+    // hit rate zyada rehta hai. gameService.js pe sessionStorage cache
+    // (10-min TTL) bhi lag chuka — repeated homepage visits zero-cost.
+    getScores(null, 200).then(setScores).catch(() => {});
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
