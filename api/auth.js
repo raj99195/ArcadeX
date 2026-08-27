@@ -233,10 +233,16 @@ export default async function handler(req, res) {
     const probation = suspicionScore >= 2;
 
     // ── Issue JWT ──
+    // 7-day TTL. 24h was too aggressive — casual users who don't play daily
+    // hit re-auth every session. 7d matches typical Web3 session lengths
+    // (WalletConnect, Reown, etc.) and reduces sign-in friction dramatically.
+    // Security tradeoff is minimal: JWT is already in localStorage (same XSS
+    // exposure regardless of TTL), and banned-wallet check runs at
+    // sign-score so a compromised JWT can be killed instantly.
     const token = jwt.sign(
       { address: address.toLowerCase(), probation },
       process.env.JWT_SECRET,
-      { expiresIn: "24h" }
+      { expiresIn: "7d" }
     );
 
     return res.status(200).json({

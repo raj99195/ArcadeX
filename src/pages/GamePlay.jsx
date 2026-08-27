@@ -1049,9 +1049,19 @@ export default function GamePlay() {
         // request — it's free, no gas").
         _jwt = localStorage.getItem("arcadex_jwt");
         if (!_jwt || !hasValidJwtForWallet(address)) {
-          setSubmitStage("auth");
+          // Start with the "verify" sub-stage — Turnstile browser verification.
+          // signInAndGetJwt calls onPhase("sign") when the wallet prompt is
+          // about to appear, so the overlay switches from "verifying browser"
+          // to "check your wallet" only when the wallet popup actually shows.
+          // Prevents the confusing 20-second gap where the overlay said
+          // "check your wallet" but the wallet prompt hadn't appeared yet.
+          setSubmitStage("auth-verify");
           try {
-            _jwt = await signInAndGetJwt(address, walletClient, getTurnstileToken);
+            _jwt = await signInAndGetJwt(address, walletClient, getTurnstileToken, (phase) => {
+              if (phase === "verify") setSubmitStage("auth-verify");
+              else if (phase === "sign") setSubmitStage("auth");
+              else if (phase === "post") setSubmitStage("auth-post");
+            });
           } catch (authErr) {
             // User rejected the signature — dismiss overlay, show soft
             // error explaining what the signature was for so they'll try
@@ -1333,10 +1343,24 @@ export default function GamePlay() {
   const renderSubmitOverlay = () => {
     if (!submitStage) return null;
     const stages = {
+      "auth-verify": {
+        icon: "🛡️",
+        title: "Verifying your browser",
+        msg: "One-time browser check to protect the reward pool from bots. This takes a few seconds — please wait…",
+        accent: "#7B2FFF",
+        spin: true,
+      },
       auth: {
         icon: "🔐",
         title: "Sign in your wallet",
         msg: "Check your wallet for a signature request — it's free (no gas). This just proves your wallet owns the score.",
+        accent: "#7B2FFF",
+        spin: true,
+      },
+      "auth-post": {
+        icon: "🔐",
+        title: "Signing you in",
+        msg: "Almost done — completing sign-in…",
         accent: "#7B2FFF",
         spin: true,
       },
