@@ -112,7 +112,11 @@ async function fetchTaskonParticipants() {
         "X-Taskon-Client-Id":      clientId,
         "X-Taskon-Client-Secret":  clientSecret,
       },
-      body: JSON.stringify({ scene: "CampaignDataParticipant", ref_id: questId, offset, limit }),
+      // ref_id MUST be a Number, not a String. TaskOn API returns 200 OK
+      // with empty results if sent as a string — silent failure that makes
+      // check-taskon report "not completed" for every wallet. Env vars are
+      // always strings so explicit Number() cast is required.
+      body: JSON.stringify({ scene: "CampaignDataParticipant", ref_id: Number(questId), offset, limit }),
     });
     if (!r.ok) throw new Error(`TaskOn API ${r.status}`);
     const data = await r.json();
