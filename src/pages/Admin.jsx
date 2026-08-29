@@ -3,6 +3,7 @@ import { useAccount, usePublicClient } from "wagmi";
 import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
 import { wagmiAdapter } from "../Providers";
 import { useChain } from "../context/ChainContext";
+import { CHAIN_LIST } from "../config/chains";
 import { getAllGames, approveGameInFirebase, rejectGameInFirebase } from "../lib/gameService";
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import SDKTestModal from "../components/SDKTestModal";
@@ -119,6 +120,29 @@ export default function Admin() {
   const [timeRange, setTimeRange] = useState("7d");
   const [playsChartData, setPlaysChartData] = useState([]);
 
+  // ── Flags & Bans state ──────────────────────────────────────────────
+  // Two Firestore-backed lists managed from one section.
+  //   • flagged: soft-ban tracking (`flagged` collection) — auto-banned
+  //     when ≥3 flags in 24h. Cleared per-wallet via `clear-flags` or in
+  //     bulk via `clear-all-flags`.
+  //   • banned:  admin-blacklist (`bannedWallets` collection) — hard
+  //     block at auth + sign-score. Manual add/remove only.
+  const [flaggedPlayers, setFlaggedPlayers] = useState([]);
+  const [bannedPlayers,  setBannedPlayers]  = useState([]);
+  const [flagsLoading,   setFlagsLoading]   = useState(false);
+  const [clearingFlags,  setClearingFlags]  = useState(null); // wallet | "all" | null
+  const [banningWallet,  setBanningWallet]  = useState(null);
+
+  // ── TaskOn per-chain config state ───────────────────────────────────
+  // Firestore doc `taskonConfig/{chain}` per chain. Each row's local draft
+  // is edited before Save — prevents accidental writes on every keystroke.
+  const [taskonConfigs,      setTaskonConfigs]      = useState({});   // chain → cfg
+  const [taskonEnvFallback,  setTaskonEnvFallback]  = useState(null);
+  const [taskonLoading,      setTaskonLoading]      = useState(false);
+  const [taskonSaving,       setTaskonSaving]       = useState(null); // chain | null
+  const [taskonDrafts,       setTaskonDrafts]       = useState({});   // chain → { enabled, questId, campaignUrl }
+  const [taskonSaveMsg,      setTaskonSaveMsg]      = useState({});   // chain → success/error string
+
   const isAdmin = address?.toLowerCase() === ADMIN_ADDRESS?.toLowerCase();
 
   const fetchGames = async () => {
@@ -217,6 +241,174 @@ export default function Admin() {
   useEffect(() => { if (isAdmin && activeTab === "analytics") fetchAnalytics(); }, [isAdmin, activeTab]);
   useEffect(() => { if (isAdmin && activeTab === "support") fetchTickets(); }, [isAdmin, activeTab]);
   useEffect(() => { if (scores.length) generateChartData(scores, timeRange); }, [timeRange]);
+
+  // ── Fetch: Flags + Banned (both loaded together for the Flags tab) ──
+  const fetchFlagsAndBans = async () => {
+    setFlagsLoading(true);
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      if (!jwt) { setFlaggedPlayers([]); setBannedPlayers([]); return; }
+
+      // Flagged: uses existing flagged-list endpoint (POST, JWT-auth)
+      const flagRes = await fetch("/api/games?action=flagged-list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+      });
+      const flagData = await flagRes.json().catch(() => ({}));
+      setFlaggedPlayers(flagRes.ok ? (flagData.players || []) : []);
+
+      // Banned: existing admin-list-banned endpoint (GET, JWT-auth)
+      const banRes = await fetch("/api/games?action=admin-list-banned", {
+        headers: { Authorization: `Bearer ${jwt}` },
+      });
+      const banData = await banRes.json().catch(() => ({}));
+      setBannedPlayers(banRes.ok ? (banData.banned || []) : []);
+    } catch (e) { console.error("[flags] fetch failed:", e); }
+    finally { setFlagsLoading(false); }
+  };
+
+  const clearWalletFlags = async (wallet) => {
+    if (!wallet) return;
+    if (!confirm(`Clear all flags for ${wallet.slice(0, 10)}…?\n\nThis will remove them from the soft-ban list if currently over the 3-flag threshold.`)) return;
+    setClearingFlags(wallet);
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=clear-flags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ player: wallet }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) alert(d.error || "Failed to clear flags");
+      else await fetchFlagsAndBans();
+    } finally { setClearingFlags(null); }
+  };
+
+  const clearAllFlags = async () => {
+    const proceed = confirm(
+      "⚠️  CLEAR ALL FLAGS?\n\n" +
+      "This will delete every doc in the `flagged` collection and unban " +
+      "every currently soft-banned wallet at once.\n\n" +
+      "Use only when you have a false-positive storm or need a clean slate. " +
+      "Type OK on the next prompt to proceed."
+    );
+    if (!proceed) return;
+    const confirmToken = prompt('Type "CLEAR_ALL" to confirm:');
+    if (confirmToken !== "CLEAR_ALL") { alert("Cancelled — token did not match."); return; }
+    setClearingFlags("all");
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=clear-all-flags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ confirm: "CLEAR_ALL" }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) alert(d.error || "Failed");
+      else { alert(`Cleared ${d.cleared} flag record(s).`); await fetchFlagsAndBans(); }
+    } finally { setClearingFlags(null); }
+  };
+
+  const banWallet = async (wallet, reason) => {
+    if (!wallet) return;
+    const r0 = reason ?? prompt(`Ban wallet ${wallet.slice(0, 10)}…?\n\nOptional reason:`);
+    if (r0 === null) return; // cancelled
+    setBanningWallet(wallet);
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-ban-wallet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ wallet, reason: r0 || "" }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) alert(d.error || "Failed to ban");
+      else await fetchFlagsAndBans();
+    } finally { setBanningWallet(null); }
+  };
+
+  const unbanWallet = async (wallet) => {
+    if (!wallet) return;
+    if (!confirm(`Unban ${wallet.slice(0, 10)}…?`)) return;
+    setBanningWallet(wallet);
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-unban-wallet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ wallet }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) alert(d.error || "Failed to unban");
+      else await fetchFlagsAndBans();
+    } finally { setBanningWallet(null); }
+  };
+
+  useEffect(() => {
+    if (isAdmin && activeTab === "flags") fetchFlagsAndBans();
+  }, [isAdmin, activeTab]);
+
+  // ── Fetch: TaskOn per-chain config ──────────────────────────────────
+  const fetchTaskonConfigs = async () => {
+    setTaskonLoading(true);
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      if (!jwt) return;
+      const r = await fetch("/api/games?action=admin-taskon-config", {
+        headers: { Authorization: `Bearer ${jwt}` },
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { console.warn("[taskon] fetch failed:", d.error); return; }
+      setTaskonConfigs(d.configs || {});
+      setTaskonEnvFallback(d.envFallback || null);
+      // Seed drafts from current configs so the form is pre-filled and
+      // Save is only enabled when the user actually changes something.
+      const drafts = {};
+      for (const chain of CHAIN_LIST) {
+        const cfg = (d.configs || {})[chain.key];
+        drafts[chain.key] = {
+          enabled: cfg?.enabled ?? false,
+          questId: cfg?.questId ?? "",
+          campaignUrl: cfg?.campaignUrl ?? "",
+        };
+      }
+      setTaskonDrafts(drafts);
+    } catch (e) { console.error(e); }
+    finally { setTaskonLoading(false); }
+  };
+
+  const saveTaskonConfig = async (chainKey) => {
+    const draft = taskonDrafts[chainKey];
+    if (!draft) return;
+    setTaskonSaving(chainKey);
+    setTaskonSaveMsg(m => ({ ...m, [chainKey]: "" }));
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-taskon-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({
+          chain: chainKey,
+          enabled: draft.enabled,
+          questId: draft.questId,
+          campaignUrl: draft.campaignUrl,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setTaskonSaveMsg(m => ({ ...m, [chainKey]: "❌ " + (d.error || "save failed") }));
+      } else {
+        setTaskonSaveMsg(m => ({ ...m, [chainKey]: "✅ Saved" }));
+        await fetchTaskonConfigs();
+        setTimeout(() => setTaskonSaveMsg(m => ({ ...m, [chainKey]: "" })), 3000);
+      }
+    } finally { setTaskonSaving(null); }
+  };
+
+  useEffect(() => {
+    if (isAdmin && activeTab === "taskon") fetchTaskonConfigs();
+  }, [isAdmin, activeTab]);
+
 
   const approveGame = async (game) => {
     setLoading(true);
@@ -451,19 +643,209 @@ export default function Admin() {
           ))}
         </div>
 
-        {/* ── TABS ── */}
-        <div style={{ display: "flex", gap: 0, marginBottom: 20, borderBottom: `1px solid ${P.b}`, overflowX: "auto" }}>
+        {/* ── TABS: grouped into Content / People / System ────────── */}
+        <div style={{ marginBottom: 20, borderBottom: `1px solid ${P.b}`, paddingBottom: 6 }}>
           {[
-            { id: "pending", label: `Pending (${pendingGames.length})`, color: "#FFB800" },
-            { id: "approved", label: `Approved (${approvedGames.length})`, color: "#00FF88" },
-            { id: "rejected", label: `Rejected (${rejectedGames.length})`, color: "#ff4444" },
-            { id: "creators", label: `👤 Creators (${creators.length})`, color: "#a67fff" },
-            { id: "support", label: `🎫 Support`, color: "#ff8800" },
-            { id: "analytics", label: "📊 Analytics", color: "#00d4ff" },
-          ].map(t => (
-            <button key={t.id} className="adm-tab" onClick={() => setActiveTab(t.id)} style={{ padding: "9px 20px", background: "transparent", border: "none", borderBottom: activeTab === t.id ? `2px solid ${t.color}` : "2px solid transparent", color: activeTab === t.id ? t.color : "#3a2a5a", fontSize: 11, cursor: "pointer", marginBottom: "-1px", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", transition: "color 0.18s", flexShrink: 0 }}>{t.label}</button>
+            { group: "Content", color: "#00d4ff", tabs: [
+              { id: "pending",  label: `Games · Pending (${pendingGames.length})`,   color: "#FFB800" },
+              { id: "approved", label: `Games · Live (${approvedGames.length})`,     color: "#00FF88" },
+              { id: "rejected", label: `Games · Rejected (${rejectedGames.length})`, color: "#ff4444" },
+              { id: "support",  label: `🎫 Support`, color: "#ff8800" },
+            ]},
+            { group: "People", color: "#a67fff", tabs: [
+              { id: "creators", label: `👤 Creators (${creators.length})`, color: "#a67fff" },
+            ]},
+            { group: "System", color: "#ff4488", tabs: [
+              { id: "flags",     label: `🚩 Flags & Bans`,  color: "#ff4488" },
+              { id: "taskon",    label: `🎯 TaskOn Config`, color: "#00d4ff" },
+              { id: "analytics", label: `📊 Analytics`,     color: "#00d4ff" },
+            ]},
+          ].map(g => (
+            <div key={g.group} style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
+              <div style={{ minWidth: 68, fontSize: 9, letterSpacing: "1.5px", textTransform: "uppercase", color: g.color, fontFamily: P.raj, fontWeight: 700, opacity: 0.85 }}>{g.group}</div>
+              {g.tabs.map(t => (
+                <button key={t.id} className="adm-tab" onClick={() => setActiveTab(t.id)} style={{ padding: "7px 14px", background: activeTab === t.id ? `${t.color}18` : "transparent", border: `1px solid ${activeTab === t.id ? t.color : "transparent"}`, borderRadius: 6, color: activeTab === t.id ? t.color : "#5a3f8a", fontSize: 10.5, cursor: "pointer", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.4px", textTransform: "uppercase", transition: "all 0.18s", flexShrink: 0 }}>{t.label}</button>
+              ))}
+            </div>
           ))}
         </div>
+
+        {/* ── FLAGS & BANS TAB ── */}
+        {activeTab === "flags" && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <div>
+                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 16, color: "#fff", marginBottom: 2 }}>Flagged Wallets</div>
+                <div style={{ fontSize: 11, color: "#7755aa", fontFamily: P.raj }}>Auto-flagged by anti-cheat gates. Soft-banned when ≥3 flags in 24h.</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={fetchFlagsAndBans} disabled={flagsLoading} style={{ padding: "7px 14px", background: P.p3, border: `1px solid ${P.b2}`, borderRadius: 6, color: "#a67fff", fontSize: 10.5, cursor: flagsLoading ? "wait" : "pointer", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.4px", textTransform: "uppercase" }}>↻ Refresh</button>
+                <button onClick={clearAllFlags} disabled={clearingFlags === "all"} style={{ padding: "7px 14px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.28)", borderRadius: 6, color: "#ff4444", fontSize: 10.5, cursor: clearingFlags === "all" ? "wait" : "pointer", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.4px", textTransform: "uppercase" }}>
+                  {clearingFlags === "all" ? "Clearing..." : "🧹 Clear All Flags"}
+                </button>
+              </div>
+            </div>
+
+            {flagsLoading ? (
+              <div style={{ padding: "40px 0", textAlign: "center", color: "#5533aa", fontFamily: P.raj }}>Loading...</div>
+            ) : flaggedPlayers.length === 0 ? (
+              <div style={{ padding: "40px 0", textAlign: "center", color: "#5533aa", fontFamily: P.raj, background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10 }}>
+                No flagged wallets. Anti-cheat gates haven't triggered recently.
+              </div>
+            ) : (
+              <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, overflow: "hidden", marginBottom: 32 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.6fr 0.5fr 0.5fr 1fr 1fr 1.4fr", padding: "10px 14px", background: P.p3, borderBottom: `1px solid ${P.b}`, fontSize: 9, color: "#7755aa", textTransform: "uppercase", letterSpacing: "1px", fontFamily: P.raj, fontWeight: 700 }}>
+                  <div>Wallet</div>
+                  <div>Total</div>
+                  <div>Recent 24h</div>
+                  <div>Status</div>
+                  <div>Last Flag</div>
+                  <div style={{ textAlign: "right" }}>Actions</div>
+                </div>
+                {flaggedPlayers.map(p => (
+                  <div key={p.player} style={{ display: "grid", gridTemplateColumns: "1.6fr 0.5fr 0.5fr 1fr 1fr 1.4fr", padding: "11px 14px", borderBottom: `1px solid ${P.b}`, fontSize: 11, color: "#c4a0ff", fontFamily: "monospace", alignItems: "center" }}>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.player}</div>
+                    <div>{p.total}</div>
+                    <div style={{ color: p.recent >= 3 ? "#ff4444" : p.recent > 0 ? "#FFB800" : "#5533aa" }}>{p.recent}</div>
+                    <div style={{ fontFamily: P.raj, fontSize: 10, fontWeight: 700, color: p.banned ? "#ff4444" : "#00FF88" }}>{p.banned ? "🚫 SOFT-BAN" : "OK"}</div>
+                    <div style={{ fontFamily: P.raj, fontSize: 10, color: "#7755aa" }}>{p.lastFlaggedAt ? new Date(p.lastFlaggedAt).toLocaleString() : "-"}</div>
+                    <div style={{ display: "flex", gap: 5, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                      <button onClick={() => clearWalletFlags(p.player)} disabled={clearingFlags === p.player} style={{ padding: "5px 10px", background: "rgba(0,255,136,0.08)", border: "1px solid rgba(0,255,136,0.25)", borderRadius: 5, color: "#00FF88", fontSize: 9.5, cursor: clearingFlags === p.player ? "wait" : "pointer", fontFamily: P.raj, fontWeight: 700 }}>
+                        {clearingFlags === p.player ? "..." : "Clear"}
+                      </button>
+                      <button onClick={() => banWallet(p.player)} disabled={banningWallet === p.player} style={{ padding: "5px 10px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.25)", borderRadius: 5, color: "#ff4444", fontSize: 9.5, cursor: banningWallet === p.player ? "wait" : "pointer", fontFamily: P.raj, fontWeight: 700 }}>
+                        {banningWallet === p.player ? "..." : "Ban"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 16, color: "#fff", marginBottom: 2 }}>Banned Wallets</div>
+              <div style={{ fontSize: 11, color: "#7755aa", fontFamily: P.raj, marginBottom: 12 }}>Hard-blacklisted — refused at auth + sign-score. Manual only.</div>
+
+              {bannedPlayers.length === 0 ? (
+                <div style={{ padding: "24px 0", textAlign: "center", color: "#5533aa", fontFamily: P.raj, background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10 }}>
+                  No banned wallets.
+                </div>
+              ) : (
+                <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, overflow: "hidden" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1.5fr 1fr 1fr 0.6fr", padding: "10px 14px", background: P.p3, borderBottom: `1px solid ${P.b}`, fontSize: 9, color: "#7755aa", textTransform: "uppercase", letterSpacing: "1px", fontFamily: P.raj, fontWeight: 700 }}>
+                    <div>Wallet</div><div>Reason</div><div>Banned By</div><div>When</div><div style={{ textAlign: "right" }}>Actions</div>
+                  </div>
+                  {bannedPlayers.map(b => (
+                    <div key={b.wallet} style={{ display: "grid", gridTemplateColumns: "1.6fr 1.5fr 1fr 1fr 0.6fr", padding: "11px 14px", borderBottom: `1px solid ${P.b}`, fontSize: 11, color: "#c4a0ff", fontFamily: "monospace", alignItems: "center" }}>
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.wallet}</div>
+                      <div style={{ fontFamily: P.raj, fontSize: 10.5, color: "#7755aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.reason || "—"}</div>
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.bannedBy ? b.bannedBy.slice(0, 10) + "…" : "—"}</div>
+                      <div style={{ fontFamily: P.raj, fontSize: 10, color: "#7755aa" }}>{b.bannedAt ? new Date(b.bannedAt).toLocaleDateString() : "—"}</div>
+                      <div style={{ textAlign: "right" }}>
+                        <button onClick={() => unbanWallet(b.wallet)} disabled={banningWallet === b.wallet} style={{ padding: "5px 10px", background: "rgba(0,255,136,0.08)", border: "1px solid rgba(0,255,136,0.25)", borderRadius: 5, color: "#00FF88", fontSize: 9.5, cursor: banningWallet === b.wallet ? "wait" : "pointer", fontFamily: P.raj, fontWeight: 700 }}>
+                          {banningWallet === b.wallet ? "..." : "Unban"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── TASKON CONFIG TAB ── */}
+        {activeTab === "taskon" && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <div>
+                <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 16, color: "#fff", marginBottom: 2 }}>TaskOn Campaign Config</div>
+                <div style={{ fontSize: 11, color: "#7755aa", fontFamily: P.raj }}>Per-chain quest ID + campaign URL. Enable = enforce; disable = fail-open.</div>
+              </div>
+              <button onClick={fetchTaskonConfigs} disabled={taskonLoading} style={{ padding: "7px 14px", background: P.p3, border: `1px solid ${P.b2}`, borderRadius: 6, color: "#a67fff", fontSize: 10.5, cursor: taskonLoading ? "wait" : "pointer", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.4px", textTransform: "uppercase" }}>↻ Refresh</button>
+            </div>
+
+            {taskonEnvFallback && !taskonEnvFallback.clientIdSet && (
+              <div style={{ padding: "10px 14px", background: "rgba(255,183,0,0.06)", border: "1px solid rgba(255,183,0,0.22)", borderRadius: 8, color: "#FFB800", fontSize: 11, fontFamily: P.raj, marginBottom: 14 }}>
+                ⚠️  TASKON_CLIENT_ID env var not set. TaskOn gate is disabled globally regardless of the per-chain switches below.
+              </div>
+            )}
+
+            {taskonLoading ? (
+              <div style={{ padding: "40px 0", textAlign: "center", color: "#5533aa", fontFamily: P.raj }}>Loading configs...</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {CHAIN_LIST.map(chain => {
+                  const draft = taskonDrafts[chain.key] || { enabled: false, questId: "", campaignUrl: "" };
+                  const stored = taskonConfigs[chain.key];
+                  const dirty = stored
+                    ? (stored.enabled !== draft.enabled || stored.questId !== draft.questId || stored.campaignUrl !== draft.campaignUrl)
+                    : (draft.enabled || draft.questId || draft.campaignUrl);
+                  const msg = taskonSaveMsg[chain.key];
+                  return (
+                    <div key={chain.key} style={{ background: P.s1, border: `1px solid ${draft.enabled ? "rgba(0,255,136,0.25)" : P.b}`, borderRadius: 10, padding: "16px 18px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ fontFamily: P.raj, fontWeight: 700, fontSize: 15, color: "#fff", textTransform: "uppercase", letterSpacing: "0.3px" }}>{chain.name}</div>
+                          <div style={{ fontSize: 9, color: "#7755aa", fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase" }}>· {chain.key}</div>
+                          {stored?.updatedAt && (
+                            <div style={{ fontSize: 9.5, color: "#5533aa", fontFamily: P.raj, marginLeft: 6 }}>
+                              updated {new Date(stored.updatedAt).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
+                          <span style={{ fontSize: 10, color: draft.enabled ? "#00FF88" : "#5533aa", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase" }}>{draft.enabled ? "Enforced" : "Disabled"}</span>
+                          <input
+                            type="checkbox"
+                            checked={draft.enabled}
+                            onChange={e => setTaskonDrafts(d => ({ ...d, [chain.key]: { ...draft, enabled: e.target.checked } }))}
+                            style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#00FF88" }}
+                          />
+                        </label>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10, marginBottom: 12 }}>
+                        <div>
+                          <div style={{ fontSize: 9, color: "#7755aa", textTransform: "uppercase", letterSpacing: "1.2px", fontFamily: P.raj, fontWeight: 700, marginBottom: 5 }}>Quest ID</div>
+                          <input
+                            type="text"
+                            value={draft.questId}
+                            placeholder="e.g. 904321254"
+                            onChange={e => setTaskonDrafts(d => ({ ...d, [chain.key]: { ...draft, questId: e.target.value } }))}
+                            style={{ width: "100%", padding: "8px 10px", background: P.bg, border: `1px solid ${P.b}`, borderRadius: 6, color: "#c4a0ff", fontFamily: "monospace", fontSize: 12, outline: "none" }}
+                          />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 9, color: "#7755aa", textTransform: "uppercase", letterSpacing: "1.2px", fontFamily: P.raj, fontWeight: 700, marginBottom: 5 }}>Campaign URL</div>
+                          <input
+                            type="text"
+                            value={draft.campaignUrl}
+                            placeholder="https://taskon.xyz/quest/…"
+                            onChange={e => setTaskonDrafts(d => ({ ...d, [chain.key]: { ...draft, campaignUrl: e.target.value } }))}
+                            style={{ width: "100%", padding: "8px 10px", background: P.bg, border: `1px solid ${P.b}`, borderRadius: 6, color: "#c4a0ff", fontFamily: "monospace", fontSize: 12, outline: "none" }}
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                        <div style={{ fontSize: 10.5, color: msg?.startsWith("✅") ? "#00FF88" : msg?.startsWith("❌") ? "#ff4444" : "#5533aa", fontFamily: P.raj, fontWeight: 600 }}>
+                          {msg || (dirty ? "Unsaved changes" : stored ? "In sync" : "Not configured")}
+                        </div>
+                        <button
+                          onClick={() => saveTaskonConfig(chain.key)}
+                          disabled={!dirty || taskonSaving === chain.key}
+                          style={{ padding: "8px 18px", background: (!dirty || taskonSaving === chain.key) ? P.p3 : "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: (!dirty || taskonSaving === chain.key) ? `1px solid ${P.b2}` : "none", borderRadius: 6, color: (!dirty || taskonSaving === chain.key) ? "#5a3f8a" : "#fff", fontSize: 11, cursor: (!dirty || taskonSaving === chain.key) ? "not-allowed" : "pointer", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase" }}>
+                          {taskonSaving === chain.key ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── SUPPORT TICKETS TAB ── */}
         {activeTab === "support" && (

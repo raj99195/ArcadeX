@@ -67,36 +67,96 @@ async function isWalletBanned(dbRef, address) {
   } catch { return false; }
 }
 
-// ── TaskOn campaign completion check ────────────────────────────────
+// ── TaskOn campaign completion check (PER-CHAIN) ─────────────────────
 // One-time community task gate: user must complete a TaskOn quest
 // (Twitter follow, Discord join, etc.) before they can claim rewards.
 // This raises the per-wallet farming cost for attackers dramatically
 // (each fresh wallet needs a Twitter account + manual task completion),
 // with a clear, explicit UX for legit users.
 //
-// Env vars:
-//   TASKON_CLIENT_ID       — from TaskOn dashboard
-//   TASKON_CLIENT_SECRET   — from TaskOn dashboard (KEEP SECRET, never commit)
-//   TASKON_QUEST_ID        — the campaign quest ID (numeric string)
-//   VITE_TASKON_CAMPAIGN_URL — public URL users visit to complete the task
+// PER-CHAIN CONFIG: Firestore `taskonConfig/{chain}` doc controls
+// enable/questId/campaignUrl for each chain independently. Admin panel
+// (see admin-taskon-config-set) writes this. Env vars are fallback
+// defaults only — Firestore takes priority when a doc exists.
 //
-// Caching strategy:
-//   • Per-wallet cache: once confirmed, permanent (completion is monotonic —
-//     TaskOn doesn't remove participants who completed).
-//   • Full participant list: 10-min TTL. On cache miss, paginates through
-//     all pages (100 per page, safety-capped at 50 pages / 5K participants).
-//   • Per-instance memory (warm serverless pool). Cold starts refetch.
+// Firestore doc shape:
+//   taskonConfig/{chain} = {
+//     chain, enabled, questId, campaignUrl,
+//     updatedBy, updatedAt
+//   }
+// If enabled=false or doc missing → gate is OPEN for that chain
+// (fail-open: rewards still work, task not required).
 //
-// If TASKON_CLIENT_ID is unset, the gate is DISABLED and every wallet
-// passes — lets you deploy the code before flipping the switch.
-const _taskonUserCache = new Map();          // key: wallet, val: { at }
-let   _taskonListCache = { at: 0, wallets: new Set() };
-const TASKON_LIST_TTL  = 10 * 60 * 1000;
+// Env vars (fallback / bootstrap):
+//   TASKON_CLIENT_ID       — TaskOn API credentials (SHARED across chains)
+//   TASKON_CLIENT_SECRET   — TaskOn API credentials (SHARED across chains)
+//   TASKON_QUEST_ID        — fallback questId if Firestore config missing
+//   VITE_TASKON_CAMPAIGN_URL — fallback campaign URL
+//
+// Caching strategy (chain-scoped):
+//   • Per-chain config cache — 60s TTL. Admin edits reflect within a
+//     minute across all warm instances.
+//   • Per-chain participant list — 10-min TTL.
+//   • Per-user cache — Map key `${chain}:${wallet}`; once confirmed,
+//     never re-checked for that chain.
+//
+// If TASKON_CLIENT_ID/SECRET are unset → API can't work at all, gate
+// stays disabled everywhere (log-only warning, no user impact).
+const _taskonConfigCache = new Map();  // key: chain, val: { at, cfg | null }
+const _taskonListCache   = new Map();  // key: chain, val: { at, wallets: Set }
+const _taskonUserCache   = new Map();  // key: `${chain}:${wallet}`, val: { at }
+const TASKON_CFG_TTL     =  60 * 1000; // 1 min — admin edits propagate fast
+const TASKON_LIST_TTL    = 10 * 60 * 1000;
 
-async function fetchTaskonParticipants() {
+async function getTaskonConfig(dbRef, chain) {
+  if (!chain) return null;
+  const now = Date.now();
+  const cached = _taskonConfigCache.get(chain);
+  if (cached && now - cached.at < TASKON_CFG_TTL) return cached.cfg;
+
+  let cfg = null;
+  try {
+    const snap = await dbRef.collection("taskonConfig").doc(chain).get();
+    if (snap.exists) cfg = snap.data();
+  } catch (e) {
+    console.warn(`[taskon] config read failed for ${chain}:`, e.message);
+  }
+  // Fallback to env vars if no doc but env has a questId (bootstrap case
+  // for the first chain before admin has written the Firestore doc).
+  if (!cfg && process.env.TASKON_QUEST_ID) {
+    cfg = {
+      chain,
+      enabled: true,
+      questId: process.env.TASKON_QUEST_ID,
+      campaignUrl: process.env.VITE_TASKON_CAMPAIGN_URL || "https://taskon.xyz/",
+      source: "env-fallback",
+    };
+  }
+  _taskonConfigCache.set(chain, { at: now, cfg });
+  return cfg;
+}
+
+// Cache bust helper — admin-taskon-config-set calls this after writing
+// so the next check-taskon reflects the new value immediately (no wait
+// for 60s TTL).
+function bustTaskonCache(chain) {
+  if (chain) {
+    _taskonConfigCache.delete(chain);
+    _taskonListCache.delete(chain);
+    // Also drop per-user cache for this chain
+    for (const key of _taskonUserCache.keys()) {
+      if (key.startsWith(`${chain}:`)) _taskonUserCache.delete(key);
+    }
+  } else {
+    _taskonConfigCache.clear();
+    _taskonListCache.clear();
+    _taskonUserCache.clear();
+  }
+}
+
+async function fetchTaskonParticipants(questId) {
   const clientId     = process.env.TASKON_CLIENT_ID;
   const clientSecret = process.env.TASKON_CLIENT_SECRET;
-  const questId      = process.env.TASKON_QUEST_ID;
   if (!clientId || !clientSecret || !questId) return null;
 
   const wallets = new Set();
@@ -141,33 +201,46 @@ async function fetchTaskonParticipants() {
   return wallets;
 }
 
-async function isWalletInTaskon(address) {
-  if (!address) return false;
-  const key = address.toLowerCase();
+// Returns:
+//   { enabled: false, completed: true }  → gate is off for this chain (fail-open)
+//   { enabled: true, completed: bool, cfg } → checked against real config
+async function checkTaskonForChain(dbRef, address, chain) {
+  if (!address || !chain) return { enabled: false, completed: true };
+  const cfg = await getTaskonConfig(dbRef, chain);
+  if (!cfg || !cfg.enabled || !cfg.questId) {
+    return { enabled: false, completed: true, cfg };
+  }
 
-  // Once-confirmed wallets skip the whole fetch — completion is monotonic
-  if (_taskonUserCache.has(key)) return true;
+  const userKey = `${chain}:${address.toLowerCase()}`;
+  // Once-confirmed users skip the whole fetch — completion is monotonic
+  if (_taskonUserCache.has(userKey)) {
+    return { enabled: true, completed: true, cfg };
+  }
 
   const now = Date.now();
-  if (now - _taskonListCache.at > TASKON_LIST_TTL) {
+  const chainList = _taskonListCache.get(chain) || { at: 0, wallets: new Set() };
+  if (now - chainList.at > TASKON_LIST_TTL) {
     // Refresh the participant list. If refresh throws, KEEP the old
     // cache (fail-open on transient TaskOn errors) and let the caller
     // check membership against the last known set.
     try {
-      const fresh = await fetchTaskonParticipants();
-      if (fresh !== null) _taskonListCache = { at: now, wallets: fresh };
+      const fresh = await fetchTaskonParticipants(cfg.questId);
+      if (fresh !== null) {
+        _taskonListCache.set(chain, { at: now, wallets: fresh });
+      }
     } catch (e) {
-      console.warn("[taskon] refresh failed, using stale cache:", e.message);
+      console.warn(`[taskon] refresh failed for ${chain}, using stale cache:`, e.message);
     }
   }
 
-  const found = _taskonListCache.wallets.has(key);
+  const list = _taskonListCache.get(chain) || chainList;
+  const found = list.wallets.has(address.toLowerCase());
   if (found) {
-    _taskonUserCache.set(key, { at: now });
-    // Bound the per-user cache (LRU-ish: clear when it grows too large)
+    _taskonUserCache.set(userKey, { at: now });
+    // Bound the per-user cache — clear all if grows too large
     if (_taskonUserCache.size > 50_000) _taskonUserCache.clear();
   }
-  return found;
+  return { enabled: true, completed: found, cfg };
 }
 
 // SH0030 — check-gas-claim in-memory cache (5-min TTL per address). MST
@@ -763,25 +836,38 @@ export default async function handler(req, res) {
   // hasn't completed the TaskOn campaign yet, the frontend shows a panel
   // with an "Open Task" button — user completes off-site and returns.
   //
-  // If TASKON_CLIENT_ID is unset, the endpoint returns { completed: true,
-  // taskonEnabled: false } so the frontend proceeds normally (feature
-  // disabled). Same fail-open behaviour on TaskOn API errors — we don't
-  // block legit users on our infrastructure issues.
+  // Chain-scoped: pass ?chain=mst / ?chain=botchain. Each chain has its
+  // own Firestore taskonConfig doc (admin-managed) with its own quest ID.
+  // If a chain's config is missing or `enabled: false`, the endpoint
+  // returns `{ completed: true, taskonEnabled: false }` and the frontend
+  // proceeds normally (feature disabled for that chain).
   if (req.method === "GET" && action === "check-taskon") {
     const tUser = verifyToken(req);
     if (!tUser) return res.status(401).json({ error: "Unauthorized" });
-    const campaignUrl = process.env.VITE_TASKON_CAMPAIGN_URL || "https://taskon.xyz/";
 
+    const chain = req.query.chain;
+    if (!chain) {
+      // Backward-compat: no chain param → treat as disabled to avoid
+      // accidentally blocking clients that haven't updated yet.
+      return res.status(200).json({
+        completed: true, taskonEnabled: false,
+        note: "chain query param required to enforce TaskOn",
+      });
+    }
+
+    // TaskOn API creds are shared across chains — if unset globally,
+    // nothing can be enforced anywhere.
     if (!process.env.TASKON_CLIENT_ID) {
       return res.status(200).json({ completed: true, taskonEnabled: false });
     }
     try {
-      const completed = await isWalletInTaskon(tUser.address);
+      const { enabled, completed, cfg } = await checkTaskonForChain(db, tUser.address, chain);
       return res.status(200).json({
         completed,
-        taskonEnabled: true,
-        campaignUrl,
-        questId: process.env.TASKON_QUEST_ID || null,
+        taskonEnabled: enabled,
+        campaignUrl: cfg?.campaignUrl || process.env.VITE_TASKON_CAMPAIGN_URL || "https://taskon.xyz/",
+        questId: cfg?.questId || null,
+        chain,
       });
     } catch (err) {
       console.warn("[check-taskon]", err.message);
@@ -884,20 +970,21 @@ export default async function handler(req, res) {
     if (!rateLimit(`sign:${signUser.address.toLowerCase()}:${gameId}`, signRateMax))
       return res.status(429).json({ error: "Too many sign requests" });
 
-    // ── TaskOn campaign gate ──
+    // ── TaskOn campaign gate (PER-CHAIN) ──
     // Defence-in-depth: even if the frontend somehow skips its own
     // check-taskon step, the backend refuses to sign a score for a wallet
-    // that hasn't completed the campaign. Fail-open on API errors so a
-    // TaskOn outage doesn't block payouts. Once TASKON_CLIENT_ID is unset,
-    // this whole block is a no-op.
+    // that hasn't completed the campaign FOR THIS CHAIN. Each chain has
+    // its own Firestore taskonConfig (admin-managed). Fail-open on API
+    // errors so a TaskOn outage doesn't block payouts.
     if (process.env.TASKON_CLIENT_ID) {
       try {
-        const taskonOk = await isWalletInTaskon(signUser.address);
-        if (!taskonOk) {
+        const { enabled, completed, cfg } = await checkTaskonForChain(db, signUser.address, chain);
+        if (enabled && !completed) {
           return res.status(403).json({
             error: "Complete the community task on TaskOn to claim rewards.",
             requiresTaskOn: true,
-            campaignUrl: process.env.VITE_TASKON_CAMPAIGN_URL || "https://taskon.xyz/",
+            campaignUrl: cfg?.campaignUrl || process.env.VITE_TASKON_CAMPAIGN_URL || "https://taskon.xyz/",
+            chain,
           });
         }
       } catch (err) {
@@ -1575,8 +1662,13 @@ export default async function handler(req, res) {
         totalPlays += 1;
         totalPayout += earned;
 
-        // Player aggregation
-        const w = s.player;
+        // Player aggregation — LOWERCASE the wallet to prevent same player
+        // being counted twice when their address is stored in mixed case
+        // across different score docs (checksum vs lowercase from wagmi).
+        // Without this, activePlayers count and per-player totals would
+        // split across duplicate entries.
+        const w = (s.player || "").toLowerCase();
+        if (!w) continue; // skip malformed scores with no player
         if (!playerAgg[w]) {
           playerAgg[w] = { wallet: w, plays: 0, earned: 0, lastPlayed: null, games: new Set() };
         }
@@ -1588,7 +1680,7 @@ export default async function handler(req, res) {
           playerAgg[w].lastPlayed = scoreDate;
         }
 
-        // Daily aggregation
+        // Daily aggregation — same lowercased wallet for unique-player counting
         const dayKey = scoreDate.toISOString().slice(0, 10);
         if (!dailyAgg[dayKey]) dailyAgg[dayKey] = { plays: 0, earned: 0, playersSet: new Set() };
         dailyAgg[dayKey].plays += 1;
@@ -1851,6 +1943,106 @@ export default async function handler(req, res) {
         cleared += Math.min(450, docs.length - i);
       }
       return res.status(200).json({ success: true, cleared });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST clear-all-flags (admin-only, nuclear option) ─────────────────────
+  // Deletes EVERY doc in the `flagged` collection. Use with extreme
+  // caution — this unbans every currently soft-banned wallet at once.
+  // Intended for two scenarios:
+  //   1. False-positive storms (a legit event triggered GATE 2 for many
+  //      users at once — e.g. a very short game type that scores fast).
+  //   2. Testing / clean slate before a feature launch.
+  // Requires explicit `confirm: "CLEAR_ALL"` in the body so an
+  // accidental fetch can't wipe things. Paginated internally so a
+  // 50K-doc collection still completes.
+  if (req.method === "POST" && action === "clear-all-flags") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+    const { confirm } = req.body || {};
+    if (confirm !== "CLEAR_ALL")
+      return res.status(400).json({ error: "Confirmation required: send { confirm: 'CLEAR_ALL' }" });
+    try {
+      let totalCleared = 0;
+      const BATCH_SIZE = 450;   // Firestore commit cap = 500
+      const MAX_ROUNDS = 200;   // safety: 200 * 450 = 90K docs max
+      for (let round = 0; round < MAX_ROUNDS; round++) {
+        const snap = await db.collection("flagged").limit(BATCH_SIZE).get();
+        if (snap.empty) break;
+        const batch = db.batch();
+        snap.docs.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+        totalCleared += snap.docs.length;
+        if (snap.docs.length < BATCH_SIZE) break; // last page
+      }
+      return res.status(200).json({ success: true, cleared: totalCleared });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── GET admin-taskon-config (admin-only, per-chain list) ──────────────────
+  // Returns every chain's current TaskOn config from Firestore, PLUS the
+  // env fallback (marked as source: "env-fallback"). Frontend renders one
+  // row per chain in CHAIN_LIST — populates fields from the returned map
+  // by chain key.
+  if (req.method === "GET" && action === "admin-taskon-config") {
+    const aUser = verifyToken(req);
+    if (!aUser) return res.status(401).json({ error: "Unauthorized" });
+    if (!(await checkOnChainAdmin(aUser.address)))
+      return res.status(403).json({ error: "Admin only" });
+    try {
+      const snap = await db.collection("taskonConfig").get();
+      const configs = {};
+      snap.docs.forEach(d => {
+        const x = d.data();
+        configs[d.id] = {
+          chain: d.id,
+          enabled: !!x.enabled,
+          questId: x.questId || "",
+          campaignUrl: x.campaignUrl || "",
+          updatedBy: x.updatedBy || null,
+          updatedAt: x.updatedAt?.toDate?.()?.toISOString?.() || null,
+          source: "firestore",
+        };
+      });
+      // Include env fallback so the UI can show what would apply if no
+      // Firestore doc exists for a given chain
+      const envFallback = {
+        questId: process.env.TASKON_QUEST_ID || "",
+        campaignUrl: process.env.VITE_TASKON_CAMPAIGN_URL || "",
+        clientIdSet: !!process.env.TASKON_CLIENT_ID,
+      };
+      return res.status(200).json({ configs, envFallback });
+    } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+
+  // ── POST admin-taskon-config (admin-only, per-chain upsert) ───────────────
+  // Body: { chain, enabled, questId, campaignUrl }
+  // Writes/updates taskonConfig/{chain}. Immediately busts the in-memory
+  // cache for this chain so the next check-taskon reflects the change
+  // (no wait for the 60s TTL). Validates questId is numeric per TaskOn's
+  // API requirement (see fetchTaskonParticipants — ref_id must be Number).
+  if (req.method === "POST" && action === "admin-taskon-config") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+    const { chain, enabled, questId, campaignUrl } = req.body || {};
+    if (!chain || typeof chain !== "string")
+      return res.status(400).json({ error: "chain required" });
+    if (enabled && (!questId || !/^\d+$/.test(String(questId).trim())))
+      return res.status(400).json({ error: "questId must be a numeric string when enabled" });
+    if (enabled && (!campaignUrl || !/^https?:\/\//.test(campaignUrl)))
+      return res.status(400).json({ error: "campaignUrl must be a valid https URL when enabled" });
+    try {
+      await db.collection("taskonConfig").doc(chain).set({
+        chain,
+        enabled: !!enabled,
+        questId: (questId || "").toString().trim(),
+        campaignUrl: (campaignUrl || "").toString().trim(),
+        updatedBy: user.address.toLowerCase(),
+        updatedAt: new Date(),
+      }, { merge: true });
+      // Bust caches so the next check-taskon uses the new config immediately
+      bustTaskonCache(chain);
+      return res.status(200).json({ success: true, chain });
     } catch (err) { return res.status(500).json({ error: err.message }); }
   }
 
