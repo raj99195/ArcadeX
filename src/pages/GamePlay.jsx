@@ -920,16 +920,32 @@ export default function GamePlay() {
   // where it paused (STEP 3 onwards) with the SAME jwt + session.
   // cancelTaskonPolling: user hit Cancel — clears everything, no
   // submission happens.
-  const startTaskonPolling = (jwt) => {
+  //
+  // `chain` MUST be passed so backend can look up the right chain's
+  // TaskOn config. Without it, backend returns a backward-compat
+  // "disabled" response that would incorrectly terminate polling and
+  // loop the submission (see check-taskon endpoint in api/games.js).
+  const startTaskonPolling = (jwt, chain) => {
     taskonCancelledRef.current = false;
     const poll = async () => {
       if (taskonCancelledRef.current) return;
       try {
-        const r = await fetch("/api/games?action=check-taskon", {
+        const r = await fetch(`/api/games?action=check-taskon&chain=${encodeURIComponent(chain || "")}`, {
           headers: { Authorization: `Bearer ${jwt}` },
         });
         const d = await r.json().catch(() => ({}));
-        if (r.ok && d.completed) {
+        // Only end polling when the backend confirms this is a REAL
+        // completion — either the task is done for an enabled chain, or
+        // the chain has TaskOn disabled entirely. Without the `chain`
+        // param the backend returns `taskonEnabled: false, completed:
+        // true` as a safe fallback — accepting that here would create
+        // a submission loop (poll ends → resume submit → backend 403
+        // requiresTaskOn → overlay shows again). So require either
+        // taskonEnabled:false (real disable) OR taskonEnabled:true with
+        // completed:true (real completion).
+        const realDisabled  = r.ok && d.taskonEnabled === false && d.completed === true;
+        const realCompleted = r.ok && d.taskonEnabled === true  && d.completed === true;
+        if (realDisabled || realCompleted) {
           // Done! Clear overlay, resume submission with preserved state
           taskonPollTimerRef.current = null;
           setTaskonPolling(null);
@@ -1115,7 +1131,7 @@ export default function GamePlay() {
       if (!resumeState) {
         setSubmitStage("taskon");
         try {
-          const tRes = await fetch("/api/games?action=check-taskon", {
+          const tRes = await fetch(`/api/games?action=check-taskon&chain=${encodeURIComponent(chainKey)}`, {
             headers: { Authorization: `Bearer ${_jwt}` },
           });
           const tData = await tRes.json().catch(() => ({}));
@@ -1128,7 +1144,7 @@ export default function GamePlay() {
               campaignUrl: tData.campaignUrl,
               startedAt:   Date.now(),
             });
-            startTaskonPolling(_jwt);
+            startTaskonPolling(_jwt, chainKey);
             // IMPORTANT: don't clear submittingRef here — polling overlay
             // is now the source of truth for "user is mid-submission".
             // Cancel button clears both state and ref. Success path (in
@@ -1169,7 +1185,7 @@ export default function GamePlay() {
               campaignUrl: errData.campaignUrl || "https://taskon.xyz/",
               startedAt:   Date.now(),
             });
-            startTaskonPolling(_jwt);
+            startTaskonPolling(_jwt, chainKey);
             return; // submittingRef stays true; polling overlay owns lifecycle
           } else {
             setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: errData.error || "Could not verify gameplay session. Reload the page and try again." });

@@ -121,17 +121,12 @@ async function getTaskonConfig(dbRef, chain) {
   } catch (e) {
     console.warn(`[taskon] config read failed for ${chain}:`, e.message);
   }
-  // Fallback to env vars if no doc but env has a questId (bootstrap case
-  // for the first chain before admin has written the Firestore doc).
-  if (!cfg && process.env.TASKON_QUEST_ID) {
-    cfg = {
-      chain,
-      enabled: true,
-      questId: process.env.TASKON_QUEST_ID,
-      campaignUrl: process.env.VITE_TASKON_CAMPAIGN_URL || "https://taskon.xyz/",
-      source: "env-fallback",
-    };
-  }
+  // NO env-var fallback here — the per-chain design means a chain without
+  // an explicit Firestore config must be treated as DISABLED. Otherwise
+  // the env-var TASKON_QUEST_ID (which is one specific chain's quest)
+  // would incorrectly gate every other chain too, blocking users on
+  // chains where admin never enabled TaskOn. Admin enables per chain via
+  // the admin panel (writes taskonConfig/{chain}); no doc = fail-open.
   _taskonConfigCache.set(chain, { at: now, cfg });
   return cfg;
 }
