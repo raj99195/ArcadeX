@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAppKit } from "@reown/appkit/react";
-import { useAccount, useConnect, usePublicClient } from "wagmi";
+import { useAccount, useConnect, useDisconnect, usePublicClient } from "wagmi";
 import { injected } from "wagmi/connectors";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
@@ -14,6 +14,7 @@ export default function Navbar() {
   const { open } = useAppKit();
   const { isConnected, address } = useAccount();
   const { connectAsync } = useConnect();
+  const { disconnect } = useDisconnect();
   const navigate = useNavigate();
   const location = useLocation();
   const { balance } = useArcadeBalance();
@@ -37,8 +38,12 @@ export default function Navbar() {
   const [faucetStage, setFaucetStage] = useState("idle");      // idle | redirecting | claiming | success | error
   const [faucetError, setFaucetError] = useState("");
 
+  // Wallet menu (Copy address + Disconnect) — desktop dropdown, mobile modal
+  const [walletMenuOpen, setWalletMenuOpen] = useState(false);
+
   const ddRef = useRef(null);
   const menuRef = useRef(null);
+  const walletMenuRef = useRef(null); // desktop wallet button + dropdown
 
   // ── Faucet: check if already claimed on MST connect ──────────────
   // SH0035 — localStorage cache to eliminate repeat MST RPC calls.
@@ -206,6 +211,23 @@ export default function Navbar() {
     }
   };
 
+  // ── Disconnect: wagmi disconnect + clear JWT (chain preserved) ────────
+  // Chain selection deliberately preserved — next connect reuses same
+  // chain instead of forcing chain picker again.
+  const handleDisconnect = () => {
+    try {
+      localStorage.removeItem("arcadex_jwt");
+    } catch { /* private mode — silent */ }
+    try {
+      disconnect();
+    } catch (e) {
+      console.warn("Disconnect failed:", e);
+    }
+    setWalletMenuOpen(false);
+    setMenuOpen(false);
+    setEarningsOpen(false);
+  };
+
   const shortAddress = (addr) => addr ? addr.slice(0, 5) + "..." + addr.slice(-3) : "";
   const isActive = (path) => location.pathname === path;
   const avatarUrl = address
@@ -232,12 +254,21 @@ export default function Navbar() {
     const h = (e) => {
       if (ddRef.current && !ddRef.current.contains(e.target)) setDdOpen(false);
       if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
+      // Desktop wallet menu — mobile uses modal with its own backdrop
+      if (!isMobile && walletMenuRef.current && !walletMenuRef.current.contains(e.target)) {
+        setWalletMenuOpen(false);
+      }
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, []);
+  }, [isMobile]);
 
-  useEffect(() => { setMenuOpen(false); }, [location.pathname]);
+  useEffect(() => { setMenuOpen(false); setWalletMenuOpen(false); }, [location.pathname]);
+
+  // Auto-close wallet menu if wallet disconnects externally
+  useEffect(() => {
+    if (!isConnected) setWalletMenuOpen(false);
+  }, [isConnected]);
 
   // ── Earnings fetch ───────────────────────────────────────────────────
   // SH0030 — cost fix. Pehle `/api/games?action=scores` full scores collection
@@ -343,6 +374,58 @@ export default function Navbar() {
     { label: "Creators", path: "/publish" },
     { label: "Support", path: "/support" }
   ];
+
+  // ── Wallet menu items (shared by desktop dropdown + mobile modal) ─────
+  const renderWalletMenuActions = () => (
+    <>
+      <button
+        onClick={() => { copyAddress(); }}
+        style={{
+          width: "100%", padding: "12px 14px",
+          background: copied ? "rgba(0,255,136,0.12)" : "rgba(123,47,255,0.08)",
+          border: copied ? "1px solid rgba(0,255,136,0.45)" : "1px solid rgba(123,47,255,0.25)",
+          borderRadius: 10, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 10,
+          fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13,
+          color: copied ? "#00FF88" : "#c4a0ff",
+          transition: "all 0.15s",
+          justifyContent: "flex-start",
+        }}
+        onMouseEnter={e => { if (!copied) { e.currentTarget.style.background = "rgba(123,47,255,0.16)"; e.currentTarget.style.borderColor = "rgba(123,47,255,0.5)"; } }}
+        onMouseLeave={e => { if (!copied) { e.currentTarget.style.background = "rgba(123,47,255,0.08)"; e.currentTarget.style.borderColor = "rgba(123,47,255,0.25)"; } }}
+      >
+        {copied
+          ? <svg width="14" height="14" viewBox="0 0 12 12" fill="none"><path d="M2 6.5L4.5 9L10 3" stroke="#00FF88" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          : <svg width="14" height="14" viewBox="0 0 12 12" fill="none"><rect x="4" y="1" width="7" height="8" rx="1.2" stroke="currentColor" strokeWidth="1.2"/><rect x="1" y="3.5" width="7" height="8" rx="1.2" stroke="currentColor" strokeWidth="1.2" fill="rgba(123,47,255,0.08)"/></svg>
+        }
+        <span>{copied ? "Address copied!" : "Copy Address"}</span>
+      </button>
+
+      <button
+        onClick={handleDisconnect}
+        style={{
+          width: "100%", padding: "12px 14px",
+          background: "rgba(255,68,88,0.08)",
+          border: "1px solid rgba(255,68,88,0.28)",
+          borderRadius: 10, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 10,
+          fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13,
+          color: "#ff6b7f",
+          transition: "all 0.15s",
+          justifyContent: "flex-start",
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,68,88,0.16)"; e.currentTarget.style.borderColor = "rgba(255,68,88,0.55)"; }}
+        onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,68,88,0.08)"; e.currentTarget.style.borderColor = "rgba(255,68,88,0.28)"; }}
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M6 2H3.5C2.67 2 2 2.67 2 3.5V10.5C2 11.33 2.67 12 3.5 12H6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+          <path d="M9 4L12 7L9 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M12 7H5.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+        </svg>
+        <span>Disconnect Wallet</span>
+      </button>
+    </>
+  );
 
   return (
     <>
@@ -501,35 +584,76 @@ export default function Navbar() {
           </button>
         )}
 
-        {/* Wallet button */}
+        {/* Wallet button — Desktop */}
         {!isMobile && (
           isConnected ? (
-            <button
-              onClick={copyAddress}
-              title={copied ? "Copied!" : "Click to copy address"}
-              style={{
-                padding: "6px 13px",
-                background: copied ? "rgba(0,255,136,0.12)" : "rgba(123,47,255,0.1)",
-                border: copied ? "1px solid rgba(0,255,136,0.45)" : "1px solid rgba(123,47,255,0.28)",
-                borderRadius: 6, color: copied ? "#00FF88" : "#a67fff",
-                fontSize: 11, cursor: "pointer",
-                display: "flex", alignItems: "center", gap: 7,
-                fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
-                transition: "all 0.2s",
-                boxShadow: copied ? "0 0 14px rgba(0,255,136,0.2)" : "none",
-              }}
-              onMouseEnter={e => { if (!copied) { e.currentTarget.style.borderColor = "rgba(123,47,255,0.55)"; e.currentTarget.style.boxShadow = "0 0 14px rgba(123,47,255,0.25)"; } }}
-              onMouseLeave={e => { if (!copied) { e.currentTarget.style.borderColor = "rgba(123,47,255,0.28)"; e.currentTarget.style.boxShadow = "none"; } }}
-            >
-              {/* copy icon */}
-              {copied
-                ? <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6.5L4.5 9L10 3" stroke="#00FF88" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                : <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="4" y="1" width="7" height="8" rx="1.2" stroke="#a67fff" strokeWidth="1.2"/><rect x="1" y="3.5" width="7" height="8" rx="1.2" stroke="#a67fff" strokeWidth="1.2" fill="rgba(123,47,255,0.08)"/></svg>
-              }
-              <span style={{ fontFamily: "monospace", fontSize: 10, color: copied ? "#00FF88" : "#b8a8e0" }}>
-                {copied ? "Copied!" : shortAddress(address)}
-              </span>
-            </button>
+            <div ref={walletMenuRef} style={{ position: "relative" }}>
+              <button
+                onClick={() => setWalletMenuOpen(p => !p)}
+                title="Wallet options"
+                style={{
+                  padding: "6px 13px",
+                  background: walletMenuOpen ? "rgba(123,47,255,0.2)" : "rgba(123,47,255,0.1)",
+                  border: walletMenuOpen ? "1px solid rgba(123,47,255,0.55)" : "1px solid rgba(123,47,255,0.28)",
+                  borderRadius: 6, color: "#a67fff",
+                  fontSize: 11, cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 7,
+                  fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+                  transition: "all 0.2s",
+                  boxShadow: walletMenuOpen ? "0 0 14px rgba(123,47,255,0.3)" : "none",
+                }}
+                onMouseEnter={e => { if (!walletMenuOpen) { e.currentTarget.style.borderColor = "rgba(123,47,255,0.55)"; e.currentTarget.style.boxShadow = "0 0 14px rgba(123,47,255,0.25)"; } }}
+                onMouseLeave={e => { if (!walletMenuOpen) { e.currentTarget.style.borderColor = "rgba(123,47,255,0.28)"; e.currentTarget.style.boxShadow = "none"; } }}
+              >
+                {/* wallet icon */}
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                  <rect x="1.5" y="3.5" width="11" height="8" rx="1.5" stroke="#a67fff" strokeWidth="1.2"/>
+                  <path d="M1.5 6H12.5" stroke="#a67fff" strokeWidth="1.2"/>
+                  <circle cx="10" cy="8.5" r="0.7" fill="#a67fff"/>
+                </svg>
+                <span style={{ fontFamily: "monospace", fontSize: 10, color: "#b8a8e0" }}>
+                  {shortAddress(address)}
+                </span>
+                <svg width="8" height="8" viewBox="0 0 9 9" style={{ opacity: 0.6, transform: walletMenuOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>
+                  <path d="M1.5 3L4.5 6L7.5 3" stroke="#a67fff" strokeWidth="1.2" fill="none" strokeLinecap="round" />
+                </svg>
+              </button>
+
+              {/* Desktop wallet dropdown */}
+              <div style={{
+                position: "absolute", top: "calc(100% + 8px)", right: 0,
+                background: "linear-gradient(160deg,#141021,#0d0a17)",
+                border: "1px solid rgba(123,47,255,0.28)",
+                borderRadius: 12, overflow: "hidden", minWidth: 260,
+                boxShadow: "0 16px 40px rgba(0,0,0,0.8), 0 0 24px rgba(123,47,255,0.15)",
+                opacity: walletMenuOpen ? 1 : 0,
+                pointerEvents: walletMenuOpen ? "all" : "none",
+                transform: walletMenuOpen ? "translateY(0)" : "translateY(-6px)",
+                transition: "opacity 0.18s, transform 0.18s",
+                zIndex: 200,
+              }}>
+                {/* Top gradient bar */}
+                <div style={{ height: 2, background: "linear-gradient(90deg,#7B2FFF,#00d4ff,#7B2FFF)" }} />
+
+                {/* Full address header */}
+                <div style={{ padding: "14px 14px 12px", borderBottom: "1px solid rgba(123,47,255,0.1)", display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 34, height: 34, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(123,47,255,0.4)", flexShrink: 0, background: "#0e0c1a" }}>
+                    <img src={avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${address}`} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 10, color: "rgba(123,47,255,0.7)", textTransform: "uppercase", letterSpacing: "1.2px", marginBottom: 2 }}>Connected Wallet</div>
+                    <div style={{ fontFamily: "monospace", fontSize: 11, color: "#e8deff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {address ? `${address.slice(0, 10)}...${address.slice(-8)}` : ""}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div style={{ padding: "12px", display: "flex", flexDirection: "column", gap: 8 }}>
+                  {renderWalletMenuActions()}
+                </div>
+              </div>
+            </div>
           ) : (
             <button onClick={handleConnect} style={{ padding: "7px 18px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 12, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", boxShadow: "0 0 16px rgba(123,47,255,0.35)", transition: "all 0.2s" }}
               onMouseEnter={e => { e.currentTarget.style.background = "linear-gradient(135deg,#8f44ff,#6b2fe8)"; e.currentTarget.style.boxShadow = "0 0 24px rgba(123,47,255,0.55)"; }}
@@ -546,6 +670,30 @@ export default function Navbar() {
             {!isConnected && (
               <button onClick={handleConnect} style={{ padding: "6px 12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
                 Connect
+              </button>
+            )}
+
+            {/* Wallet chip — mobile (connected only) */}
+            {isConnected && (
+              <button
+                onClick={() => setWalletMenuOpen(true)}
+                title="Wallet options"
+                style={{
+                  width: 36, height: 36,
+                  background: "rgba(123,47,255,0.08)",
+                  border: "1px solid rgba(123,47,255,0.28)",
+                  borderRadius: 7,
+                  cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  padding: 0,
+                  transition: "all 0.15s",
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 14 14" fill="none">
+                  <rect x="1.5" y="3.5" width="11" height="8" rx="1.5" stroke="#a67fff" strokeWidth="1.2"/>
+                  <path d="M1.5 6H12.5" stroke="#a67fff" strokeWidth="1.2"/>
+                  <circle cx="10" cy="8.5" r="0.9" fill="#a67fff"/>
+                </svg>
               </button>
             )}
 
@@ -571,12 +719,13 @@ export default function Navbar() {
                   ))}
                   {isConnected && (
                     <div
-                      onClick={copyAddress}
-                      title={copied ? "Copied!" : "Tap to copy address"}
-                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 16px", fontSize: 12, cursor: "pointer", borderTop: "1px solid rgba(123,47,255,0.12)", background: copied ? "rgba(0,255,136,0.08)" : "transparent", color: copied ? "#00FF88" : "#b8a8e0", fontFamily: "monospace", transition: "background 0.15s" }}
+                      onClick={() => { setMenuOpen(false); setWalletMenuOpen(true); }}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 16px", fontSize: 12, cursor: "pointer", borderTop: "1px solid rgba(123,47,255,0.12)", background: "transparent", color: "#b8a8e0", fontFamily: "monospace", transition: "background 0.15s" }}
+                      onMouseEnter={e => { e.currentTarget.style.background = "rgba(123,47,255,0.08)"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
                     >
-                      <span>{copied ? "Copied!" : shortAddress(address)}</span>
-                      <span style={{ fontSize: 10, color: copied ? "#00FF88" : "#8866cc", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px" }}>{copied ? "✓" : "COPY"}</span>
+                      <span>{shortAddress(address)}</span>
+                      <span style={{ fontSize: 10, color: "#8866cc", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px" }}>WALLET ▸</span>
                     </div>
                   )}
                 </div>
@@ -586,6 +735,57 @@ export default function Navbar() {
         )}
       </div>
     </nav>
+
+      {/* ── 💳 MOBILE WALLET MENU MODAL ─────────────────────────────── */}
+      {isMobile && walletMenuOpen && isConnected && (
+        <>
+          <style>{`
+            @keyframes wmBgIn    { from{opacity:0} to{opacity:1} }
+            @keyframes wmModalIn { from{opacity:0;transform:scale(0.92) translateY(10px)} to{opacity:1;transform:scale(1) translateY(0)} }
+          `}</style>
+
+          {/* backdrop */}
+          <div
+            onClick={() => setWalletMenuOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 3100, background: "rgba(4,3,10,0.82)", backdropFilter: "blur(10px)", animation: "wmBgIn 0.22s ease" }}
+          />
+
+          {/* modal */}
+          <div style={{
+            position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+            zIndex: 3101, width: "min(360px, 92vw)",
+            background: "linear-gradient(160deg,#141021,#0d0a17)",
+            border: "1px solid rgba(123,47,255,0.3)", borderRadius: 18,
+            overflow: "hidden", animation: "wmModalIn 0.28s cubic-bezier(0.34,1.56,0.64,1)",
+            boxShadow: "0 20px 70px rgba(0,0,0,0.6), 0 0 40px rgba(123,47,255,0.15)",
+            fontFamily: "'Rajdhani',sans-serif",
+          }}>
+            {/* top gradient bar */}
+            <div style={{ height: 3, background: "linear-gradient(90deg,#7B2FFF,#00d4ff,#7B2FFF)" }} />
+
+            {/* close */}
+            <button onClick={() => setWalletMenuOpen(false)} style={{ position: "absolute", top: 12, right: 12, width: 28, height: 28, borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2 }}>✕</button>
+
+            {/* Header — avatar + full address */}
+            <div style={{ padding: "22px 20px 16px", borderBottom: "1px solid rgba(123,47,255,0.1)", display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 44, height: 44, borderRadius: "50%", overflow: "hidden", border: "2px solid rgba(123,47,255,0.45)", flexShrink: 0, background: "#0e0c1a", boxShadow: "0 0 18px rgba(123,47,255,0.25)" }}>
+                <img src={avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${address}`} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 10, color: "rgba(123,47,255,0.75)", textTransform: "uppercase", letterSpacing: "1.4px", marginBottom: 3 }}>Connected Wallet</div>
+                <div style={{ fontFamily: "monospace", fontSize: 12, color: "#e8deff", wordBreak: "break-all", lineHeight: 1.35 }}>
+                  {address}
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: 10 }}>
+              {renderWalletMenuActions()}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ── ⛽ GAS FAUCET PANEL — X login + staged animations ────────── */}
       {faucetPanel && (
