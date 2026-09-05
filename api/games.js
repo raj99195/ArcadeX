@@ -1329,22 +1329,28 @@ export default async function handler(req, res) {
       if (!matched)
         return res.status(400).json({ error: "No matching PlayRecorded event for this player" });
 
-      // 4) On-chain se hi values lo — body ke score/earned pe trust nahi
-      const onChainGameId = matched.args.gameId.toString();
-      const onChainReward = Number(ethers.formatEther(matched.args.playerReward));
+      // 4) On-chain se hi values lo — body ke score/earned pe trust nahi.
+      //    Also extract creatorReward so aggregate totals match on-chain
+      //    exactly (previously ignored — caused a small delta between the
+      //    MST admin panel and the on-chain event totals since creator
+      //    payouts weren't being counted in the "total distributed" number).
+      const onChainGameId  = matched.args.gameId.toString();
+      const onChainReward  = Number(ethers.formatEther(matched.args.playerReward));
+      const onChainCreator = Number(ethers.formatEther(matched.args.creatorReward));
 
       const scoreDoc = {
-        player:       user.address,
-        score:        parseInt(score),          // display score (game se)
-        gameId:       parseInt(onChainGameId),   // on-chain verified
-        gameName:     gameName || "Unknown",
-        chain:        chainKey,
-        earned:       onChainReward,             // on-chain verified reward
-        earnedSymbol: earnedSymbol || "ARCADE",
+        player:        user.address,
+        score:         parseInt(score),          // display score (game se)
+        gameId:        parseInt(onChainGameId),   // on-chain verified
+        gameName:      gameName || "Unknown",
+        chain:         chainKey,
+        earned:        onChainReward,             // player's on-chain reward
+        creatorEarned: onChainCreator,            // creator's on-chain reward
+        earnedSymbol:  earnedSymbol || "ARCADE",
         txHash,
-        verified:     true,                      // Layer 2 stamp
-        createdAt:    new Date(),
-        aggregated:   true,                      // marks: aggregates already updated below
+        verified:      true,                      // Layer 2 stamp
+        createdAt:     new Date(),
+        aggregated:    true,                      // marks: aggregates already updated below
       };
       await db.collection("scores").doc(txHash).set(scoreDoc);
 
@@ -1573,12 +1579,19 @@ export default async function handler(req, res) {
   // Data is 100% accurate (real counts, real sums) and always fresh
   // (updated the moment a score is confirmed on-chain).
   const FieldValue = admin.firestore.FieldValue;
-  async function updateAggregates({ player, gameId, gameName, chain, earned, createdAt }) {
+  async function updateAggregates({ player, gameId, gameName, chain, earned, creatorEarned, createdAt }) {
     if (!player || !chain || gameId == null) return;
 
     const w   = player.toLowerCase();
     const gid = String(gameId);
-    const earnedAmt = Number(earned) || 0;
+    // Semantic split — playerStats tracks what the player earned (their
+    // own cut only), platformStats/dailyStats/gameStats track TOTAL MSTC
+    // distributed (player + creator). This matches how on-chain event
+    // totals are computed and makes the MST admin panel numbers line up
+    // exactly with a direct PlayRecorded event scan.
+    const playerAmt  = Number(earned) || 0;
+    const creatorAmt = Number(creatorEarned) || 0;
+    const totalAmt   = playerAmt + creatorAmt;
 
     // Normalise date to UTC YYYY-MM-DD for consistent daily grouping
     // across timezones. Every aggregate uses UTC so MST team sees the
@@ -1590,54 +1603,55 @@ export default async function handler(req, res) {
 
     const batch = db.batch();
 
-    // 1. Platform (all-time chain totals)
+    // 1. Platform (all-time chain totals — includes creator payouts)
     batch.set(db.doc(`platformStats/${chain}`), {
       chain,
       totalPlays:  FieldValue.increment(1),
-      totalPayout: FieldValue.increment(earnedAmt),
+      totalPayout: FieldValue.increment(totalAmt),
       updatedAt:   FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    // 2. Daily totals for this chain
+    // 2. Daily totals for this chain — includes creator payouts
     batch.set(db.doc(`dailyStats/${chain}_${dateKey}`), {
       chain, date: dateKey,
       plays:  FieldValue.increment(1),
-      earned: FieldValue.increment(earnedAmt),
+      earned: FieldValue.increment(totalAmt),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    // 3. Player all-time. `gameIds` array is bounded (a player won't play
-    // more than ~100 unique games in practice; Firestore array cap is 1MB
-    // per doc which supports ~20K short strings).
+    // 3. Player all-time — player's own earnings only (not creator cut).
+    // `gameIds` array is bounded (a player won't play more than ~100
+    // unique games in practice; Firestore array cap is 1MB per doc
+    // which supports ~20K short strings).
     batch.set(db.doc(`playerStats/${chain}_${w}`), {
       chain, wallet: w,
       plays:      FieldValue.increment(1),
-      earned:     FieldValue.increment(earnedAmt),
+      earned:     FieldValue.increment(playerAmt),
       lastPlayed: scoreDate,
       gameIds:    FieldValue.arrayUnion(gid),
     }, { merge: true });
 
-    // 4. Player-per-day (enables date-range player breakdown)
+    // 4. Player-per-day — player's own earnings only
     batch.set(db.doc(`playerDailyStats/${chain}_${dateKey}_${w}`), {
       chain, date: dateKey, wallet: w,
       plays:   FieldValue.increment(1),
-      earned:  FieldValue.increment(earnedAmt),
+      earned:  FieldValue.increment(playerAmt),
       gameIds: FieldValue.arrayUnion(gid),
     }, { merge: true });
 
-    // 5. Game all-time
+    // 5. Game all-time — total distributed via this game (player + creator)
     batch.set(db.doc(`gameStats/${chain}_${gid}`), {
       chain, gameId: gid, name: gameName || null,
       plays:      FieldValue.increment(1),
-      earned:     FieldValue.increment(earnedAmt),
+      earned:     FieldValue.increment(totalAmt),
       lastPlayed: scoreDate,
     }, { merge: true });
 
-    // 6. Game-per-day (enables date-range game breakdown)
+    // 6. Game-per-day — total distributed via this game per day
     batch.set(db.doc(`gameDailyStats/${chain}_${dateKey}_${gid}`), {
       chain, date: dateKey, gameId: gid,
       plays:  FieldValue.increment(1),
-      earned: FieldValue.increment(earnedAmt),
+      earned: FieldValue.increment(totalAmt),
     }, { merge: true });
 
     await batch.commit();
@@ -1693,18 +1707,27 @@ export default async function handler(req, res) {
       });
 
       // ── ALL-TIME PATH (no date filter) ───────────────────────────
-      // Fetch: platformStats(1) + playerStats(all) + gameStats(all) +
-      // dailyStats(last 90 days for chart). ~600 reads total.
+      // Fetch: platformStats(1) + playerStats(500 for display) +
+      // playerStats.count() (real count, +1 read) + gameStats(all) +
+      // dailyStats(last 90 days for chart). ~612 reads total.
       if (isAllTime) {
-        const [platformSnap, playersSnap, gamesAggSnap, dailySnap] = await Promise.all([
+        const [platformSnap, playersSnap, playersCountSnap, gamesAggSnap, dailySnap] = await Promise.all([
           db.doc(`platformStats/${chain}`).get(),
-          // Top 500 players by earnings — MST team scrolls; more than 500
-          // is CSV export territory anyway
+          // Top 500 players by earnings — displayed list only.
+          // Real total comes from the parallel count() query below —
+          // previously we returned playerRows.length here, which capped
+          // activePlayers at 500 and made MST admin under-report by ~30%.
           db.collection("playerStats")
             .where("chain", "==", chain)
             .orderBy("earned", "desc")
             .limit(500)
             .get(),
+          // Real active-player count via Firestore's count() aggregation
+          // — 1 read regardless of collection size. This is the number
+          // MST admin should see for "Active Players".
+          db.collection("playerStats")
+            .where("chain", "==", chain)
+            .count().get(),
           db.collection("gameStats")
             .where("chain", "==", chain)
             .get(),
@@ -1719,6 +1742,7 @@ export default async function handler(req, res) {
         const platform = platformSnap.exists ? platformSnap.data() : { totalPlays: 0, totalPayout: 0 };
         const totalPlays  = Number(platform.totalPlays  || 0);
         const totalPayout = Number(platform.totalPayout || 0);
+        const activePlayers = playersCountSnap.data().count;
 
         const playerRows = playersSnap.docs.map(d => {
           const p = d.data();
@@ -1781,10 +1805,10 @@ export default async function handler(req, res) {
           summary: {
             totalPlays,
             totalPayout:  Number(totalPayout.toFixed(4)),
-            activePlayers: playerRows.length,
+            activePlayers,                    // real count from count() query
             totalGames:   gameRows.length,
-            avgPerPlayer: playerRows.length > 0
-              ? Number((totalPayout / playerRows.length).toFixed(4)) : 0,
+            avgPerPlayer: activePlayers > 0
+              ? Number((totalPayout / activePlayers).toFixed(4)) : 0,
             skippedNonApproved: 0,           // aggregates-based, always 0
             scannedScores: totalPlays,       // legacy field, = totalPlays now
             playerSharePct,
