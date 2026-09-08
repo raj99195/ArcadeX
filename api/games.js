@@ -27,6 +27,15 @@ function getDb() {
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
         privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
       }),
+      // For Firebase Storage uploads (battle shop item images + 3D models).
+      // Reads FIREBASE_STORAGE_BUCKET first, then falls back to the frontend
+      // env VITE_FIREBASE_STORAGE_BUCKET (same value — no need to duplicate),
+      // then a legacy default. Newer Firebase projects use .firebasestorage.app
+      // instead of .appspot.com — both are valid depending on when the
+      // bucket was created.
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET
+        || process.env.VITE_FIREBASE_STORAGE_BUCKET
+        || `${process.env.FIREBASE_PROJECT_ID}.firebasestorage.app`,
     });
   }
   return admin.firestore();
@@ -266,7 +275,37 @@ const RPC_URLS = {
 const PLATFORM_EVENT_ABI = [
   "event PlayRecorded(address indexed player, uint256 indexed gameId, uint256 playerReward, uint256 creatorReward)",
 ];
+// ── Battle Arena addresses (env-driven for prod/staging flexibility) ────────
+const BATTLE_ARENA_ADDRESSES = {
+  botchain: process.env.BATTLE_ARENA_ADDRESS_BOTCHAIN,
+  mst:      process.env.BATTLE_ARENA_ADDRESS_MST,
+};
 
+// ── Battle Shop addresses + payment token config ────────────────────────────
+// Env-driven. Each chain has its own BattleShop deployment. Payment tokens
+// (ARCADE / USDC) also per chain — ARCADE is per-chain, USDC only where a
+// bridged/native USDC exists on that chain.
+const BATTLE_SHOP_ADDRESSES = {
+  botchain: process.env.BATTLE_SHOP_ADDRESS_BOTCHAIN,
+  mst:      process.env.BATTLE_SHOP_ADDRESS_MST,
+};
+const BATTLE_SHOP_TOKENS = {
+  botchain: {
+    ARCADE: process.env.BATTLE_SHOP_TOKEN_ARCADE_BOTCHAIN,
+    USDC:   process.env.BATTLE_SHOP_TOKEN_USDC_BOTCHAIN,
+  },
+  mst: {
+    ARCADE: process.env.BATTLE_SHOP_TOKEN_ARCADE_MST,
+    USDC:   process.env.BATTLE_SHOP_TOKEN_USDC_MST,
+  },
+};
+// Human-readable prices in Firestore are multiplied by 10^decimals to get
+// on-chain amounts. Standard values — override via env if a chain uses a
+// non-standard USDC decimals.
+const BATTLE_SHOP_TOKEN_DECIMALS = {
+  ARCADE: Number(process.env.BATTLE_SHOP_DECIMALS_ARCADE) || 18,
+  USDC:   Number(process.env.BATTLE_SHOP_DECIMALS_USDC)   || 6,
+};
 // ── Module-scope admin gate ────────────────────────────────────────────────
 // Verifies ADMIN_ROLE / DEFAULT_ADMIN_ROLE on ANY configured Platform contract,
 // plus the legacy super-admin (VITE_ADMIN_ADDRESS). Mirrors the inline gate used
@@ -1221,6 +1260,705 @@ export default async function handler(req, res) {
       );
       return res.status(200).json({ success: true });
     } catch (err) { return res.status(500).json({ error: err.message }); }
+  }
+  // ═══════════════════════════════════════════════════════════════════════
+  // BATTLE ARENA — 5-round dollar-earning game, ARCADE mint on any chain
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── POST battle-start-session ──────────────────────────────────────────
+  // Creates a new battle session for the connected wallet. Returns the
+  // sessionId (UUID) + sessionToken which the iframe game and future
+  // battle-round calls need to authenticate.
+  if (req.method === "POST" && action === "battle-start-session") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    if (await isWalletBanned(db, bUser.address))
+      return res.status(403).json({ error: "This wallet has been suspended." });
+
+    const bIp = getClientIp(req);
+    if (!rateLimit(`battle-session-ip:${bIp}`, 10, 60_000))
+      return res.status(429).json({ error: "Too many session requests from this IP." });
+    if (!rateLimit(`battle-session:${bUser.address}`, 5, 60_000))
+      return res.status(429).json({ error: "Too many session requests." });
+
+    const { chain } = req.body;
+    if (!chain) return res.status(400).json({ error: "chain required" });
+
+    const battleArenaAddr = BATTLE_ARENA_ADDRESSES[chain];
+    const chainId         = CHAIN_IDS[chain];
+    if (!battleArenaAddr || !chainId)
+      return res.status(400).json({ error: `Battle Arena not available on chain: ${chain}` });
+
+    try {
+      const { randomUUID } = await import("crypto");
+      const sessionId    = randomUUID();
+      const sessionToken = randomUUID();
+      const ttlHours     = Number(process.env.BATTLE_SESSION_TTL_HOURS) || 2;
+
+      await db.collection("battleSessions").doc(sessionId).set({
+        sessionId,
+        sessionToken,
+        player:      bUser.address.toLowerCase(),
+        chain,
+        chainId:     Number(chainId),
+        battleArena: battleArenaAddr,
+        createdAt:   new Date(),
+        expiresAt:   new Date(Date.now() + ttlHours * 60 * 60 * 1000),
+        rounds:      [],           // [{ round, dollars, recordedAt }]
+        totalDollars: 0,
+        status:      "active",      // active | completed | claimed | expired
+        claimTxHash: null,
+      });
+
+      return res.status(200).json({ sessionId, sessionToken });
+    } catch (err) {
+      console.error("[battle-start-session]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-round ──────────────────────────────────────────────────
+  // Records one round's dollar earning. Enforces strict order (1→2→3→4→5),
+  // per-round cap, and per-session cap. Round 5 auto-marks session
+  // "completed" — after that only sign-claim/record-claim are allowed.
+  if (req.method === "POST" && action === "battle-round") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    const { sessionId, sessionToken, round, dollars } = req.body;
+    if (!sessionId || !sessionToken || round == null || dollars == null)
+      return res.status(400).json({ error: "sessionId, sessionToken, round, dollars required" });
+
+    const roundNum  = parseInt(round);
+    const dollarNum = parseInt(dollars);
+    if (!(roundNum >= 1 && roundNum <= 5))
+      return res.status(400).json({ error: "round must be 1-5" });
+    if (!Number.isFinite(dollarNum) || dollarNum < 0)
+      return res.status(400).json({ error: "dollars must be >= 0" });
+
+    const maxPerRound = Number(process.env.BATTLE_MAX_DOLLARS_PER_ROUND) || 50;
+    if (dollarNum > maxPerRound)
+      return res.status(400).json({ error: `Round earning capped at $${maxPerRound}` });
+
+    if (!rateLimit(`battle-round:${bUser.address}`, 30, 60_000))
+      return res.status(429).json({ error: "Too many round updates" });
+
+    try {
+      const sessRef  = db.collection("battleSessions").doc(sessionId);
+      const sessSnap = await sessRef.get();
+      if (!sessSnap.exists) return res.status(404).json({ error: "Session not found" });
+      const sess = sessSnap.data();
+
+      if (sess.sessionToken !== sessionToken)
+        return res.status(403).json({ error: "Invalid session token" });
+      if (sess.player !== bUser.address.toLowerCase())
+        return res.status(403).json({ error: "Session belongs to another player" });
+      if (sess.status !== "active")
+        return res.status(409).json({ error: `Session is ${sess.status}` });
+
+      const expiresAt = sess.expiresAt?.toDate?.() || new Date(sess.expiresAt);
+      if (expiresAt < new Date()) {
+        await sessRef.update({ status: "expired" });
+        return res.status(410).json({ error: "Session expired" });
+      }
+
+      const existingRounds = sess.rounds || [];
+      const expectedRound  = existingRounds.length + 1;
+      if (roundNum !== expectedRound)
+        return res.status(409).json({ error: `Expected round ${expectedRound}, got ${roundNum}` });
+
+      const newTotal = (sess.totalDollars || 0) + dollarNum;
+      const maxPerSession = Number(process.env.BATTLE_MAX_DOLLARS_PER_SESSION) || 100;
+      if (newTotal > maxPerSession)
+        return res.status(400).json({ error: `Session total capped at $${maxPerSession}` });
+
+      const newRounds = [
+        ...existingRounds,
+        { round: roundNum, dollars: dollarNum, recordedAt: new Date() },
+      ];
+
+      const updates = {
+        rounds: newRounds,
+        totalDollars: newTotal,
+        lastRoundAt: new Date(),
+      };
+      if (roundNum === 5) updates.status = "completed";
+
+      await sessRef.update(updates);
+
+      // ═══════════════════════════════════════════════════════════════════
+      // BATTLE PASS — award XP for this round + update player tier state
+      // ═══════════════════════════════════════════════════════════════════
+      // XP formula (tuned in previous discussion — configurable via env):
+      //   base = dollars * 2
+      //         + 20 (round completion)
+      //         + 10 (only if dollars >= 20 — "big round" bonus)
+      //         + 100 (only on round 5 — "full match" bonus)
+      const XP_PER_DOLLAR   = Number(process.env.BATTLE_BP_XP_PER_DOLLAR)    || 2;
+      const XP_ROUND_BONUS  = Number(process.env.BATTLE_BP_XP_ROUND_BONUS)   || 20;
+      const XP_BIG_ROUND    = Number(process.env.BATTLE_BP_XP_BIG_ROUND)     || 10;
+      const XP_BIG_ROUND_MIN = Number(process.env.BATTLE_BP_XP_BIG_ROUND_MIN) || 20;
+      const XP_MATCH_BONUS  = Number(process.env.BATTLE_BP_XP_MATCH_BONUS)   || 100;
+
+      let xpEarned = dollarNum * XP_PER_DOLLAR + XP_ROUND_BONUS;
+      if (dollarNum >= XP_BIG_ROUND_MIN) xpEarned += XP_BIG_ROUND;
+      if (roundNum === 5)                 xpEarned += XP_MATCH_BONUS;
+
+      // Fetch active season (cached briefly per warm invocation)
+      const activeSeasonId = await _getActiveSeasonId(db);
+      const XP_PER_TIER    = Number(process.env.BATTLE_BP_XP_PER_TIER) || 500;
+      const MAX_TIER       = Number(process.env.BATTLE_BP_MAX_TIER)    || 50;
+
+      let bpXpBefore = 0, bpTierBefore = 0, bpXpAfter = 0, bpTierAfter = 0;
+      let bpTotalXP = 0;
+
+      try {
+        const bpRef  = db.collection("playerBattlePass").doc(bUser.address.toLowerCase());
+        const bpSnap = await bpRef.get();
+
+        let bpDoc = bpSnap.exists ? bpSnap.data() : null;
+        // Reset season XP if season changed (or first time)
+        if (!bpDoc || bpDoc.seasonId !== activeSeasonId) {
+          bpDoc = {
+            address:      bUser.address.toLowerCase(),
+            totalXP:      bpDoc?.totalXP || 0,
+            seasonId:     activeSeasonId,
+            seasonXP:     0,
+            currentTier:  0,
+            passType:     "free",
+            claimedTiers: [],
+            premiumUnlockedAt: null,
+            createdAt:    bpDoc?.createdAt || new Date(),
+          };
+        }
+
+        bpXpBefore   = bpDoc.seasonXP || 0;
+        bpTierBefore = Math.min(MAX_TIER, Math.floor(bpXpBefore / XP_PER_TIER));
+
+        bpXpAfter   = bpXpBefore + xpEarned;
+        bpTierAfter = Math.min(MAX_TIER, Math.floor(bpXpAfter / XP_PER_TIER));
+        bpTotalXP   = (bpDoc.totalXP || 0) + xpEarned;
+
+        const bpUpdate = {
+          address:      bUser.address.toLowerCase(),
+          totalXP:      bpTotalXP,
+          seasonId:     activeSeasonId,
+          seasonXP:     bpXpAfter,
+          currentTier:  bpTierAfter,
+          passType:     bpDoc.passType || "free",
+          claimedTiers: bpDoc.claimedTiers || [],
+          lastRoundAt:  new Date(),
+          updatedAt:    new Date(),
+        };
+        if (bpDoc.premiumUnlockedAt) bpUpdate.premiumUnlockedAt = bpDoc.premiumUnlockedAt;
+        if (bpDoc.createdAt)         bpUpdate.createdAt         = bpDoc.createdAt;
+
+        await bpRef.set(bpUpdate, { merge: true });
+      } catch (bpErr) {
+        // Don't fail the round if BP tracking blows up — log + continue
+        console.error("[battle-round BP]", bpErr);
+      }
+
+      return res.status(200).json({
+        accepted: true,
+        round: roundNum,
+        dollars: dollarNum,
+        totalDollars: newTotal,
+        status: updates.status || sess.status,
+        xp: {
+          earned:      xpEarned,
+          seasonXP:    bpXpAfter,
+          totalXP:     bpTotalXP,
+          tierBefore:  bpTierBefore,
+          tierAfter:   bpTierAfter,
+          tieredUp:    bpTierAfter > bpTierBefore,
+          seasonId:    activeSeasonId,
+          xpPerTier:   XP_PER_TIER,
+          maxTier:     MAX_TIER,
+        },
+      });
+    } catch (err) {
+      console.error("[battle-round]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-sign-claim ─────────────────────────────────────────────
+  // After all 5 rounds are recorded, generates the ECDSA claim proof that
+  // BattleArena.sol will verify. Matches contract's hash:
+  //   keccak256(player, sessionIdBytes32, dollars, address(this), chainid)
+  // sessionIdBytes32 is derived deterministically from the UUID sessionId
+  // via keccak256(utf8_bytes(sessionId)) — the same value gets stored in
+  // contract's claimedSessions mapping, so replays are blocked on-chain.
+  if (req.method === "POST" && action === "battle-sign-claim") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    const { sessionId, sessionToken } = req.body;
+    if (!sessionId || !sessionToken)
+      return res.status(400).json({ error: "sessionId, sessionToken required" });
+
+    if (await isWalletBanned(db, bUser.address))
+      return res.status(403).json({ error: "This wallet has been suspended." });
+    if (!rateLimit(`battle-claim:${bUser.address}`, 5, 60_000))
+      return res.status(429).json({ error: "Too many claim requests" });
+
+    const pk = process.env.SCORE_SIGNER_PRIVATE_KEY;
+    if (!pk) return res.status(503).json({ error: "Claim signing not configured" });
+
+    try {
+      const sessRef  = db.collection("battleSessions").doc(sessionId);
+      const sessSnap = await sessRef.get();
+      if (!sessSnap.exists) return res.status(404).json({ error: "Session not found" });
+      const sess = sessSnap.data();
+
+      if (sess.sessionToken !== sessionToken)
+        return res.status(403).json({ error: "Invalid session token" });
+      if (sess.player !== bUser.address.toLowerCase())
+        return res.status(403).json({ error: "Session belongs to another player" });
+      if (sess.status === "claimed")
+        return res.status(409).json({ error: "Session already claimed" });
+      if (sess.status !== "completed")
+        return res.status(409).json({ error: "Complete all 5 rounds first" });
+      if ((sess.rounds || []).length !== 5)
+        return res.status(409).json({ error: "All 5 rounds must be recorded" });
+
+      const player           = bUser.address;
+      const battleArenaAddr  = sess.battleArena;
+      const chainId          = BigInt(sess.chainId);
+      const totalDollars     = BigInt(sess.totalDollars);
+
+      // Derived bytes32 sessionId — matches contract's expected type
+      const sessionIdBytes32 = ethers.keccak256(ethers.toUtf8Bytes(sessionId));
+
+      const signerWallet = new ethers.Wallet(pk);
+      const messageHash  = ethers.solidityPackedKeccak256(
+        ["address", "bytes32", "uint256", "address", "uint256"],
+        [player, sessionIdBytes32, totalDollars, battleArenaAddr, chainId]
+      );
+      const signature = await signerWallet.signMessage(ethers.getBytes(messageHash));
+
+      return res.status(200).json({
+        sessionIdBytes32,               // pass this to contract.claim(sessionId, ...)
+        dollars:     totalDollars.toString(),
+        signature,
+        battleArena: battleArenaAddr,
+        chainId:     sess.chainId,
+      });
+    } catch (err) {
+      console.error("[battle-sign-claim]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-record-claim ───────────────────────────────────────────
+  // Called after the on-chain claim tx confirms. Marks session as claimed
+  // in Firestore for UI history / support debugging. Not a security gate —
+  // the contract's claimedSessions mapping is the actual replay guard.
+  if (req.method === "POST" && action === "battle-record-claim") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    const { sessionId, sessionToken, txHash } = req.body;
+    if (!sessionId || !sessionToken || !txHash)
+      return res.status(400).json({ error: "sessionId, sessionToken, txHash required" });
+
+    try {
+      const sessRef  = db.collection("battleSessions").doc(sessionId);
+      const sessSnap = await sessRef.get();
+      if (!sessSnap.exists) return res.status(404).json({ error: "Session not found" });
+      const sess = sessSnap.data();
+
+      if (sess.sessionToken !== sessionToken)
+        return res.status(403).json({ error: "Invalid session token" });
+      if (sess.player !== bUser.address.toLowerCase())
+        return res.status(403).json({ error: "Session belongs to another player" });
+
+      await sessRef.update({
+        status:      "claimed",
+        claimTxHash: txHash,
+        claimedAt:   new Date(),
+      });
+
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      console.error("[battle-record-claim]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── GET battle-match-history ────────────────────────────────────────────
+  // Returns the caller's last 20 battle sessions (newest first) with the
+  // per-round breakdown, claim tx, and status. Used by the /battle-arena
+  // "Match History" modal.
+  //
+  // NOTE: Requires a Firestore composite index on
+  //   battleSessions: (player ASC, createdAt DESC)
+  // Firestore prints a one-click "Create index" link in the console on the
+  // first failed call — click it once and the index builds in ~1 minute.
+  if (req.method === "GET" && action === "battle-match-history") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    try {
+      const snap = await db.collection("battleSessions")
+        .where("player", "==", bUser.address.toLowerCase())
+        .orderBy("createdAt", "desc")
+        .limit(20)
+        .get();
+
+      const sessions = [];
+      snap.forEach(doc => {
+        const d = doc.data();
+        // Firestore Timestamps → millis for easy client formatting
+        const toMs = (t) => (t && typeof t.toMillis === "function" ? t.toMillis() : null);
+        sessions.push({
+          sessionId:    doc.id,
+          chain:        d.chain || null,
+          chainId:      d.chainId || null,
+          battleArena:  d.battleArena || null,
+          rounds:       (d.rounds || []).map(r => ({
+                          round:   r.round,
+                          dollars: r.dollars,
+                        })),
+          totalDollars: d.totalDollars || 0,
+          status:       d.status || "unknown",
+          claimTxHash:  d.claimTxHash || null,
+          createdAt:    toMs(d.createdAt),
+          claimedAt:    toMs(d.claimedAt),
+          lastRoundAt:  toMs(d.lastRoundAt),
+        });
+      });
+
+      return res.status(200).json({ sessions });
+    } catch (err) {
+      console.error("[battle-match-history]", err);
+      // Missing index → Firestore returns a specific error with a URL to fix it
+      if (String(err.message || "").includes("index")) {
+        return res.status(503).json({
+          error: "Firestore composite index required — check server logs for the auto-generated Create Index link.",
+        });
+      }
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BATTLE SHOP — Permanent-unlock item shop (gun skins, environments, etc)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── GET battle-shop-list ────────────────────────────────────────────────
+  // Public — no auth needed. Returns active items for the given chain
+  // (or items marked chain: "*" which apply to all chains).
+  //
+  // Response shape:
+  //   { items: [ {
+  //       itemId, itemIdBytes32, name, description, category, rarity,
+  //       imageUrl, priceARCADE, priceUSDC, chain, active
+  //     } ] }
+  if (req.method === "GET" && action === "battle-shop-list") {
+    const chain = String(req.query.chain || "").toLowerCase();
+    if (!chain || !CHAIN_IDS[chain])
+      return res.status(400).json({ error: "chain required" });
+
+    try {
+      const snap = await db.collection("battleShopItems")
+        .where("active", "==", true)
+        .get();
+
+      const items = [];
+      snap.forEach(doc => {
+        const d = doc.data();
+        if (!d.chain || d.chain === "*" || d.chain === chain) {
+          items.push({
+            itemId:        doc.id,
+            itemIdBytes32: d.itemIdBytes32 || ethers.keccak256(ethers.toUtf8Bytes(doc.id)),
+            name:          d.name || "",
+            description:   d.description || "",
+            category:      d.category || "cosmetic",
+            rarity:        d.rarity || "common",
+            imageUrl:      d.imageUrl || "",
+            modelUrl:      d.modelUrl || "",
+            priceARCADE:   d.priceARCADE || 0,
+            priceUSDC:     d.priceUSDC || 0,
+            chain:         d.chain || "*",
+            active:        !!d.active,
+          });
+        }
+      });
+
+      // Stable order — rarity desc (legendary first) then price asc
+      const rarityRank = { legendary: 4, epic: 3, rare: 2, common: 1 };
+      items.sort((a, b) => {
+        const rd = (rarityRank[b.rarity] || 0) - (rarityRank[a.rarity] || 0);
+        if (rd !== 0) return rd;
+        const ap = a.priceARCADE || a.priceUSDC || 0;
+        const bp = b.priceARCADE || b.priceUSDC || 0;
+        return ap - bp;
+      });
+
+      return res.status(200).json({ items });
+    } catch (err) {
+      console.error("[battle-shop-list]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── GET battle-shop-inventory ───────────────────────────────────────────
+  // Auth'd. Returns items the caller has unlocked (across all chains).
+  // Ownership is stored in Firestore mirror; on-chain contract is source of
+  // truth, but this endpoint reads from the fast-path cache.
+  if (req.method === "GET" && action === "battle-shop-inventory") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    try {
+      const invRef = db.collection("battleShopInventory")
+        .doc(bUser.address.toLowerCase())
+        .collection("items");
+      const snap = await invRef.get();
+
+      const items = [];
+      snap.forEach(doc => {
+        const d = doc.data();
+        items.push({
+          itemId:       doc.id,
+          chain:        d.chain || null,
+          token:        d.token || null,
+          price:        d.price || null,
+          purchasedAt:  d.purchasedAt || null,
+          txHash:       d.txHash || null,
+        });
+      });
+
+      return res.status(200).json({ items });
+    } catch (err) {
+      console.error("[battle-shop-inventory]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-shop-purchase-quote ─────────────────────────────────────
+  // Auth'd. Generates a signed purchase quote the user submits on-chain.
+  //
+  // Body: { itemId, currency: 'ARCADE' | 'USDC', chain }
+  //
+  // Validates:
+  //   - Session ends when user calls the contract with the returned payload
+  //   - Item exists, is active, and offered on the requested chain
+  //   - User doesn't already own the item (Firestore mirror check)
+  //   - Currency is offered for this item + supported on this chain
+  //
+  // Returns everything the frontend needs to call BattleShop.purchase():
+  //   { itemId, itemIdBytes32, token, price, priceHuman, nonce, signature,
+  //     contract, chainId, expiresAt }
+  if (req.method === "POST" && action === "battle-shop-purchase-quote") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    if (await isWalletBanned(db, bUser.address))
+      return res.status(403).json({ error: "This wallet has been suspended." });
+    if (!rateLimit(`shop-quote:${bUser.address}`, 20, 60_000))
+      return res.status(429).json({ error: "Too many quote requests" });
+
+    const { itemId, currency, chain } = req.body;
+    if (!itemId || !currency || !chain)
+      return res.status(400).json({ error: "itemId, currency, chain required" });
+
+    const chainKey = String(chain).toLowerCase();
+    const cur      = String(currency).toUpperCase();
+    if (!CHAIN_IDS[chainKey])
+      return res.status(400).json({ error: `Unknown chain: ${chainKey}` });
+    if (cur !== "ARCADE" && cur !== "USDC")
+      return res.status(400).json({ error: "currency must be ARCADE or USDC" });
+
+    const shopAddr = BATTLE_SHOP_ADDRESSES[chainKey];
+    const chainId  = CHAIN_IDS[chainKey];
+    if (!shopAddr)
+      return res.status(400).json({ error: `Battle Shop not deployed on ${chainKey}` });
+
+    const tokenAddr = BATTLE_SHOP_TOKENS[chainKey]?.[cur];
+    if (!tokenAddr)
+      return res.status(400).json({ error: `${cur} not configured on ${chainKey}` });
+
+    const decimals = BATTLE_SHOP_TOKEN_DECIMALS[cur];
+    if (!decimals)
+      return res.status(500).json({ error: `Missing decimals config for ${cur}` });
+
+    const pk = process.env.SCORE_SIGNER_PRIVATE_KEY;
+    if (!pk) return res.status(503).json({ error: "Quote signing not configured" });
+
+    try {
+      // ── Fetch item ──
+      const itemSnap = await db.collection("battleShopItems").doc(itemId).get();
+      if (!itemSnap.exists) return res.status(404).json({ error: "Item not found" });
+      const item = itemSnap.data();
+
+      if (!item.active) return res.status(409).json({ error: "Item is not active" });
+      if (item.chain && item.chain !== "*" && item.chain !== chainKey)
+        return res.status(409).json({ error: `Item not available on ${chainKey}` });
+
+      const priceHuman = cur === "ARCADE" ? Number(item.priceARCADE) : Number(item.priceUSDC);
+      if (!priceHuman || priceHuman <= 0)
+        return res.status(409).json({ error: `Item not sold for ${cur}` });
+
+      // ── Ownership check (Firestore mirror) ──
+      const ownedRef = db
+        .collection("battleShopInventory")
+        .doc(bUser.address.toLowerCase())
+        .collection("items")
+        .doc(itemId);
+      const ownedSnap = await ownedRef.get();
+      if (ownedSnap.exists)
+        return res.status(409).json({ error: "You already own this item" });
+
+      // ── Compute on-chain amount ──
+      const priceWei = BigInt(priceHuman) * (10n ** BigInt(decimals));
+
+      // ── Generate nonce + itemId bytes32 ──
+      const { randomBytes, randomUUID } = await import("crypto");
+      const nonce         = "0x" + randomBytes(32).toString("hex");
+      const itemIdBytes32 = item.itemIdBytes32 || ethers.keccak256(ethers.toUtf8Bytes(itemId));
+      const quoteId       = randomUUID();
+
+      // ── Sign quote ──
+      // Contract expects: keccak256(buyer, itemId, token, price, nonce, contract, chainId)
+      const signerWallet = new ethers.Wallet(pk);
+      const messageHash  = ethers.solidityPackedKeccak256(
+        ["address", "bytes32", "address", "uint256", "bytes32", "address", "uint256"],
+        [bUser.address, itemIdBytes32, tokenAddr, priceWei, nonce, shopAddr, chainId]
+      );
+      const signature = await signerWallet.signMessage(ethers.getBytes(messageHash));
+
+      // ── Store quote for audit + record-purchase verification ──
+      const ttlMinutes = Number(process.env.BATTLE_SHOP_QUOTE_TTL_MINUTES) || 10;
+      const expiresAt  = new Date(Date.now() + ttlMinutes * 60 * 1000);
+      await db.collection("battleShopQuotes").doc(quoteId).set({
+        quoteId,
+        nonce,
+        buyer:         bUser.address.toLowerCase(),
+        itemId,
+        itemIdBytes32,
+        chain:         chainKey,
+        chainId:       Number(chainId),
+        contract:      shopAddr,
+        token:         tokenAddr,
+        currency:      cur,
+        price:         priceWei.toString(),
+        priceHuman,
+        signature,
+        status:        "pending",   // pending → used | expired
+        createdAt:     new Date(),
+        expiresAt,
+      });
+
+      return res.status(200).json({
+        itemId,
+        itemIdBytes32,
+        token:      tokenAddr,
+        price:      priceWei.toString(),
+        priceHuman,
+        currency:   cur,
+        nonce,
+        signature,
+        contract:   shopAddr,
+        chainId:    Number(chainId),
+        expiresAt:  expiresAt.toISOString(),
+      });
+    } catch (err) {
+      console.error("[battle-shop-purchase-quote]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-shop-record-purchase ────────────────────────────────────
+  // Auth'd. Called after the on-chain purchase tx confirms. Verifies the
+  // tx by reading hasItem() from the contract via RPC, then writes the
+  // ownership entry to the Firestore mirror.
+  //
+  // Body: { itemId, chain, nonce, txHash }
+  if (req.method === "POST" && action === "battle-shop-record-purchase") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    const { itemId, chain, nonce, txHash } = req.body;
+    if (!itemId || !chain || !nonce || !txHash)
+      return res.status(400).json({ error: "itemId, chain, nonce, txHash required" });
+
+    const chainKey = String(chain).toLowerCase();
+    const shopAddr = BATTLE_SHOP_ADDRESSES[chainKey];
+    const rpcUrl   = RPC_URLS[chainKey];
+    if (!shopAddr || !rpcUrl)
+      return res.status(400).json({ error: `Shop not configured on ${chainKey}` });
+
+    try {
+      // ── Fetch quote for audit + get itemIdBytes32 ──
+      const quotesSnap = await db.collection("battleShopQuotes")
+        .where("nonce", "==", nonce)
+        .where("buyer", "==", bUser.address.toLowerCase())
+        .limit(1)
+        .get();
+      if (quotesSnap.empty)
+        return res.status(404).json({ error: "Quote not found for this nonce" });
+      const quoteDoc  = quotesSnap.docs[0];
+      const quote     = quoteDoc.data();
+      const itemIdBytes32 = quote.itemIdBytes32;
+
+      // ── Verify on-chain state ──
+      const abi = [
+        "function hasItem(address user, bytes32 itemId) view returns (bool)",
+        "function usedNonces(bytes32 n) view returns (bool)",
+      ];
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const contract = new ethers.Contract(shopAddr, abi, provider);
+
+      const [ownsIt, nonceUsed] = await Promise.all([
+        contract.hasItem(bUser.address, itemIdBytes32),
+        contract.usedNonces(nonce),
+      ]);
+
+      if (!ownsIt)
+        return res.status(400).json({
+          error: "On-chain ownership not confirmed. Tx may not have been mined yet.",
+        });
+      if (!nonceUsed)
+        return res.status(400).json({
+          error: "On-chain nonce not marked used. Purchase incomplete.",
+        });
+
+      // ── Write to inventory (upsert; safe on retry) ──
+      const invRef = db
+        .collection("battleShopInventory")
+        .doc(bUser.address.toLowerCase())
+        .collection("items")
+        .doc(itemId);
+      await invRef.set(
+        {
+          itemId,
+          chain:       chainKey,
+          token:       quote.token,
+          price:       quote.price,
+          currency:    quote.currency,
+          purchasedAt: new Date(),
+          txHash,
+          nonce,
+        },
+        { merge: true }
+      );
+
+      // ── Mark quote as used ──
+      await quoteDoc.ref.update({
+        status:      "used",
+        usedAt:      new Date(),
+        txHash,
+      });
+
+      return res.status(200).json({ ok: true, itemId, txHash });
+    } catch (err) {
+      console.error("[battle-shop-record-purchase]", err);
+      return res.status(500).json({ error: err.message });
+    }
   }
 
   // ── POST like ──
@@ -2339,5 +3077,852 @@ export default async function handler(req, res) {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // BATTLE SHOP ADMIN — manage items in battleShopItems collection
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── GET admin-shop-list-all ─────────────────────────────────────────────
+  // Returns ALL items (active + inactive). Public list uses battle-shop-list.
+  if (req.method === "GET" && action === "admin-shop-list-all") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    try {
+      const snap  = await db.collection("battleShopItems").get();
+      const items = [];
+      snap.forEach(doc => {
+        const d = doc.data();
+        items.push({
+          itemId:        doc.id,
+          itemIdBytes32: d.itemIdBytes32 || ethers.keccak256(ethers.toUtf8Bytes(doc.id)),
+          name:          d.name || "",
+          description:   d.description || "",
+          category:      d.category || "cosmetic",
+          rarity:        d.rarity || "common",
+          imageUrl:      d.imageUrl || "",
+          modelUrl:      d.modelUrl || "",
+          priceARCADE:   d.priceARCADE || 0,
+          priceUSDC:     d.priceUSDC || 0,
+          chain:         d.chain || "*",
+          active:        !!d.active,
+          createdAt:     d.createdAt || null,
+          updatedAt:     d.updatedAt || null,
+        });
+      });
+      // Newest first
+      items.sort((a, b) => {
+        const at = a.createdAt?.toMillis?.() || 0;
+        const bt = b.createdAt?.toMillis?.() || 0;
+        return bt - at;
+      });
+      return res.status(200).json({ items });
+    } catch (err) {
+      console.error("[admin-shop-list-all]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST admin-shop-upsert ──────────────────────────────────────────────
+  // Create OR update an item. itemId is the document ID and is immutable
+  // once set. Server always writes the derived itemIdBytes32 (bytes32 for
+  // the contract) alongside — never trust the client for that.
+  if (req.method === "POST" && action === "admin-shop-upsert") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    const {
+      itemId, name, description, category, rarity, imageUrl, modelUrl,
+      priceARCADE, priceUSDC, chain, active,
+    } = req.body;
+
+    // Validation
+    if (!itemId || !/^[a-z0-9_-]+$/.test(itemId))
+      return res.status(400).json({ error: "itemId required — lowercase letters/digits/_/- only" });
+    if (!name || typeof name !== "string" || !name.trim())
+      return res.status(400).json({ error: "name required" });
+    const validCat    = ["gun_skin", "environment", "power_up", "cosmetic"];
+    const validRar    = ["common", "rare", "epic", "legendary"];
+    const validChain  = ["*", "mst", "botchain"];
+    if (!validCat.includes(category))
+      return res.status(400).json({ error: `category must be one of ${validCat.join(", ")}` });
+    if (!validRar.includes(rarity))
+      return res.status(400).json({ error: `rarity must be one of ${validRar.join(", ")}` });
+    if (!validChain.includes(chain))
+      return res.status(400).json({ error: `chain must be one of ${validChain.join(", ")}` });
+    const pA = Number(priceARCADE) || 0;
+    const pU = Number(priceUSDC)   || 0;
+    if (pA < 0 || pU < 0)
+      return res.status(400).json({ error: "Prices cannot be negative" });
+    if (!pA && !pU)
+      return res.status(400).json({ error: "At least one price (ARCADE or USDC) must be > 0" });
+
+    try {
+      const docRef       = db.collection("battleShopItems").doc(itemId);
+      const existingSnap = await docRef.get();
+      const isNew        = !existingSnap.exists;
+      const itemIdBytes32 = ethers.keccak256(ethers.toUtf8Bytes(itemId));
+
+      const payload = {
+        name:          name.trim(),
+        description:   (description || "").trim(),
+        category,
+        rarity,
+        imageUrl:      (imageUrl || "").trim(),
+        modelUrl:      (modelUrl || "").trim(),
+        priceARCADE:   pA,
+        priceUSDC:     pU,
+        chain,
+        active:        active !== false,
+        itemIdBytes32,
+        updatedAt:     new Date(),
+        updatedBy:     user.address.toLowerCase(),
+      };
+      if (isNew) {
+        payload.createdAt = new Date();
+        payload.createdBy = user.address.toLowerCase();
+      }
+
+      await docRef.set(payload, { merge: true });
+
+      // Audit log
+      await db.collection("adminAudit").add({
+        kind:     isNew ? "shopItemCreate" : "shopItemUpdate",
+        admin:    user.address.toLowerCase(),
+        itemId,
+        payload:  { name: payload.name, category, rarity, chain, active: payload.active, priceARCADE: pA, priceUSDC: pU },
+        at:       new Date(),
+      }).catch(err => console.error("[audit] shopItemUpsert log failed:", err));
+
+      return res.status(200).json({ ok: true, isNew, itemId, itemIdBytes32 });
+    } catch (err) {
+      console.error("[admin-shop-upsert]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST admin-shop-delete ──────────────────────────────────────────────
+  // Hard-delete an item. Does NOT touch already-purchased inventory in
+  // battleShopInventory subcollections — users keep what they own.
+  // If you want to hide instead of delete, use setActive(false).
+  if (req.method === "POST" && action === "admin-shop-delete") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    const { itemId } = req.body;
+    if (!itemId) return res.status(400).json({ error: "itemId required" });
+
+    try {
+      const docRef = db.collection("battleShopItems").doc(itemId);
+      const snap   = await docRef.get();
+      if (!snap.exists) return res.status(404).json({ error: "Item not found" });
+
+      await docRef.delete();
+
+      await db.collection("adminAudit").add({
+        kind:   "shopItemDelete",
+        admin:  user.address.toLowerCase(),
+        itemId,
+        at:     new Date(),
+      }).catch(err => console.error("[audit] shopItemDelete log failed:", err));
+
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      console.error("[admin-shop-delete]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST admin-shop-upload-image ────────────────────────────────────────
+  // Upload a shop item image to Firebase Storage. Client sends base64-encoded
+  // image data + filename + contentType; server decodes, uploads to
+  //   gs://<bucket>/battleShopItems/images/<uuid>-<safe-filename>
+  // and returns a public URL for storing in item.imageUrl.
+  //
+  // Constraints:
+  //   - Max 2 MB (post-base64 payload ~2.7 MB, within Vercel's 4.5 MB limit)
+  //   - Only PNG / JPEG / WebP / GIF accepted
+  //
+  // Env: FIREBASE_STORAGE_BUCKET (optional; defaults to <project>.appspot.com)
+  if (req.method === "POST" && action === "admin-shop-upload-image") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    const { filename, base64Data, contentType } = req.body;
+    if (!filename || !base64Data || !contentType)
+      return res.status(400).json({ error: "filename, base64Data, contentType required" });
+
+    const allowedTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"];
+    if (!allowedTypes.includes(contentType.toLowerCase()))
+      return res.status(400).json({ error: `Content type ${contentType} not allowed. Use PNG/JPEG/WebP/GIF` });
+
+    // base64 length * 0.75 ≈ decoded byte size (rough)
+    const binarySize = Math.floor(base64Data.length * 0.75);
+    const MAX_SIZE = 2 * 1024 * 1024; // 2 MB
+    if (binarySize > MAX_SIZE)
+      return res.status(400).json({
+        error: `Image too large (${(binarySize / 1024 / 1024).toFixed(2)}MB). Max 2 MB.`,
+      });
+
+    if (!rateLimit(`shop-upload:${user.address}`, 20, 60_000))
+      return res.status(429).json({ error: "Too many uploads — slow down" });
+
+    try {
+      // Sanitize filename — strip anything that isn't a-zA-Z0-9._-
+      const safeFilename = String(filename)
+        .replace(/[^a-zA-Z0-9._-]/g, "_")
+        .substring(0, 60) || "image";
+
+      const { randomUUID } = await import("crypto");
+      const uniqueId = randomUUID();
+      const path     = `battleShopItems/images/${uniqueId}-${safeFilename}`;
+
+      const bucket = admin.storage().bucket();
+      const file   = bucket.file(path);
+      const buffer = Buffer.from(base64Data, "base64");
+
+      await file.save(buffer, {
+        metadata: {
+          contentType,
+          metadata: {
+            uploadedBy: user.address.toLowerCase(),
+            uploadedAt: new Date().toISOString(),
+            originalFilename: String(filename).substring(0, 200),
+          },
+        },
+        resumable: false,
+      });
+
+      // Uniform bucket-level access (default on .firebasestorage.app buckets)
+      // means file.makePublic() throws. Firebase Storage's own download URL
+      // format works instead — provided rules allow public read on the path
+      // (see the storage.rules block for battleShopItems/**).
+      const encoded   = encodeURIComponent(path);
+      const publicUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encoded}?alt=media`;
+
+      return res.status(200).json({ url: publicUrl, path, size: binarySize });
+    } catch (err) {
+      console.error("[admin-shop-upload-image]", err);
+      // Common cause: storage bucket not enabled in Firebase console
+      const msg = err.message || String(err);
+      if (msg.includes("bucket") || msg.includes("Not Found")) {
+        return res.status(503).json({
+          error: "Firebase Storage bucket not configured. Enable Storage in Firebase console + set FIREBASE_STORAGE_BUCKET env.",
+        });
+      }
+      return res.status(500).json({ error: msg });
+    }
+  }
+
+  // ── POST admin-shop-upload-model ────────────────────────────────────────
+  // Upload a 3D model (.glb only) for a shop item to Firebase Storage.
+  // Returns a public URL for storing in item.modelUrl. Rendered client-side
+  // by BattleShop3DViewer via Google's <model-viewer> web component.
+  //
+  // Constraints:
+  //   - Max 3 MB binary (~4 MB base64 — under Vercel's 4.5 MB body limit)
+  //   - Only .glb accepted (single-file binary GLTF)
+  if (req.method === "POST" && action === "admin-shop-upload-model") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    const { filename, base64Data, contentType } = req.body;
+    if (!filename || !base64Data)
+      return res.status(400).json({ error: "filename and base64Data required" });
+
+    // Browsers send inconsistent content types for .glb — accept common ones
+    // and enforce .glb extension as the source of truth.
+    const nameLower = String(filename).toLowerCase();
+    if (!nameLower.endsWith(".glb"))
+      return res.status(400).json({ error: "Only .glb files supported" });
+
+    const binarySize = Math.floor(base64Data.length * 0.75);
+    const MAX_SIZE = 3 * 1024 * 1024;
+    if (binarySize > MAX_SIZE)
+      return res.status(400).json({
+        error: `Model too large (${(binarySize / 1024 / 1024).toFixed(2)}MB). Max 3 MB — optimize with gltfpack / Blender export settings.`,
+      });
+
+    if (!rateLimit(`shop-upload-model:${user.address}`, 15, 60_000))
+      return res.status(429).json({ error: "Too many uploads — slow down" });
+
+    try {
+      const safeFilename = String(filename)
+        .replace(/[^a-zA-Z0-9._-]/g, "_")
+        .substring(0, 60) || "model.glb";
+
+      const { randomUUID } = await import("crypto");
+      const uniqueId = randomUUID();
+      const path     = `battleShopItems/models/${uniqueId}-${safeFilename}`;
+
+      const bucket = admin.storage().bucket();
+      const file   = bucket.file(path);
+      const buffer = Buffer.from(base64Data, "base64");
+
+      await file.save(buffer, {
+        metadata: {
+          contentType: "model/gltf-binary",  // canonicalize
+          metadata: {
+            uploadedBy: user.address.toLowerCase(),
+            uploadedAt: new Date().toISOString(),
+            originalFilename: String(filename).substring(0, 200),
+            sizeBytes: String(binarySize),
+          },
+        },
+        resumable: false,
+      });
+
+      // Same rationale as image upload — uniform bucket access requires
+      // the Firebase Storage download URL format instead of makePublic().
+      const encoded   = encodeURIComponent(path);
+      const publicUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encoded}?alt=media`;
+
+      return res.status(200).json({ url: publicUrl, path, size: binarySize });
+    } catch (err) {
+      console.error("[admin-shop-upload-model]", err);
+      const msg = err.message || String(err);
+      if (msg.includes("bucket") || msg.includes("Not Found")) {
+        return res.status(503).json({
+          error: "Firebase Storage bucket not configured. Enable Storage in Firebase console + set FIREBASE_STORAGE_BUCKET env.",
+        });
+      }
+      return res.status(500).json({ error: msg });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // GAME THUMBNAIL MIGRATION — Cloudinary → Firebase Storage
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── GET admin-list-storage-files ────────────────────────────────────────
+  // Lists all image files in Firebase Storage. Used by the thumbnail
+  // migration UI to build the picker dropdown.
+  if (req.method === "GET" && action === "admin-list-storage-files") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    try {
+      const bucket = admin.storage().bucket();
+      const [files] = await bucket.getFiles();
+      const items = files
+        .filter(f => /\.(png|jpg|jpeg|webp|gif)$/i.test(f.name))
+        .map(f => {
+          const encoded = encodeURIComponent(f.name);
+          return {
+            name: f.name,
+            url: `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encoded}?alt=media`,
+            size: Number(f.metadata?.size || 0),
+          };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return res.status(200).json({ files: items });
+    } catch (err) {
+      console.error("[admin-list-storage-files]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── GET admin-games-thumbnails ──────────────────────────────────────────
+  // Lists all games with their current thumbnailUrl. Used by migration UI.
+  if (req.method === "GET" && action === "admin-games-thumbnails") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    try {
+      const snap = await db.collection("games").get();
+      const games = [];
+      snap.forEach(doc => {
+        const d = doc.data();
+        games.push({
+          gameId:       doc.id,
+          name:         d.name || "",
+          thumbnailUrl: d.thumbnailUrl || "",
+          status:       d.status || "",
+        });
+      });
+      games.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      return res.status(200).json({ games });
+    } catch (err) {
+      console.error("[admin-games-thumbnails]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST admin-update-game-thumbnail ────────────────────────────────────
+  // Sets a single game's thumbnailUrl. Accepts { gameId, thumbnailUrl }.
+  // Used both per-game save and bulk save (called in a loop from frontend).
+  if (req.method === "POST" && action === "admin-update-game-thumbnail") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    const { gameId, thumbnailUrl } = req.body;
+    if (!gameId || typeof thumbnailUrl !== "string")
+      return res.status(400).json({ error: "gameId and thumbnailUrl required" });
+
+    try {
+      await db.collection("games").doc(String(gameId)).update({
+        thumbnailUrl: thumbnailUrl.trim(),
+        updatedAt:    new Date(),
+      });
+
+      await db.collection("adminAudit").add({
+        kind:         "gameThumbnailUpdate",
+        admin:        user.address.toLowerCase(),
+        gameId:       String(gameId),
+        thumbnailUrl,
+        at:           new Date(),
+      }).catch(err => console.error("[audit] gameThumbnailUpdate:", err));
+
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      console.error("[admin-update-game-thumbnail]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BATTLE PASS — XP, tiers, season claims
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── GET battle-bp-status ────────────────────────────────────────────────
+  // Player-facing: returns current season + player's BP state (XP, tier,
+  // claimed tiers, passType). Used by /battle-pass page + XP sidebar bar.
+  if (req.method === "GET" && action === "battle-bp-status") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    try {
+      const activeSeasonId = await _getActiveSeasonId(db);
+      if (!activeSeasonId)
+        return res.status(200).json({ activeSeason: null, player: null });
+
+      const seasonSnap = await db.collection("battlePassSeasons").doc(activeSeasonId).get();
+      if (!seasonSnap.exists)
+        return res.status(200).json({ activeSeason: null, player: null });
+      const season = seasonSnap.data();
+
+      const bpRef  = db.collection("playerBattlePass").doc(bUser.address.toLowerCase());
+      const bpSnap = await bpRef.get();
+      const bp     = bpSnap.exists ? bpSnap.data() : null;
+
+      const XP_PER_TIER = season.xpPerTier || 500;
+      const MAX_TIER    = season.numTiers  || 50;
+
+      let player;
+      if (!bp || bp.seasonId !== activeSeasonId) {
+        // First time this season — return zeros
+        player = {
+          address: bUser.address.toLowerCase(),
+          totalXP:      bp?.totalXP || 0,
+          seasonId:     activeSeasonId,
+          seasonXP:     0,
+          currentTier:  0,
+          passType:     "free",
+          claimedTiers: [],
+          premiumUnlockedAt: null,
+        };
+      } else {
+        player = {
+          address:      bp.address || bUser.address.toLowerCase(),
+          totalXP:      bp.totalXP || 0,
+          seasonId:     bp.seasonId,
+          seasonXP:     bp.seasonXP || 0,
+          currentTier:  Math.min(MAX_TIER, Math.floor((bp.seasonXP || 0) / XP_PER_TIER)),
+          passType:     bp.passType || "free",
+          claimedTiers: bp.claimedTiers || [],
+          premiumUnlockedAt: bp.premiumUnlockedAt?.toMillis?.() || null,
+        };
+      }
+
+      // Timestamps → ms for easy client formatting
+      const toMs = (t) => (t && typeof t.toMillis === "function" ? t.toMillis() : t || null);
+
+      return res.status(200).json({
+        activeSeason: {
+          seasonId:            season.seasonId || activeSeasonId,
+          name:                season.name,
+          description:         season.description || "",
+          startDate:           toMs(season.startDate),
+          endDate:             toMs(season.endDate),
+          premiumPriceARCADE:  season.premiumPriceARCADE || 100,
+          xpPerTier:           XP_PER_TIER,
+          numTiers:            MAX_TIER,
+          tiers:               season.tiers || [],
+          active:              !!season.active,
+        },
+        player,
+      });
+    } catch (err) {
+      console.error("[battle-bp-status]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-bp-sign-tier-claim ──────────────────────────────────────
+  // Player claims a specific tier's reward. Validates:
+  //   - Season is active
+  //   - Player's currentTier >= requested tier (unlocked)
+  //   - Tier not already claimed
+  //   - Track = "free" OR passType === "premium"
+  //
+  // Returns an ECDSA-signed claim payload identical in shape to
+  // battle-sign-claim. The frontend then calls BattleArena.claim() with the
+  // payload, minting the ARCADE reward. Backend marks tier as claimed only
+  // after battle-bp-record-tier-claim confirms the on-chain tx.
+  //
+  // Body: { tier, track: "free"|"premium", chain }
+  if (req.method === "POST" && action === "battle-bp-sign-tier-claim") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    const { tier, track, chain } = req.body;
+    if (tier == null || !track || !chain)
+      return res.status(400).json({ error: "tier, track, chain required" });
+    if (track !== "free" && track !== "premium")
+      return res.status(400).json({ error: "track must be free or premium" });
+
+    const tierNum  = parseInt(tier);
+    const chainKey = String(chain).toLowerCase();
+
+    const battleArenaAddr = BATTLE_ARENA_ADDRESSES[chainKey];
+    const chainId         = CHAIN_IDS[chainKey];
+    if (!battleArenaAddr || !chainId)
+      return res.status(400).json({ error: `Battle Arena not deployed on ${chainKey}` });
+
+    const pk = process.env.SCORE_SIGNER_PRIVATE_KEY;
+    if (!pk) return res.status(503).json({ error: "Claim signing not configured" });
+
+    if (!rateLimit(`bp-claim:${bUser.address}`, 20, 60_000))
+      return res.status(429).json({ error: "Too many claim requests" });
+
+    try {
+      const activeSeasonId = await _getActiveSeasonId(db);
+      if (!activeSeasonId) return res.status(404).json({ error: "No active season" });
+
+      const seasonSnap = await db.collection("battlePassSeasons").doc(activeSeasonId).get();
+      if (!seasonSnap.exists) return res.status(404).json({ error: "Season config missing" });
+      const season = seasonSnap.data();
+
+      const XP_PER_TIER = season.xpPerTier || 500;
+      const MAX_TIER    = season.numTiers  || 50;
+      if (!(tierNum >= 1 && tierNum <= MAX_TIER))
+        return res.status(400).json({ error: `Tier must be 1-${MAX_TIER}` });
+
+      const tierConfig = (season.tiers || []).find(t => t.tier === tierNum);
+      if (!tierConfig) return res.status(404).json({ error: `Tier ${tierNum} not configured` });
+
+      const reward = tierConfig[track] || {};
+      const arcadeAmount = Number(reward.arcade) || 0;
+      if (arcadeAmount <= 0)
+        return res.status(400).json({ error: `Tier ${tierNum} ${track} has no ARCADE reward` });
+
+      // Player state check
+      const bpRef  = db.collection("playerBattlePass").doc(bUser.address.toLowerCase());
+      const bpSnap = await bpRef.get();
+      if (!bpSnap.exists) return res.status(409).json({ error: "No BP progress yet" });
+      const bp = bpSnap.data();
+
+      if (bp.seasonId !== activeSeasonId)
+        return res.status(409).json({ error: "Season mismatch — refresh page" });
+
+      const currentTier = Math.min(MAX_TIER, Math.floor((bp.seasonXP || 0) / XP_PER_TIER));
+      if (tierNum > currentTier)
+        return res.status(409).json({ error: `Tier ${tierNum} not unlocked yet` });
+
+      if (track === "premium" && bp.passType !== "premium")
+        return res.status(403).json({ error: "Premium not unlocked" });
+
+      const claimKey = `${activeSeasonId}:${tierNum}:${track}`;
+      if ((bp.claimedTiers || []).includes(claimKey))
+        return res.status(409).json({ error: "Tier reward already claimed" });
+
+      // Derive sessionId for BattleArena.claim() — must be unique per
+      // (season, tier, track, address) so contract's claimedSessions map
+      // blocks replays exactly like it does for regular battle sessions.
+      const sessionIdSource = `bp:${activeSeasonId}:${tierNum}:${track}:${bUser.address.toLowerCase()}`;
+      const sessionIdBytes32 = ethers.keccak256(ethers.toUtf8Bytes(sessionIdSource));
+
+      const player      = bUser.address;
+      const chainIdBn   = BigInt(chainId);
+      const arcadeBn    = BigInt(arcadeAmount);
+
+      const signerWallet = new ethers.Wallet(pk);
+      const messageHash  = ethers.solidityPackedKeccak256(
+        ["address", "bytes32", "uint256", "address", "uint256"],
+        [player, sessionIdBytes32, arcadeBn, battleArenaAddr, chainIdBn]
+      );
+      const signature = await signerWallet.signMessage(ethers.getBytes(messageHash));
+
+      return res.status(200).json({
+        sessionIdBytes32,
+        dollars:     arcadeAmount.toString(),
+        signature,
+        battleArena: battleArenaAddr,
+        chainId,
+        tier:        tierNum,
+        track,
+        seasonId:    activeSeasonId,
+        claimKey,
+      });
+    } catch (err) {
+      console.error("[battle-bp-sign-tier-claim]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-bp-record-tier-claim ────────────────────────────────────
+  // After the on-chain BattleArena.claim() tx confirms, frontend calls this
+  // to mark the tier as claimed in Firestore. Body: { tier, track, txHash }.
+  if (req.method === "POST" && action === "battle-bp-record-tier-claim") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    const { tier, track, txHash } = req.body;
+    if (tier == null || !track || !txHash)
+      return res.status(400).json({ error: "tier, track, txHash required" });
+
+    try {
+      const activeSeasonId = await _getActiveSeasonId(db);
+      if (!activeSeasonId) return res.status(404).json({ error: "No active season" });
+      const claimKey = `${activeSeasonId}:${parseInt(tier)}:${track}`;
+
+      const bpRef = db.collection("playerBattlePass").doc(bUser.address.toLowerCase());
+      await bpRef.update({
+        claimedTiers: admin.firestore.FieldValue.arrayUnion(claimKey),
+        updatedAt: new Date(),
+      });
+
+      await db.collection("battleBPClaimLog").add({
+        address:  bUser.address.toLowerCase(),
+        seasonId: activeSeasonId,
+        tier:     parseInt(tier),
+        track,
+        claimKey,
+        txHash,
+        at:       new Date(),
+      }).catch(() => {});
+
+      return res.status(200).json({ ok: true, claimKey });
+    } catch (err) {
+      console.error("[battle-bp-record-tier-claim]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-bp-unlock-premium (MVP — Firestore-only) ────────────────
+  // Marks the player as premium for the active season. In v2 this will be
+  // gated by an on-chain ARCADE payment via the BattleShop purchase flow.
+  // For MVP: any authenticated call succeeds so we can test the UX end-to-end.
+  // Admin can lock this behind an env flag when going live.
+  if (req.method === "POST" && action === "battle-bp-unlock-premium") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    if (process.env.BATTLE_BP_ALLOW_FREE_PREMIUM_UNLOCK !== "1")
+      return res.status(503).json({ error: "Premium unlock is coming in the next release (on-chain payment flow — Turn 2)." });
+
+    try {
+      const activeSeasonId = await _getActiveSeasonId(db);
+      if (!activeSeasonId) return res.status(404).json({ error: "No active season" });
+
+      const bpRef = db.collection("playerBattlePass").doc(bUser.address.toLowerCase());
+      await bpRef.set({
+        address:  bUser.address.toLowerCase(),
+        seasonId: activeSeasonId,
+        passType: "premium",
+        premiumUnlockedAt: new Date(),
+        updatedAt: new Date(),
+      }, { merge: true });
+
+      return res.status(200).json({ ok: true, passType: "premium" });
+    } catch (err) {
+      console.error("[battle-bp-unlock-premium]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BATTLE PASS ADMIN
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── GET admin-bp-seasons-list ───────────────────────────────────────────
+  if (req.method === "GET" && action === "admin-bp-seasons-list") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+    try {
+      const snap = await db.collection("battlePassSeasons").get();
+      const seasons = [];
+      const toMs = (t) => (t && typeof t.toMillis === "function" ? t.toMillis() : t || null);
+      snap.forEach(doc => {
+        const d = doc.data();
+        seasons.push({
+          seasonId:            doc.id,
+          name:                d.name || "",
+          description:         d.description || "",
+          startDate:           toMs(d.startDate),
+          endDate:             toMs(d.endDate),
+          premiumPriceARCADE:  d.premiumPriceARCADE || 100,
+          xpPerTier:           d.xpPerTier || 500,
+          numTiers:            d.numTiers  || 50,
+          active:              !!d.active,
+          tierCount:           (d.tiers || []).length,
+        });
+      });
+      seasons.sort((a, b) => (b.startDate || 0) - (a.startDate || 0));
+      return res.status(200).json({ seasons });
+    } catch (err) {
+      console.error("[admin-bp-seasons-list]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST admin-bp-create-default-season ─────────────────────────────────
+  // One-click season seeder — generates a 30-day season with 50 tiers of
+  // escalating ARCADE rewards. Handy for testing + reasonable production
+  // default. Items assigned in Turn 2 via editor UI.
+  if (req.method === "POST" && action === "admin-bp-create-default-season") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    const { name, description, durationDays, numTiers, xpPerTier, premiumPriceARCADE } = req.body;
+
+    try {
+      const { randomUUID } = await import("crypto");
+      const seasonId    = `season_${Date.now()}_${randomUUID().substring(0, 6)}`;
+      const now         = new Date();
+      const days        = Number(durationDays) || 30;
+      const endDate     = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+      const nT          = Math.max(10, Math.min(100, Number(numTiers) || 50));
+      const xpT         = Math.max(100, Math.min(5000, Number(xpPerTier) || 500));
+
+      // Default tier rewards — escalating ARCADE amounts.
+      // Free track: 5-50 ARCADE gradient; Premium track: 3x + item slots.
+      const tiers = [];
+      for (let i = 1; i <= nT; i++) {
+        const isMilestone   = i % 5 === 0;
+        const isBigMilestone = i % 10 === 0;
+        const isFinal        = i === nT;
+        const freeArcade     = Math.round(3 + (i / nT) * 47);           // 3 → 50
+        const premiumArcade  = Math.round(10 + (i / nT) * 140);         // 10 → 150
+        tiers.push({
+          tier: i,
+          free: {
+            arcade: freeArcade,
+            itemId: "",   // Turn 2 — attach shop items
+          },
+          premium: {
+            arcade: isFinal ? premiumArcade * 3 : (isBigMilestone ? premiumArcade * 2 : premiumArcade),
+            itemId: "",
+          },
+          isMilestone,
+          isBigMilestone,
+          isFinal,
+        });
+      }
+
+      await db.collection("battlePassSeasons").doc(seasonId).set({
+        seasonId,
+        name:                name        || `Season ${new Date().toLocaleDateString()}`,
+        description:         description || "",
+        startDate:           now,
+        endDate,
+        premiumPriceARCADE:  Number(premiumPriceARCADE) || 100,
+        xpPerTier:           xpT,
+        numTiers:            nT,
+        active:              false,   // admin activates separately
+        tiers,
+        createdAt:           now,
+        createdBy:           user.address.toLowerCase(),
+      });
+
+      await db.collection("adminAudit").add({
+        kind: "bpSeasonCreate", admin: user.address.toLowerCase(),
+        seasonId, at: new Date(),
+      }).catch(() => {});
+
+      return res.status(200).json({ ok: true, seasonId });
+    } catch (err) {
+      console.error("[admin-bp-create-default-season]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST admin-bp-set-active-season ─────────────────────────────────────
+  if (req.method === "POST" && action === "admin-bp-set-active-season") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+
+    const { seasonId } = req.body;
+    if (!seasonId) return res.status(400).json({ error: "seasonId required" });
+
+    try {
+      // Deactivate all currently-active seasons
+      const activeSnap = await db.collection("battlePassSeasons")
+        .where("active", "==", true).get();
+      const batch = db.batch();
+      activeSnap.forEach(doc => batch.update(doc.ref, { active: false, updatedAt: new Date() }));
+
+      const targetRef = db.collection("battlePassSeasons").doc(seasonId);
+      const targetSnap = await targetRef.get();
+      if (!targetSnap.exists) return res.status(404).json({ error: "Season not found" });
+      batch.update(targetRef, { active: true, updatedAt: new Date() });
+      await batch.commit();
+
+      await db.collection("battlePassActive").doc("config").set({
+        activeSeasonId: seasonId,
+        updatedAt: new Date(),
+        updatedBy: user.address.toLowerCase(),
+      }, { merge: true });
+
+      return res.status(200).json({ ok: true, activeSeasonId: seasonId });
+    } catch (err) {
+      console.error("[admin-bp-set-active-season]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST admin-bp-delete-season ─────────────────────────────────────────
+  if (req.method === "POST" && action === "admin-bp-delete-season") {
+    if (!(await checkOnChainAdmin(user.address)))
+      return res.status(403).json({ error: "Admin only" });
+    const { seasonId } = req.body;
+    if (!seasonId) return res.status(400).json({ error: "seasonId required" });
+    try {
+      await db.collection("battlePassSeasons").doc(seasonId).delete();
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      console.error("[admin-bp-delete-season]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
   return res.status(400).json({ error: "Invalid action" });
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// BP helpers (outside handler to keep them warm across invocations)
+// ═════════════════════════════════════════════════════════════════════════
+let _bpActiveCache = { seasonId: null, at: 0 };
+async function _getActiveSeasonId(db) {
+  // 30-sec in-memory cache to save Firestore reads on hot paths (battle-round)
+  if (_bpActiveCache.seasonId && Date.now() - _bpActiveCache.at < 30_000) {
+    return _bpActiveCache.seasonId;
+  }
+  try {
+    const cfg = await db.collection("battlePassActive").doc("config").get();
+    if (cfg.exists) {
+      const id = cfg.data().activeSeasonId;
+      _bpActiveCache = { seasonId: id, at: Date.now() };
+      return id;
+    }
+    // Fallback: query battlePassSeasons where active=true
+    const snap = await db.collection("battlePassSeasons").where("active", "==", true).limit(1).get();
+    if (!snap.empty) {
+      const id = snap.docs[0].id;
+      _bpActiveCache = { seasonId: id, at: Date.now() };
+      return id;
+    }
+  } catch (err) {
+    console.error("[_getActiveSeasonId]", err);
+  }
+  return null;
 }

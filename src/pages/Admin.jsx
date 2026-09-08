@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAccount, usePublicClient } from "wagmi";
 import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
 import { wagmiAdapter } from "../Providers";
@@ -142,6 +142,44 @@ export default function Admin() {
   const [taskonSaving,       setTaskonSaving]       = useState(null); // chain | null
   const [taskonDrafts,       setTaskonDrafts]       = useState({});   // chain → { enabled, questId, campaignUrl }
   const [taskonSaveMsg,      setTaskonSaveMsg]      = useState({});   // chain → success/error string
+
+  // ── Battle Shop admin state ─────────────────────────────────────────
+  // Firestore doc `battleShopItems/{itemId}` — one doc per shop item.
+  // Admin creates/edits items here; frontend BattleShopOverlay reads
+  // the same collection filtered by active=true.
+  const [shopItems,        setShopItems]        = useState([]);
+  const [shopLoading,      setShopLoading]      = useState(false);
+  const [shopMsg,          setShopMsg]          = useState("");
+  const [shopFilterCat,    setShopFilterCat]    = useState("all");
+  const [shopFilterChain,  setShopFilterChain]  = useState("all");
+  const [shopEditingItem,  setShopEditingItem]  = useState(null); // item obj or "new" or null
+  const [shopSaving,       setShopSaving]       = useState(false);
+  const [shopDeletingId,   setShopDeletingId]   = useState(null);
+
+  // ── Game Thumbnail migration state ─────────────────────────────────
+  // Fixes the Cloudinary → Firebase Storage URL migration. Fetches all
+  // games + all Storage files, auto-suggests a match by fuzzy name, and
+  // lets admin confirm + bulk save.
+  const [thumbGames,    setThumbGames]    = useState([]);   // [{ gameId, name, thumbnailUrl, status }]
+  const [thumbFiles,    setThumbFiles]    = useState([]);   // [{ name, url, size }]
+  const [thumbLoading,  setThumbLoading]  = useState(false);
+  const [thumbMsg,      setThumbMsg]      = useState("");
+  const [thumbPicks,    setThumbPicks]    = useState({});   // { gameId: url }
+  const [thumbSaving,   setThumbSaving]   = useState(false);
+  const [thumbSavingOne, setThumbSavingOne] = useState(null); // gameId currently saving
+
+  // ── Battle Pass admin state ────────────────────────────────────────
+  const [bpSeasons,     setBpSeasons]     = useState([]);
+  const [bpLoading,     setBpLoading]     = useState(false);
+  const [bpMsg,         setBpMsg]         = useState("");
+  const [bpCreating,    setBpCreating]    = useState(false);
+  const [bpActivating,  setBpActivating]  = useState(null); // seasonId activating
+  const [bpDeleting,    setBpDeleting]    = useState(null); // seasonId deleting
+  const [bpShowCreate,  setBpShowCreate]  = useState(false);
+  const [bpForm,        setBpForm]        = useState({
+    name: "", description: "", durationDays: 30,
+    numTiers: 50, xpPerTier: 500, premiumPriceARCADE: 100,
+  });
 
   const isAdmin = address?.toLowerCase() === ADMIN_ADDRESS?.toLowerCase();
 
@@ -409,6 +447,317 @@ export default function Admin() {
     if (isAdmin && activeTab === "taskon") fetchTaskonConfigs();
   }, [isAdmin, activeTab]);
 
+  // ─────────────────────────────────────────────────────────────────────
+  // Battle Shop admin actions
+  // ─────────────────────────────────────────────────────────────────────
+  const fetchShopItems = async () => {
+    setShopLoading(true);
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-shop-list-all", {
+        headers: { Authorization: `Bearer ${jwt}` },
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Failed to load items");
+      setShopItems(d.items || []);
+    } catch (e) {
+      console.error(e);
+      setShopMsg("❌ " + e.message);
+    } finally {
+      setShopLoading(false);
+    }
+  };
+
+  const saveShopItem = async (item) => {
+    setShopSaving(true);
+    setShopMsg("");
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-shop-upsert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify(item),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Save failed");
+      setShopMsg("✅ Item saved");
+      setShopEditingItem(null);
+      await fetchShopItems();
+      setTimeout(() => setShopMsg(""), 3000);
+    } catch (e) {
+      console.error(e);
+      setShopMsg("❌ " + e.message);
+    } finally {
+      setShopSaving(false);
+    }
+  };
+
+  const deleteShopItem = async (itemId) => {
+    if (!window.confirm(`Delete item "${itemId}"? This cannot be undone.`)) return;
+    setShopDeletingId(itemId);
+    setShopMsg("");
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-shop-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ itemId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Delete failed");
+      setShopMsg("✅ Item deleted");
+      await fetchShopItems();
+      setTimeout(() => setShopMsg(""), 3000);
+    } catch (e) {
+      console.error(e);
+      setShopMsg("❌ " + e.message);
+    } finally {
+      setShopDeletingId(null);
+    }
+  };
+
+  const toggleShopItemActive = async (item) => {
+    await saveShopItem({ ...item, active: !item.active });
+  };
+
+  useEffect(() => {
+    if (isAdmin && activeTab === "shop") fetchShopItems();
+  }, [isAdmin, activeTab]);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Game Thumbnail migration
+  // ─────────────────────────────────────────────────────────────────────
+
+  // Normalize a string for fuzzy comparison: lowercase + strip separators
+  const normalizeStr = (s) => String(s || "").toLowerCase().replace(/[\s\-_.]+/g, "");
+
+  // Score how well a filename matches a game name (higher = better).
+  // Returns 0 if no meaningful match.
+  const matchScore = (gameName, filename) => {
+    const g = normalizeStr(gameName);
+    const f = normalizeStr(filename.replace(/\.(png|jpg|jpeg|webp|gif)$/i, ""));
+    if (!g || !f) return 0;
+    // Full substring match — best
+    if (f.includes(g)) return 100 + g.length;
+    if (g.includes(f)) return 90 + f.length;
+    // Prefix match — good
+    const prefix = g.substring(0, Math.min(g.length, 6));
+    if (prefix.length >= 3 && f.startsWith(prefix)) return 60 + prefix.length;
+    // Any 4-char common chunk — weak match
+    for (let i = 0; i <= g.length - 4; i++) {
+      const chunk = g.substring(i, i + 4);
+      if (f.includes(chunk)) return 20 + chunk.length;
+    }
+    return 0;
+  };
+
+  const suggestFile = (gameName, files) => {
+    let best = null;
+    let bestScore = 0;
+    for (const f of files) {
+      const s = matchScore(gameName, f.name);
+      if (s > bestScore) { bestScore = s; best = f; }
+    }
+    return bestScore > 0 ? best : null;
+  };
+
+  const fetchThumbnailMigrationData = async () => {
+    setThumbLoading(true);
+    setThumbMsg("");
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const [gRes, fRes] = await Promise.all([
+        fetch("/api/games?action=admin-games-thumbnails", {
+          headers: { Authorization: `Bearer ${jwt}` },
+        }),
+        fetch("/api/games?action=admin-list-storage-files", {
+          headers: { Authorization: `Bearer ${jwt}` },
+        }),
+      ]);
+      const gData = await gRes.json().catch(() => ({}));
+      const fData = await fRes.json().catch(() => ({}));
+      if (!gRes.ok) throw new Error(gData.error || "Failed to load games");
+      if (!fRes.ok) throw new Error(fData.error || "Failed to load files");
+
+      const games = gData.games || [];
+      const files = fData.files || [];
+      setThumbGames(games);
+      setThumbFiles(files);
+
+      // Auto-suggest picks — only for games whose current thumbnailUrl looks
+      // broken (empty, cloudinary, or not a firebasestorage.googleapis URL).
+      const picks = {};
+      for (const g of games) {
+        const cur = g.thumbnailUrl || "";
+        const looksBroken =
+          !cur ||
+          cur.includes("res.cloudinary.com") ||
+          !cur.includes("firebasestorage.googleapis.com");
+        if (looksBroken) {
+          const suggested = suggestFile(g.name, files);
+          if (suggested) picks[g.gameId] = suggested.url;
+        }
+      }
+      setThumbPicks(picks);
+    } catch (e) {
+      console.error(e);
+      setThumbMsg("❌ " + e.message);
+    } finally {
+      setThumbLoading(false);
+    }
+  };
+
+  const saveOneThumbnail = async (gameId) => {
+    const url = thumbPicks[gameId];
+    if (!url) return;
+    setThumbSavingOne(gameId);
+    setThumbMsg("");
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-update-game-thumbnail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ gameId, thumbnailUrl: url }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Save failed");
+      // Update local game's thumbnailUrl so UI reflects the change without refetch
+      setThumbGames(prev => prev.map(g => g.gameId === gameId ? { ...g, thumbnailUrl: url } : g));
+      setThumbMsg(`✅ Saved thumbnail for game #${gameId}`);
+      setTimeout(() => setThumbMsg(""), 2500);
+    } catch (e) {
+      console.error(e);
+      setThumbMsg("❌ " + e.message);
+    } finally {
+      setThumbSavingOne(null);
+    }
+  };
+
+  const saveAllThumbnails = async () => {
+    const entries = Object.entries(thumbPicks).filter(([, url]) => !!url);
+    if (entries.length === 0) return;
+    if (!window.confirm(`Save ${entries.length} thumbnail(s)? This will update Firestore.`)) return;
+
+    setThumbSaving(true);
+    setThumbMsg("");
+    let ok = 0, fail = 0;
+    const jwt = localStorage.getItem("arcadex_jwt");
+    for (const [gameId, url] of entries) {
+      try {
+        const r = await fetch("/api/games?action=admin-update-game-thumbnail", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+          body: JSON.stringify({ gameId, thumbnailUrl: url }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        setThumbGames(prev => prev.map(g => g.gameId === gameId ? { ...g, thumbnailUrl: url } : g));
+        ok++;
+      } catch (err) {
+        console.error("save fail", gameId, err);
+        fail++;
+      }
+    }
+    setThumbSaving(false);
+    setThumbMsg(fail === 0 ? `✅ Saved ${ok} thumbnail(s)` : `⚠ ${ok} saved, ${fail} failed`);
+    setTimeout(() => setThumbMsg(""), 5000);
+  };
+
+  useEffect(() => {
+    if (isAdmin && activeTab === "thumbnails") fetchThumbnailMigrationData();
+  }, [isAdmin, activeTab]);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Battle Pass admin
+  // ─────────────────────────────────────────────────────────────────────
+  const fetchBpSeasons = async () => {
+    setBpLoading(true); setBpMsg("");
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-bp-seasons-list", {
+        headers: { Authorization: `Bearer ${jwt}` },
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Failed to load seasons");
+      setBpSeasons(d.seasons || []);
+    } catch (e) {
+      setBpMsg("❌ " + e.message);
+    } finally {
+      setBpLoading(false);
+    }
+  };
+
+  const createBpSeason = async () => {
+    if (!bpForm.name.trim()) { setBpMsg("❌ Name required"); return; }
+    setBpCreating(true); setBpMsg("");
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-bp-create-default-season", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify(bpForm),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Create failed");
+      setBpMsg(`✅ Season created (${d.seasonId})`);
+      setBpShowCreate(false);
+      setBpForm({ name: "", description: "", durationDays: 30, numTiers: 50, xpPerTier: 500, premiumPriceARCADE: 100 });
+      await fetchBpSeasons();
+      setTimeout(() => setBpMsg(""), 3000);
+    } catch (e) {
+      setBpMsg("❌ " + e.message);
+    } finally {
+      setBpCreating(false);
+    }
+  };
+
+  const activateBpSeason = async (seasonId) => {
+    setBpActivating(seasonId); setBpMsg("");
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-bp-set-active-season", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ seasonId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Activate failed");
+      setBpMsg("✅ Season activated");
+      await fetchBpSeasons();
+      setTimeout(() => setBpMsg(""), 3000);
+    } catch (e) {
+      setBpMsg("❌ " + e.message);
+    } finally {
+      setBpActivating(null);
+    }
+  };
+
+  const deleteBpSeason = async (seasonId) => {
+    if (!window.confirm(`Delete season "${seasonId}"? Cannot be undone.`)) return;
+    setBpDeleting(seasonId); setBpMsg("");
+    try {
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/games?action=admin-bp-delete-season", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ seasonId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Delete failed");
+      setBpMsg("✅ Season deleted");
+      await fetchBpSeasons();
+      setTimeout(() => setBpMsg(""), 3000);
+    } catch (e) {
+      setBpMsg("❌ " + e.message);
+    } finally {
+      setBpDeleting(null);
+    }
+  };
+
+  useEffect(() => {
+    if (isAdmin && activeTab === "battlepass") fetchBpSeasons();
+  }, [isAdmin, activeTab]);
+
+
 
   const approveGame = async (game) => {
     setLoading(true);
@@ -656,9 +1005,12 @@ export default function Admin() {
               { id: "creators", label: `👤 Creators (${creators.length})`, color: "#a67fff" },
             ]},
             { group: "System", color: "#ff4488", tabs: [
-              { id: "flags",     label: `🚩 Flags & Bans`,  color: "#ff4488" },
-              { id: "taskon",    label: `🎯 TaskOn Config`, color: "#00d4ff" },
-              { id: "analytics", label: `📊 Analytics`,     color: "#00d4ff" },
+              { id: "shop",         label: `🛒 Shop Items`,       color: "#ffb700" },
+              { id: "battlepass",   label: `⚡ Battle Pass`,       color: "#ffb700" },
+              { id: "thumbnails",   label: `🖼️ Game Thumbnails`,   color: "#00e5ff" },
+              { id: "flags",        label: `🚩 Flags & Bans`,      color: "#ff4488" },
+              { id: "taskon",       label: `🎯 TaskOn Config`,     color: "#00d4ff" },
+              { id: "analytics",    label: `📊 Analytics`,         color: "#00d4ff" },
             ]},
           ].map(g => (
             <div key={g.group} style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
@@ -669,6 +1021,474 @@ export default function Admin() {
             </div>
           ))}
         </div>
+
+        {/* ── SHOP ITEMS TAB ── */}
+        {activeTab === "shop" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <h2 style={{ margin: 0, fontFamily: P.orb, fontSize: 16, fontWeight: 700, color: "#ffb700", letterSpacing: "1.2px" }}>
+                  🛒 BATTLE SHOP ITEMS
+                </h2>
+                <span style={{ padding: "3px 8px", background: "rgba(255,183,0,0.15)", border: "1px solid rgba(255,183,0,0.3)", borderRadius: 4, fontFamily: P.raj, fontSize: 10, color: "#ffb700", fontWeight: 700 }}>
+                  {shopItems.length} items
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <select
+                  value={shopFilterCat}
+                  onChange={(e) => setShopFilterCat(e.target.value)}
+                  style={{ padding: "6px 10px", background: P.s2, border: `1px solid ${P.pb}`, borderRadius: 5, color: "#c8b9ff", fontFamily: P.raj, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                >
+                  <option value="all">All categories</option>
+                  <option value="gun_skin">Gun Skins</option>
+                  <option value="environment">Environments</option>
+                  <option value="power_up">Power Ups</option>
+                  <option value="cosmetic">Cosmetics</option>
+                </select>
+                <select
+                  value={shopFilterChain}
+                  onChange={(e) => setShopFilterChain(e.target.value)}
+                  style={{ padding: "6px 10px", background: P.s2, border: `1px solid ${P.pb}`, borderRadius: 5, color: "#c8b9ff", fontFamily: P.raj, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                >
+                  <option value="all">All chains</option>
+                  <option value="*">All (both)</option>
+                  <option value="mst">MST only</option>
+                  <option value="botchain">BOTChain only</option>
+                </select>
+                <button
+                  onClick={() => setShopEditingItem("new")}
+                  style={{ padding: "7px 14px", background: "linear-gradient(135deg,#ffb700,#ff8800)", border: "none", borderRadius: 6, color: "#000", fontFamily: P.raj, fontWeight: 700, fontSize: 11, cursor: "pointer", letterSpacing: "1px", textTransform: "uppercase", boxShadow: "0 0 12px rgba(255,183,0,0.4)" }}
+                >
+                  + New Item
+                </button>
+                <button
+                  onClick={fetchShopItems}
+                  disabled={shopLoading}
+                  style={{ padding: "7px 14px", background: "transparent", border: `1px solid ${P.pb}`, borderRadius: 6, color: "#a67fff", fontFamily: P.raj, fontWeight: 700, fontSize: 11, cursor: shopLoading ? "not-allowed" : "pointer", letterSpacing: "1px", textTransform: "uppercase", opacity: shopLoading ? 0.5 : 1 }}
+                >
+                  {shopLoading ? "…" : "↻ Refresh"}
+                </button>
+              </div>
+            </div>
+
+            {shopMsg && (
+              <div style={{ marginBottom: 12, padding: "10px 14px", background: shopMsg.startsWith("✅") ? "rgba(0,255,136,0.08)" : "rgba(255,68,68,0.08)", border: `1px solid ${shopMsg.startsWith("✅") ? "rgba(0,255,136,0.3)" : "rgba(255,68,68,0.3)"}`, borderRadius: 6, fontFamily: P.raj, fontSize: 12, color: shopMsg.startsWith("✅") ? "#00FF88" : "#ff4444", fontWeight: 700 }}>
+                {shopMsg}
+              </div>
+            )}
+
+            {shopLoading && shopItems.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", fontFamily: P.raj, fontSize: 13, color: "#7755aa" }}>Loading items…</div>
+            ) : shopItems.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", fontFamily: P.raj, fontSize: 13, color: "#7755aa" }}>
+                No items yet. Click <b>+ New Item</b> to add the first one.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+                {shopItems
+                  .filter(it => shopFilterCat === "all" || it.category === shopFilterCat)
+                  .filter(it => shopFilterChain === "all" || (it.chain || "*") === shopFilterChain)
+                  .map(item => {
+                    const rarityColors = {
+                      common:    "#7c8ca7",
+                      rare:      "#00e5ff",
+                      epic:      "#8b5cf6",
+                      legendary: "#ffb700",
+                    };
+                    const rc = rarityColors[item.rarity] || rarityColors.common;
+                    return (
+                      <div
+                        key={item.itemId}
+                        style={{
+                          background: P.s1,
+                          border: `1px solid ${item.active ? rc : "rgba(120,120,140,0.2)"}`,
+                          borderRadius: 10,
+                          padding: 12,
+                          opacity: item.active ? 1 : 0.55,
+                          boxShadow: item.active ? `0 0 12px ${rc}22` : "none",
+                          display: "flex", flexDirection: "column", gap: 8,
+                        }}
+                      >
+                        <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                          <div style={{ width: 60, height: 60, borderRadius: 6, background: `radial-gradient(circle, ${rc}22, transparent)`, border: `1px solid ${rc}44`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, overflow: "hidden" }}>
+                            {item.imageUrl ? (
+                              <img src={item.imageUrl} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} onError={(e) => { e.target.style.display = "none"; }} />
+                            ) : (
+                              <span style={{ fontSize: 24 }}>
+                                {item.category === "gun_skin" ? "🔫" : item.category === "environment" ? "🌌" : item.category === "power_up" ? "⚡" : "✨"}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontFamily: P.orb, fontWeight: 700, fontSize: 13, color: "#fff", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
+                              <span style={{ padding: "1px 6px", background: rc, borderRadius: 3, fontFamily: P.orb, fontSize: 8, fontWeight: 800, color: "#000", letterSpacing: "1px" }}>{(item.rarity || "common").toUpperCase()}</span>
+                              <span style={{ padding: "1px 6px", background: "rgba(139,92,246,0.2)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: 3, fontFamily: P.raj, fontSize: 9, fontWeight: 700, color: "#c4b5fd", letterSpacing: "0.5px" }}>{item.category?.replace("_", " ").toUpperCase() || "COSMETIC"}</span>
+                              <span style={{ padding: "1px 6px", background: "rgba(0,229,255,0.15)", border: "1px solid rgba(0,229,255,0.3)", borderRadius: 3, fontFamily: P.raj, fontSize: 9, fontWeight: 700, color: "#7ff5ff", letterSpacing: "0.5px" }}>{(item.chain || "*").toUpperCase()}</span>
+                            </div>
+                            <div style={{ fontFamily: P.raj, fontSize: 10, color: "#8877bb", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>id: {item.itemId}</div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 8px", background: "rgba(0,0,0,0.3)", borderRadius: 4 }}>
+                          {item.priceARCADE > 0 && (
+                            <span style={{ fontFamily: P.orb, fontSize: 11, fontWeight: 700, color: "#ffb700" }}>{item.priceARCADE} ARCADE</span>
+                          )}
+                          {item.priceARCADE > 0 && item.priceUSDC > 0 && (
+                            <span style={{ color: "#5533aa" }}>·</span>
+                          )}
+                          {item.priceUSDC > 0 && (
+                            <span style={{ fontFamily: P.orb, fontSize: 11, fontWeight: 700, color: "#00e5ff" }}>{item.priceUSDC} USDC</span>
+                          )}
+                          {!item.priceARCADE && !item.priceUSDC && (
+                            <span style={{ fontFamily: P.raj, fontSize: 10, color: "#ff4444" }}>No price set</span>
+                          )}
+                        </div>
+
+                        <div style={{ display: "flex", gap: 6, marginTop: "auto" }}>
+                          <button
+                            onClick={() => toggleShopItemActive(item)}
+                            disabled={shopSaving}
+                            style={{ flex: 1, padding: "6px", background: item.active ? "rgba(0,255,136,0.1)" : "rgba(120,120,140,0.15)", border: `1px solid ${item.active ? "rgba(0,255,136,0.4)" : "rgba(120,120,140,0.3)"}`, borderRadius: 5, color: item.active ? "#00FF88" : "#8877bb", fontFamily: P.raj, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px", textTransform: "uppercase" }}
+                          >
+                            {item.active ? "✓ Active" : "○ Inactive"}
+                          </button>
+                          <button
+                            onClick={() => setShopEditingItem(item)}
+                            style={{ flex: 1, padding: "6px", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.4)", borderRadius: 5, color: "#c4b5fd", fontFamily: P.raj, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px", textTransform: "uppercase" }}
+                          >
+                            ✎ Edit
+                          </button>
+                          <button
+                            onClick={() => deleteShopItem(item.itemId)}
+                            disabled={shopDeletingId === item.itemId}
+                            style={{ padding: "6px 10px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.3)", borderRadius: 5, color: "#ff4444", fontFamily: P.raj, fontSize: 10, fontWeight: 700, cursor: shopDeletingId === item.itemId ? "not-allowed" : "pointer", letterSpacing: "0.5px", textTransform: "uppercase", opacity: shopDeletingId === item.itemId ? 0.5 : 1 }}
+                          >
+                            {shopDeletingId === item.itemId ? "…" : "🗑"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
+
+            {/* ── Create / Edit Modal ── */}
+            {shopEditingItem && (
+              <ShopItemModal
+                item={shopEditingItem === "new" ? null : shopEditingItem}
+                onSave={saveShopItem}
+                onClose={() => setShopEditingItem(null)}
+                saving={shopSaving}
+              />
+            )}
+          </div>
+        )}
+
+        {/* ── BATTLE PASS TAB ── */}
+        {activeTab === "battlepass" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <h2 style={{ margin: 0, fontFamily: P.orb, fontSize: 16, fontWeight: 700, color: "#ffb700", letterSpacing: "1.2px" }}>
+                  ⚡ BATTLE PASS SEASONS
+                </h2>
+                <span style={{ padding: "3px 8px", background: "rgba(255,183,0,0.15)", border: "1px solid rgba(255,183,0,0.3)", borderRadius: 4, fontFamily: P.raj, fontSize: 10, color: "#ffb700", fontWeight: 700 }}>
+                  {bpSeasons.length} total
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => setBpShowCreate(true)}
+                  style={{ padding: "7px 14px", background: "linear-gradient(135deg,#ffb700,#ff8800)", border: "none", borderRadius: 6, color: "#000", fontFamily: P.raj, fontWeight: 700, fontSize: 11, cursor: "pointer", letterSpacing: "1px", textTransform: "uppercase", boxShadow: "0 0 12px rgba(255,183,0,0.4)" }}
+                >
+                  + New Season
+                </button>
+                <button
+                  onClick={fetchBpSeasons}
+                  disabled={bpLoading}
+                  style={{ padding: "7px 14px", background: "transparent", border: `1px solid ${P.pb}`, borderRadius: 6, color: "#a67fff", fontFamily: P.raj, fontWeight: 700, fontSize: 11, cursor: bpLoading ? "not-allowed" : "pointer", letterSpacing: "1px", textTransform: "uppercase", opacity: bpLoading ? 0.5 : 1 }}
+                >
+                  {bpLoading ? "…" : "↻ Refresh"}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(139,92,246,0.06)", border: `1px solid ${P.pb}`, borderRadius: 6, fontFamily: P.raj, fontSize: 11, color: "#c4b5fd", lineHeight: 1.5 }}>
+              Create seasons with default escalating ARCADE rewards. Only one season can be <b>active</b> at a time. Activating a new season resets player season XP but preserves lifetime totalXP.
+            </div>
+
+            {bpMsg && (
+              <div style={{ marginBottom: 12, padding: "10px 14px", background: bpMsg.startsWith("✅") ? "rgba(0,255,136,0.08)" : "rgba(255,68,68,0.08)", border: `1px solid ${bpMsg.startsWith("✅") ? "rgba(0,255,136,0.3)" : "rgba(255,68,68,0.3)"}`, borderRadius: 6, fontFamily: P.raj, fontSize: 12, color: bpMsg.startsWith("✅") ? "#00FF88" : "#ff4444", fontWeight: 700 }}>
+                {bpMsg}
+              </div>
+            )}
+
+            {bpLoading && bpSeasons.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", fontFamily: P.raj, fontSize: 13, color: "#7755aa" }}>Loading seasons…</div>
+            ) : bpSeasons.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", fontFamily: P.raj, fontSize: 13, color: "#7755aa" }}>
+                No seasons yet. Click <b>+ New Season</b> to create the first one.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {bpSeasons.map(s => {
+                  const startStr = s.startDate ? new Date(s.startDate).toLocaleDateString() : "—";
+                  const endStr   = s.endDate ? new Date(s.endDate).toLocaleDateString() : "—";
+                  return (
+                    <div
+                      key={s.seasonId}
+                      style={{
+                        background: P.s1,
+                        border: `1px solid ${s.active ? "rgba(0,255,136,0.5)" : P.b2}`,
+                        borderRadius: 10, padding: 14,
+                        boxShadow: s.active ? "0 0 15px rgba(0,255,136,0.15)" : "none",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontFamily: P.orb, fontWeight: 700, fontSize: 14, color: "#fff" }}>{s.name}</span>
+                          {s.active && (
+                            <span style={{ padding: "2px 8px", background: "#00FF88", color: "#000", borderRadius: 3, fontFamily: P.orb, fontSize: 9, fontWeight: 800, letterSpacing: "1.5px" }}>
+                              ● ACTIVE
+                            </span>
+                          )}
+                          <span style={{ fontFamily: P.raj, fontSize: 10, color: "#8877bb" }}>id: {s.seasonId}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {!s.active && (
+                            <button
+                              onClick={() => activateBpSeason(s.seasonId)}
+                              disabled={bpActivating === s.seasonId}
+                              style={{ padding: "5px 12px", background: "rgba(0,255,136,0.1)", border: "1px solid rgba(0,255,136,0.4)", borderRadius: 5, color: "#00FF88", fontFamily: P.raj, fontWeight: 700, fontSize: 10, cursor: bpActivating === s.seasonId ? "not-allowed" : "pointer", letterSpacing: "1px", textTransform: "uppercase" }}
+                            >
+                              {bpActivating === s.seasonId ? "…" : "▶ Activate"}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => deleteBpSeason(s.seasonId)}
+                            disabled={bpDeleting === s.seasonId || s.active}
+                            title={s.active ? "Deactivate first" : "Delete"}
+                            style={{ padding: "5px 10px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.3)", borderRadius: 5, color: "#ff4444", fontFamily: P.raj, fontWeight: 700, fontSize: 10, cursor: (bpDeleting === s.seasonId || s.active) ? "not-allowed" : "pointer", letterSpacing: "1px", textTransform: "uppercase", opacity: s.active ? 0.4 : 1 }}
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      </div>
+                      {s.description && (
+                        <div style={{ fontFamily: P.raj, fontSize: 11, color: "#c4b5fd", marginBottom: 6, lineHeight: 1.4 }}>{s.description}</div>
+                      )}
+                      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontFamily: P.raj, fontSize: 11, color: "#8877bb" }}>
+                        <span>📅 {startStr} → {endStr}</span>
+                        <span>🎯 {s.numTiers} tiers · {s.xpPerTier} XP/tier</span>
+                        <span>👑 {s.premiumPriceARCADE} ARCADE unlock</span>
+                        <span>⚡ Max XP: {(s.xpPerTier * s.numTiers).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Create Season modal */}
+            {bpShowCreate && (
+              <div style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.85)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={(e) => { if (e.target === e.currentTarget && !bpCreating) setBpShowCreate(false); }}>
+                <div style={{ maxWidth: 480, width: "100%", background: P.s1, border: "1px solid rgba(255,183,0,0.4)", borderRadius: 12, padding: 22, boxShadow: "0 0 40px rgba(255,183,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
+                  <h3 style={{ margin: "0 0 14px", fontFamily: P.orb, fontSize: 15, fontWeight: 700, color: "#ffb700", letterSpacing: "1.2px" }}>NEW BATTLE PASS SEASON</h3>
+
+                  {[
+                    { key: "name",              label: "Season Name",       placeholder: "Cyberpunk Dawn",       type: "text" },
+                    { key: "description",       label: "Description",       placeholder: "Season 1 lore...",    type: "textarea" },
+                    { key: "durationDays",      label: "Duration (days)",   placeholder: "30",                  type: "number" },
+                    { key: "numTiers",          label: "Number of Tiers",   placeholder: "50",                  type: "number" },
+                    { key: "xpPerTier",         label: "XP per Tier",       placeholder: "500",                 type: "number" },
+                    { key: "premiumPriceARCADE",label: "Premium Price (ARCADE)", placeholder: "100",             type: "number" },
+                  ].map(f => (
+                    <div key={f.key}>
+                      <label style={{ display: "block", fontFamily: P.raj, fontSize: 10, fontWeight: 700, color: "#8877bb", letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 5, marginTop: 10 }}>{f.label}</label>
+                      {f.type === "textarea" ? (
+                        <textarea
+                          value={bpForm[f.key]}
+                          onChange={(e) => setBpForm(prev => ({ ...prev, [f.key]: e.target.value }))}
+                          placeholder={f.placeholder}
+                          style={{ width: "100%", padding: "9px 11px", background: P.s2, border: `1px solid ${P.pb}`, borderRadius: 6, color: "#e0d6ff", fontFamily: P.raj, fontSize: 13, boxSizing: "border-box", minHeight: 50, resize: "vertical" }}
+                        />
+                      ) : (
+                        <input
+                          type={f.type}
+                          value={bpForm[f.key]}
+                          onChange={(e) => setBpForm(prev => ({ ...prev, [f.key]: f.type === "number" ? e.target.value : e.target.value }))}
+                          placeholder={f.placeholder}
+                          style={{ width: "100%", padding: "9px 11px", background: P.s2, border: `1px solid ${P.pb}`, borderRadius: 6, color: "#e0d6ff", fontFamily: P.raj, fontSize: 13, boxSizing: "border-box" }}
+                        />
+                      )}
+                    </div>
+                  ))}
+
+                  <div style={{ marginTop: 14, padding: "8px 11px", background: "rgba(0,229,255,0.06)", border: "1px solid rgba(0,229,255,0.25)", borderRadius: 5, fontFamily: P.raj, fontSize: 10, color: "#7ff5ff", lineHeight: 1.4 }}>
+                    ℹ Default rewards: escalating ARCADE (3→50 free, 10→150 premium). Item rewards attachable in Turn 2 (editor UI).
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+                    <button onClick={() => setBpShowCreate(false)} disabled={bpCreating} style={{ flex: 1, padding: "10px", background: "rgba(0,0,0,0.4)", border: `1px solid ${P.pb}`, borderRadius: 6, color: "#c4b5fd", fontFamily: P.orb, fontSize: 12, fontWeight: 700, cursor: bpCreating ? "not-allowed" : "pointer", letterSpacing: "2px", opacity: bpCreating ? 0.5 : 1 }}>CANCEL</button>
+                    <button onClick={createBpSeason} disabled={bpCreating} style={{ flex: 2, padding: "10px", background: "linear-gradient(135deg,#ffb700,#ff8800)", border: "none", borderRadius: 6, color: "#000", fontFamily: P.orb, fontSize: 12, fontWeight: 800, cursor: bpCreating ? "not-allowed" : "pointer", letterSpacing: "2px", opacity: bpCreating ? 0.7 : 1, boxShadow: "0 0 16px rgba(255,183,0,0.4)" }}>
+                      {bpCreating ? "CREATING…" : "CREATE SEASON"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── GAME THUMBNAILS TAB ── */}
+        {activeTab === "thumbnails" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <h2 style={{ margin: 0, fontFamily: P.orb, fontSize: 16, fontWeight: 700, color: "#00e5ff", letterSpacing: "1.2px" }}>
+                  🖼️ GAME THUMBNAIL MIGRATION
+                </h2>
+                <span style={{ padding: "3px 8px", background: "rgba(0,229,255,0.15)", border: "1px solid rgba(0,229,255,0.3)", borderRadius: 4, fontFamily: P.raj, fontSize: 10, color: "#00e5ff", fontWeight: 700 }}>
+                  {thumbGames.length} games · {thumbFiles.length} files
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  onClick={saveAllThumbnails}
+                  disabled={thumbSaving || Object.values(thumbPicks).filter(Boolean).length === 0}
+                  style={{
+                    padding: "7px 14px",
+                    background: (thumbSaving || Object.values(thumbPicks).filter(Boolean).length === 0) ? "rgba(120,120,140,0.15)" : "linear-gradient(135deg,#00e5ff,#8b5cf6)",
+                    border: "none", borderRadius: 6,
+                    color: (thumbSaving || Object.values(thumbPicks).filter(Boolean).length === 0) ? "#5a3f8a" : "#000",
+                    fontFamily: P.raj, fontWeight: 700, fontSize: 11,
+                    cursor: (thumbSaving || Object.values(thumbPicks).filter(Boolean).length === 0) ? "not-allowed" : "pointer",
+                    letterSpacing: "1px", textTransform: "uppercase",
+                    boxShadow: (thumbSaving || Object.values(thumbPicks).filter(Boolean).length === 0) ? "none" : "0 0 12px rgba(0,229,255,0.4)",
+                  }}
+                >
+                  {thumbSaving ? "SAVING…" : `⚡ Save All (${Object.values(thumbPicks).filter(Boolean).length})`}
+                </button>
+                <button
+                  onClick={fetchThumbnailMigrationData}
+                  disabled={thumbLoading}
+                  style={{ padding: "7px 14px", background: "transparent", border: `1px solid ${P.pb}`, borderRadius: 6, color: "#a67fff", fontFamily: P.raj, fontWeight: 700, fontSize: 11, cursor: thumbLoading ? "not-allowed" : "pointer", letterSpacing: "1px", textTransform: "uppercase", opacity: thumbLoading ? 0.5 : 1 }}
+                >
+                  {thumbLoading ? "…" : "↻ Reload"}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(139,92,246,0.06)", border: `1px solid ${P.pb}`, borderRadius: 6, fontFamily: P.raj, fontSize: 11, color: "#c4b5fd", lineHeight: 1.5 }}>
+              Auto-matches game names to Storage files by fuzzy similarity. Review each pick, change if wrong, then <b>Save All</b>. Games already using a Firebase URL are skipped from auto-suggest.
+            </div>
+
+            {thumbMsg && (
+              <div style={{ marginBottom: 12, padding: "10px 14px", background: thumbMsg.startsWith("✅") ? "rgba(0,255,136,0.08)" : thumbMsg.startsWith("⚠") ? "rgba(255,183,0,0.08)" : "rgba(255,68,68,0.08)", border: `1px solid ${thumbMsg.startsWith("✅") ? "rgba(0,255,136,0.3)" : thumbMsg.startsWith("⚠") ? "rgba(255,183,0,0.3)" : "rgba(255,68,68,0.3)"}`, borderRadius: 6, fontFamily: P.raj, fontSize: 12, color: thumbMsg.startsWith("✅") ? "#00FF88" : thumbMsg.startsWith("⚠") ? "#FFB800" : "#ff4444", fontWeight: 700 }}>
+                {thumbMsg}
+              </div>
+            )}
+
+            {thumbLoading && thumbGames.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", fontFamily: P.raj, fontSize: 13, color: "#7755aa" }}>Loading games + files…</div>
+            ) : thumbGames.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", fontFamily: P.raj, fontSize: 13, color: "#7755aa" }}>No games found</div>
+            ) : (
+              <div style={{ display: "grid", gap: 8 }}>
+                {thumbGames.map(game => {
+                  const currentUrl = game.thumbnailUrl || "";
+                  const isFirebaseAlready = currentUrl.includes("firebasestorage.googleapis.com");
+                  const isCloudinary = currentUrl.includes("res.cloudinary.com");
+                  const pickedUrl = thumbPicks[game.gameId] || "";
+                  const previewUrl = pickedUrl || currentUrl;
+
+                  return (
+                    <div
+                      key={game.gameId}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "72px 1fr auto",
+                        gap: 12,
+                        alignItems: "center",
+                        padding: 10,
+                        background: P.s1,
+                        border: `1px solid ${isFirebaseAlready ? "rgba(0,255,136,0.3)" : isCloudinary ? "rgba(255,68,68,0.3)" : P.b2}`,
+                        borderRadius: 8,
+                      }}
+                    >
+                      {/* Thumbnail preview */}
+                      <div style={{ width: 72, height: 54, borderRadius: 5, background: "rgba(0,0,0,0.4)", border: `1px solid ${P.pb}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
+                        {previewUrl ? (
+                          <img
+                            src={previewUrl}
+                            alt=""
+                            style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "cover" }}
+                            onError={(e) => { e.target.style.display = "none"; e.target.parentElement.innerHTML = '<span style="color:#5533aa;font-size:22px">?</span>'; }}
+                          />
+                        ) : (
+                          <span style={{ color: "#5533aa", fontSize: 22 }}>?</span>
+                        )}
+                      </div>
+
+                      {/* Game info + picker */}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                          <span style={{ fontFamily: P.orb, fontWeight: 700, fontSize: 13, color: "#fff", letterSpacing: "0.5px" }}>
+                            {game.name || `Game #${game.gameId}`}
+                          </span>
+                          <span style={{ padding: "1px 6px", background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: 3, fontFamily: P.raj, fontSize: 8, fontWeight: 700, color: "#c4b5fd", letterSpacing: "1px" }}>
+                            #{game.gameId}
+                          </span>
+                          {isFirebaseAlready && (
+                            <span style={{ padding: "1px 6px", background: "rgba(0,255,136,0.15)", border: "1px solid rgba(0,255,136,0.4)", borderRadius: 3, fontFamily: P.raj, fontSize: 8, fontWeight: 700, color: "#00FF88", letterSpacing: "1px" }}>
+                              ✓ FIREBASE
+                            </span>
+                          )}
+                          {isCloudinary && (
+                            <span style={{ padding: "1px 6px", background: "rgba(255,68,68,0.15)", border: "1px solid rgba(255,68,68,0.4)", borderRadius: 3, fontFamily: P.raj, fontSize: 8, fontWeight: 700, color: "#ff4444", letterSpacing: "1px" }}>
+                              ⚠ CLOUDINARY (broken)
+                            </span>
+                          )}
+                        </div>
+                        <select
+                          value={pickedUrl}
+                          onChange={(e) => setThumbPicks(prev => ({ ...prev, [game.gameId]: e.target.value }))}
+                          style={{ width: "100%", padding: "6px 8px", background: P.s2, border: `1px solid ${pickedUrl ? "rgba(0,229,255,0.5)" : P.pb}`, borderRadius: 5, color: "#e0d6ff", fontFamily: P.raj, fontSize: 11, fontWeight: 500, cursor: "pointer" }}
+                        >
+                          <option value="">— Keep current (no change) —</option>
+                          {thumbFiles.map(f => (
+                            <option key={f.name} value={f.url}>{f.name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Save one button */}
+                      <button
+                        onClick={() => saveOneThumbnail(game.gameId)}
+                        disabled={!pickedUrl || thumbSavingOne === game.gameId || thumbSaving}
+                        style={{
+                          padding: "6px 12px",
+                          background: (!pickedUrl || thumbSavingOne === game.gameId || thumbSaving) ? "rgba(120,120,140,0.15)" : "rgba(0,229,255,0.1)",
+                          border: `1px solid ${(!pickedUrl || thumbSavingOne === game.gameId || thumbSaving) ? P.pb : "rgba(0,229,255,0.5)"}`,
+                          borderRadius: 5,
+                          color: (!pickedUrl || thumbSavingOne === game.gameId || thumbSaving) ? "#5a3f8a" : "#00e5ff",
+                          fontFamily: P.raj, fontWeight: 700, fontSize: 10,
+                          cursor: (!pickedUrl || thumbSavingOne === game.gameId || thumbSaving) ? "not-allowed" : "pointer",
+                          letterSpacing: "1px", textTransform: "uppercase",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {thumbSavingOne === game.gameId ? "…" : "💾 Save"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── FLAGS & BANS TAB ── */}
         {activeTab === "flags" && (
@@ -1262,6 +2082,603 @@ export default function Admin() {
           onClose={() => setTestingGame(null)}
         />
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ShopItemModal — create/edit a battle shop item
+// Enhanced UX:
+//   • Name field first — the primary input
+//   • "Generate" button next to itemId — auto-creates a slug from name +
+//     6-char random suffix (e.g. "neon_blaster_a3f7k2"). Disabled until a
+//     name is entered. Never overwrites an existing itemId in edit mode.
+//   • "Copy" button next to itemId — clipboard copy with brief "✓ Copied"
+//     feedback. Handy since itemId is what shows up in Firestore + on-chain.
+//   • Image field — file upload → Firebase Storage via backend admin action.
+//     Shows preview, upload progress, Change / Remove controls. Max 2 MB.
+// ─────────────────────────────────────────────────────────────────────────────
+function slugifyName(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .substring(0, 40);
+}
+
+function generateItemIdFrom(name) {
+  const slug   = slugifyName(name);
+  // Random suffix keeps generated ids unique — 6 chars from [0-9a-z] gives
+  // ~2B combinations, enough that duplicates are astronomically unlikely.
+  const suffix = Math.random().toString(36).substring(2, 8);
+  return `${slug || "item"}_${suffix}`;
+}
+
+function ShopItemModal({ item, onSave, onClose, saving }) {
+  const isEdit = !!item;
+  const [form, setForm] = useState({
+    itemId:      item?.itemId      || "",
+    name:        item?.name        || "",
+    description: item?.description || "",
+    category:    item?.category    || "gun_skin",
+    rarity:      item?.rarity      || "common",
+    imageUrl:    item?.imageUrl    || "",
+    modelUrl:    item?.modelUrl    || "",
+    priceARCADE: item?.priceARCADE || 0,
+    priceUSDC:   item?.priceUSDC   || 0,
+    chain:       item?.chain       || "*",
+    active:      item?.active ?? true,
+  });
+  const [err, setErr] = useState("");
+
+  // ── itemId Copy feedback (2-second "✓ Copied" flash) ───────────────
+  const [copied, setCopied] = useState(false);
+
+  // ── Image upload state ─────────────────────────────────────────────
+  const [uploading, setUploading]         = useState(false);
+  const [uploadError, setUploadError]     = useState("");
+  const fileInputRef                       = useRef(null);
+
+  // ── 3D Model upload state ──────────────────────────────────────────
+  const [modelUploading, setModelUploading]   = useState(false);
+  const [modelUploadError, setModelUploadError] = useState("");
+  const modelInputRef                          = useRef(null);
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // ── Generate itemId from name ─────────────────────────────────────
+  const handleGenerateId = () => {
+    if (isEdit) return; // never overwrite existing id
+    if (!form.name.trim()) return;
+    set("itemId", generateItemIdFrom(form.name));
+  };
+
+  // ── Copy itemId to clipboard ──────────────────────────────────────
+  const handleCopyId = async () => {
+    if (!form.itemId) return;
+    try {
+      await navigator.clipboard.writeText(form.itemId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Fallback for older browsers — select + execCommand
+      const el = document.createElement("textarea");
+      el.value = form.itemId;
+      document.body.appendChild(el);
+      el.select();
+      try { document.execCommand("copy"); setCopied(true); setTimeout(() => setCopied(false), 1600); }
+      catch { /* silent */ }
+      document.body.removeChild(el);
+    }
+  };
+
+  // ── Image upload → backend → Firebase Storage ─────────────────────
+  const handleFileSelected = async (file) => {
+    if (!file) return;
+    setUploadError("");
+
+    // Client-side guard rails (matches server-side checks)
+    const allowedTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"];
+    if (!allowedTypes.includes(file.type)) {
+      setUploadError("Use PNG, JPEG, WebP or GIF only");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setUploadError(`Too large (${(file.size / 1024 / 1024).toFixed(2)}MB). Max 2 MB.`);
+      return;
+    }
+
+    setUploading(true);
+    try {
+      // Read as base64 (strip the "data:...;base64," prefix)
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result || "";
+          const comma  = String(result).indexOf(",");
+          resolve(comma >= 0 ? String(result).substring(comma + 1) : String(result));
+        };
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      });
+
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/games?action=admin-shop-upload-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({
+          filename:    file.name,
+          contentType: file.type,
+          base64Data,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+
+      set("imageUrl", data.url);
+    } catch (e) {
+      console.error(e);
+      setUploadError(e.message);
+    } finally {
+      setUploading(false);
+      // Reset the input so re-selecting the same file re-fires onChange
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleRemoveImage = () => {
+    set("imageUrl", "");
+    setUploadError("");
+  };
+
+  // ── 3D Model upload → backend → Firebase Storage ──────────────────
+  const handleModelSelected = async (file) => {
+    if (!file) return;
+    setModelUploadError("");
+
+    // .glb is the sanest single-file format; browsers commonly send
+    // "application/octet-stream" for .glb, so we check by extension too.
+    const nameLower = file.name.toLowerCase();
+    if (!nameLower.endsWith(".glb")) {
+      setModelUploadError("Only .glb files supported (single-file binary GLTF)");
+      return;
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      setModelUploadError(`Too large (${(file.size / 1024 / 1024).toFixed(2)}MB). Max 3 MB.`);
+      return;
+    }
+
+    setModelUploading(true);
+    try {
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result || "";
+          const comma  = String(result).indexOf(",");
+          resolve(comma >= 0 ? String(result).substring(comma + 1) : String(result));
+        };
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      });
+
+      const jwt = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/games?action=admin-shop-upload-model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({
+          filename:    file.name,
+          contentType: file.type || "model/gltf-binary",
+          base64Data,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+
+      set("modelUrl", data.url);
+    } catch (e) {
+      console.error(e);
+      setModelUploadError(e.message);
+    } finally {
+      setModelUploading(false);
+      if (modelInputRef.current) modelInputRef.current.value = "";
+    }
+  };
+
+  const handleRemoveModel = () => {
+    set("modelUrl", "");
+    setModelUploadError("");
+  };
+
+  const handleSubmit = () => {
+    setErr("");
+    // Validation
+    const itemIdOk = /^[a-z0-9_-]+$/.test(form.itemId);
+    if (!form.itemId)  return setErr("Item ID required — enter a name then click Generate");
+    if (!itemIdOk)     return setErr("itemId must be lowercase, letters/numbers/_/- only");
+    if (!form.name.trim()) return setErr("Name required");
+    if (form.priceARCADE < 0 || form.priceUSDC < 0) return setErr("Prices cannot be negative");
+    if (!form.priceARCADE && !form.priceUSDC) return setErr("At least one price (ARCADE or USDC) must be set");
+
+    onSave({
+      itemId:      form.itemId.trim(),
+      name:        form.name.trim(),
+      description: form.description.trim(),
+      category:    form.category,
+      rarity:      form.rarity,
+      imageUrl:    form.imageUrl.trim(),
+      modelUrl:    form.modelUrl.trim(),
+      priceARCADE: Number(form.priceARCADE) || 0,
+      priceUSDC:   Number(form.priceUSDC)   || 0,
+      chain:       form.chain,
+      active:      !!form.active,
+    });
+  };
+
+  // ── Styles ────────────────────────────────────────────────────────
+  const overlay  = { position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.85)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 };
+  const modal    = { maxWidth: 560, width: "100%", maxHeight: "90vh", overflowY: "auto", background: P.s1, border: `1px solid rgba(255,183,0,0.4)`, borderRadius: 12, padding: 22, boxShadow: "0 0 40px rgba(255,183,0,0.2)" };
+  const label    = { display: "block", fontFamily: P.raj, fontSize: 10, fontWeight: 700, color: "#8877bb", letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 6, marginTop: 12 };
+  const input    = { width: "100%", padding: "9px 11px", background: P.s2, border: `1px solid ${P.pb}`, borderRadius: 6, color: "#e0d6ff", fontFamily: P.raj, fontSize: 13, fontWeight: 500, boxSizing: "border-box" };
+  const row      = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 };
+
+  const nameHasContent = !!form.name.trim();
+  const canGenerate    = !isEdit && nameHasContent;
+
+  return (
+    <div style={overlay} onClick={(e) => { if (e.target === e.currentTarget && !saving && !uploading) onClose(); }}>
+      <div style={modal} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <h3 style={{ margin: 0, fontFamily: P.orb, fontSize: 15, fontWeight: 700, color: "#ffb700", letterSpacing: "1.2px" }}>
+            {isEdit ? "EDIT ITEM" : "NEW ITEM"}
+          </h3>
+          <button
+            onClick={onClose}
+            disabled={saving || uploading}
+            style={{ width: 30, height: 30, background: "rgba(0,0,0,0.4)", border: `1px solid ${P.pb}`, borderRadius: 6, color: "#c4b5fd", cursor: (saving || uploading) ? "not-allowed" : "pointer", fontSize: 14 }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* NAME — primary input, first field so ID generation makes sense */}
+        <label style={label}>Name <span style={{ color: "#ff4444" }}>*</span></label>
+        <input
+          type="text"
+          value={form.name}
+          onChange={(e) => set("name", e.target.value)}
+          placeholder="Neon Blaster"
+          style={input}
+          autoFocus
+        />
+
+        {/* ITEM ID with Generate + Copy — permanent slug, on-chain identity */}
+        <label style={label}>
+          Item ID <span style={{ color: "#ff4444" }}>*</span>
+          <span style={{ marginLeft: 8, fontWeight: 500, textTransform: "none", letterSpacing: "0.3px", color: "#5a3f8a", fontSize: 9 }}>
+            permanent, used on-chain
+          </span>
+        </label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input
+            type="text"
+            value={form.itemId}
+            onChange={(e) => set("itemId", e.target.value.toLowerCase())}
+            disabled={isEdit}
+            placeholder={isEdit ? "" : "Click Generate ↓"}
+            style={{ ...input, opacity: isEdit ? 0.6 : 1, cursor: isEdit ? "not-allowed" : "text", flex: 1 }}
+          />
+          {!isEdit && (
+            <button
+              type="button"
+              onClick={handleGenerateId}
+              disabled={!canGenerate}
+              title={canGenerate ? "Generate a unique ID from name" : "Enter a name first"}
+              style={{
+                padding: "0 14px",
+                background: canGenerate
+                  ? "linear-gradient(135deg,#ffb700,#ff8800)"
+                  : "rgba(120,120,140,0.15)",
+                border: canGenerate ? "none" : `1px solid ${P.pb}`,
+                borderRadius: 6,
+                color: canGenerate ? "#000" : "#5a3f8a",
+                fontFamily: P.raj, fontWeight: 700, fontSize: 11,
+                cursor: canGenerate ? "pointer" : "not-allowed",
+                letterSpacing: "1px", textTransform: "uppercase",
+                boxShadow: canGenerate ? "0 0 12px rgba(255,183,0,0.4)" : "none",
+                whiteSpace: "nowrap",
+                transition: "all 0.15s",
+              }}
+            >
+              ⚡ Generate
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleCopyId}
+            disabled={!form.itemId}
+            title="Copy to clipboard"
+            style={{
+              padding: "0 12px",
+              background: copied ? "rgba(0,255,136,0.15)" : "rgba(0,0,0,0.4)",
+              border: `1px solid ${copied ? "rgba(0,255,136,0.4)" : P.pb}`,
+              borderRadius: 6,
+              color: copied ? "#00FF88" : (form.itemId ? "#c4b5fd" : "#5a3f8a"),
+              fontFamily: P.raj, fontWeight: 700, fontSize: 11,
+              cursor: form.itemId ? "pointer" : "not-allowed",
+              letterSpacing: "1px", textTransform: "uppercase",
+              whiteSpace: "nowrap",
+              transition: "all 0.15s",
+              opacity: form.itemId ? 1 : 0.4,
+            }}
+          >
+            {copied ? "✓ Copied" : "📋 Copy"}
+          </button>
+        </div>
+        <div style={{ fontFamily: P.raj, fontSize: 10, color: "#8877bb", marginTop: 4 }}>
+          Lowercase, letters/digits/_/- only. Hashed to bytes32 for the contract. Cannot change once created.
+        </div>
+
+        {/* DESCRIPTION */}
+        <label style={label}>Description</label>
+        <textarea
+          value={form.description}
+          onChange={(e) => set("description", e.target.value)}
+          placeholder="Cyberpunk energy weapon skin"
+          style={{ ...input, minHeight: 60, resize: "vertical", fontFamily: P.raj }}
+        />
+
+        {/* CATEGORY / RARITY */}
+        <div style={row}>
+          <div>
+            <label style={label}>Category</label>
+            <select value={form.category} onChange={(e) => set("category", e.target.value)} style={input}>
+              <option value="gun_skin">Gun Skin</option>
+              <option value="environment">Environment</option>
+              <option value="power_up">Power Up</option>
+              <option value="cosmetic">Cosmetic</option>
+            </select>
+          </div>
+          <div>
+            <label style={label}>Rarity</label>
+            <select value={form.rarity} onChange={(e) => set("rarity", e.target.value)} style={input}>
+              <option value="common">Common</option>
+              <option value="rare">Rare</option>
+              <option value="epic">Epic</option>
+              <option value="legendary">Legendary</option>
+            </select>
+          </div>
+        </div>
+
+        {/* IMAGE — upload to Firebase Storage via backend */}
+        <label style={label}>Image (max 2 MB — PNG/JPEG/WebP/GIF)</label>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
+          onChange={(e) => handleFileSelected(e.target.files?.[0])}
+          style={{ display: "none" }}
+        />
+
+        {form.imageUrl ? (
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: 10, background: P.s2, border: `1px solid ${P.pb}`, borderRadius: 6 }}>
+            <div style={{ width: 90, height: 90, borderRadius: 6, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0, border: `1px solid ${P.pb}` }}>
+              <img
+                src={form.imageUrl}
+                alt="preview"
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+                onError={(e) => { e.target.style.display = "none"; }}
+              />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: P.raj, fontSize: 10, color: "#8877bb", marginBottom: 4, textTransform: "uppercase", letterSpacing: "1.5px" }}>
+                Uploaded ✓
+              </div>
+              <div style={{ fontFamily: P.raj, fontSize: 11, color: "#c4b5fd", wordBreak: "break-all", lineHeight: 1.3, marginBottom: 8, maxHeight: 44, overflow: "hidden" }}>
+                {form.imageUrl}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading || saving}
+                  style={{ padding: "5px 11px", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.4)", borderRadius: 4, color: "#c4b5fd", fontFamily: P.raj, fontWeight: 700, fontSize: 10, cursor: (uploading || saving) ? "not-allowed" : "pointer", letterSpacing: "0.5px", textTransform: "uppercase", opacity: (uploading || saving) ? 0.5 : 1 }}
+                >
+                  ↻ Change
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRemoveImage}
+                  disabled={uploading || saving}
+                  style={{ padding: "5px 11px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.3)", borderRadius: 4, color: "#ff4444", fontFamily: P.raj, fontWeight: 700, fontSize: 10, cursor: (uploading || saving) ? "not-allowed" : "pointer", letterSpacing: "0.5px", textTransform: "uppercase", opacity: (uploading || saving) ? 0.5 : 1 }}
+                >
+                  🗑 Remove
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading || saving}
+            style={{
+              width: "100%", padding: "20px 12px",
+              background: uploading ? "rgba(0,229,255,0.06)" : "rgba(139,92,246,0.05)",
+              border: `1px dashed ${uploading ? "rgba(0,229,255,0.5)" : "rgba(139,92,246,0.4)"}`,
+              borderRadius: 8,
+              color: uploading ? "#7ff5ff" : "#c4b5fd",
+              fontFamily: P.raj, fontWeight: 700, fontSize: 12,
+              cursor: (uploading || saving) ? "not-allowed" : "pointer",
+              letterSpacing: "1px", textTransform: "uppercase",
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
+              transition: "all 0.2s",
+            }}
+          >
+            {uploading ? (
+              <>
+                <div style={{ width: 24, height: 24, border: "3px solid rgba(0,229,255,0.2)", borderTop: "3px solid #00e5ff", borderRadius: "50%", animation: "spinnerRing 1s linear infinite" }} />
+                <span>Uploading…</span>
+              </>
+            ) : (
+              <>
+                <span style={{ fontSize: 24 }}>📁</span>
+                <span>Click to upload image</span>
+                <span style={{ fontSize: 9, color: "#8877bb", letterSpacing: "0.5px" }}>Max 2 MB · PNG · JPEG · WebP · GIF</span>
+              </>
+            )}
+          </button>
+        )}
+
+        {uploadError && (
+          <div style={{ marginTop: 8, padding: "8px 10px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.3)", borderRadius: 5, fontFamily: P.raj, fontSize: 11, color: "#ff4444", fontWeight: 700 }}>
+            ⚠ {uploadError}
+          </div>
+        )}
+
+        {/* 3D MODEL — upload .glb to Firebase Storage */}
+        <label style={label}>3D Model (optional — .glb, max 3 MB)</label>
+        <input
+          ref={modelInputRef}
+          type="file"
+          accept=".glb,model/gltf-binary"
+          onChange={(e) => handleModelSelected(e.target.files?.[0])}
+          style={{ display: "none" }}
+        />
+
+        {form.modelUrl ? (
+          <div style={{ display: "flex", gap: 12, alignItems: "center", padding: 10, background: P.s2, border: `1px solid ${P.pb}`, borderRadius: 6 }}>
+            <div style={{ width: 44, height: 44, borderRadius: 6, background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.4)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 20 }}>
+              ◈
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: P.raj, fontSize: 10, color: "#c4b5fd", marginBottom: 2, textTransform: "uppercase", letterSpacing: "1.5px", fontWeight: 700 }}>
+                3D Model Uploaded ✓
+              </div>
+              <div style={{ fontFamily: P.raj, fontSize: 10, color: "#8877bb", wordBreak: "break-all", lineHeight: 1.3, maxHeight: 26, overflow: "hidden" }}>
+                {form.modelUrl}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => modelInputRef.current?.click()}
+                disabled={modelUploading || saving}
+                style={{ padding: "5px 10px", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.4)", borderRadius: 4, color: "#c4b5fd", fontFamily: P.raj, fontWeight: 700, fontSize: 10, cursor: (modelUploading || saving) ? "not-allowed" : "pointer", letterSpacing: "0.5px", textTransform: "uppercase", opacity: (modelUploading || saving) ? 0.5 : 1 }}
+              >
+                ↻
+              </button>
+              <button
+                type="button"
+                onClick={handleRemoveModel}
+                disabled={modelUploading || saving}
+                style={{ padding: "5px 10px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.3)", borderRadius: 4, color: "#ff4444", fontFamily: P.raj, fontWeight: 700, fontSize: 10, cursor: (modelUploading || saving) ? "not-allowed" : "pointer", letterSpacing: "0.5px", textTransform: "uppercase", opacity: (modelUploading || saving) ? 0.5 : 1 }}
+              >
+                🗑
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => modelInputRef.current?.click()}
+            disabled={modelUploading || saving}
+            style={{
+              width: "100%", padding: "16px 12px",
+              background: modelUploading ? "rgba(0,229,255,0.06)" : "rgba(139,92,246,0.05)",
+              border: `1px dashed ${modelUploading ? "rgba(0,229,255,0.5)" : "rgba(139,92,246,0.4)"}`,
+              borderRadius: 8,
+              color: modelUploading ? "#7ff5ff" : "#c4b5fd",
+              fontFamily: P.raj, fontWeight: 700, fontSize: 12,
+              cursor: (modelUploading || saving) ? "not-allowed" : "pointer",
+              letterSpacing: "1px", textTransform: "uppercase",
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
+              transition: "all 0.2s",
+            }}
+          >
+            {modelUploading ? (
+              <>
+                <div style={{ width: 24, height: 24, border: "3px solid rgba(0,229,255,0.2)", borderTop: "3px solid #00e5ff", borderRadius: "50%", animation: "spinnerRing 1s linear infinite" }} />
+                <span>Uploading 3D model…</span>
+              </>
+            ) : (
+              <>
+                <span style={{ fontSize: 22 }}>◈</span>
+                <span>Click to upload 3D model</span>
+                <span style={{ fontSize: 9, color: "#8877bb", letterSpacing: "0.5px" }}>Max 3 MB · .glb only</span>
+              </>
+            )}
+          </button>
+        )}
+
+        {modelUploadError && (
+          <div style={{ marginTop: 8, padding: "8px 10px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.3)", borderRadius: 5, fontFamily: P.raj, fontSize: 11, color: "#ff4444", fontWeight: 700 }}>
+            ⚠ {modelUploadError}
+          </div>
+        )}
+
+        {/* PRICES */}
+        <div style={row}>
+          <div>
+            <label style={label}>Price ARCADE (0 = not sold)</label>
+            <input type="number" min="0" step="1" value={form.priceARCADE} onChange={(e) => set("priceARCADE", e.target.value)} style={input} />
+          </div>
+          <div>
+            <label style={label}>Price USDC (0 = not sold)</label>
+            <input type="number" min="0" step="1" value={form.priceUSDC} onChange={(e) => set("priceUSDC", e.target.value)} style={input} />
+          </div>
+        </div>
+
+        {/* CHAIN / ACTIVE */}
+        <div style={row}>
+          <div>
+            <label style={label}>Chain availability</label>
+            <select value={form.chain} onChange={(e) => set("chain", e.target.value)} style={input}>
+              <option value="*">* (both chains)</option>
+              <option value="mst">MST only</option>
+              <option value="botchain">BOTChain only</option>
+            </select>
+          </div>
+          <div>
+            <label style={label}>Status</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 11px", background: P.s2, border: `1px solid ${P.pb}`, borderRadius: 6, height: "calc(100% - 24px)" }}>
+              <input type="checkbox" checked={form.active} onChange={(e) => set("active", e.target.checked)} id="shop-item-active" style={{ cursor: "pointer" }} />
+              <label htmlFor="shop-item-active" style={{ fontFamily: P.raj, fontSize: 12, fontWeight: 700, color: form.active ? "#00FF88" : "#8877bb", cursor: "pointer", letterSpacing: "1px", textTransform: "uppercase" }}>
+                {form.active ? "Active" : "Hidden"}
+              </label>
+            </div>
+          </div>
+        </div>
+
+        {err && (
+          <div style={{ marginTop: 14, padding: "9px 12px", background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.3)", borderRadius: 6, fontFamily: P.raj, fontSize: 12, color: "#ff4444", fontWeight: 700 }}>
+            ⚠ {err}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+          <button
+            onClick={onClose}
+            disabled={saving || uploading || modelUploading}
+            style={{ flex: 1, padding: "10px", background: "rgba(0,0,0,0.4)", border: `1px solid ${P.pb}`, borderRadius: 6, color: "#c4b5fd", fontFamily: P.orb, fontSize: 12, fontWeight: 700, cursor: (saving || uploading || modelUploading) ? "not-allowed" : "pointer", letterSpacing: "2px", opacity: (saving || uploading || modelUploading) ? 0.5 : 1 }}
+          >
+            CANCEL
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={saving || uploading || modelUploading}
+            style={{ flex: 2, padding: "10px", background: "linear-gradient(135deg,#ffb700,#ff8800)", border: "none", borderRadius: 6, color: "#000", fontFamily: P.orb, fontSize: 12, fontWeight: 800, cursor: (saving || uploading || modelUploading) ? "not-allowed" : "pointer", letterSpacing: "2px", opacity: (saving || uploading || modelUploading) ? 0.7 : 1, boxShadow: "0 0 16px rgba(255,183,0,0.4)" }}
+          >
+            {saving ? "SAVING…" : (uploading || modelUploading) ? "UPLOADING…" : (isEdit ? "UPDATE" : "CREATE")}
+          </button>
+        </div>
+
+        <style>{`
+          @keyframes spinnerRing { to { transform: rotate(360deg); } }
+        `}</style>
+      </div>
     </div>
   );
 }

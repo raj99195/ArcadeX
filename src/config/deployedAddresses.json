@@ -13,7 +13,7 @@
     "achievementNft": "0xFaA539B1ad562A18993bcC61a1e89f4ef5f29D44"
   },
   "mst": {
-    "token": "0x066aefBf67D73F8439440fD6ae6adaFCEa88b2D5",
+    "token": "0xA3C5ffB1B9d0640e72720D0A029878262943D943",
     "platform": "0xd9181c86f9E1D5825E47ED80Ae9E76B4dF18c0B8",
     "tournament": "0x3f2AAa35E0cFa71804079317eA68fdBdcb6BD5d3",
     "creatorNft": "0x1bDDAE8d8D2CEE71f1a7E6427c6B75DeBC7D4be7",
@@ -25,7 +25,10 @@
     "achievementNft": "0x32204805cc53318F63d9aD023EC85c76Eac74693",
     "rewardPool": "0xeecD96e5684f1B49C2775fAdbE5De6Ecb012F2cB",
     "faucet": "0xea62cE5B7b611A1924D62Ce18E79B7a2fd6aD4f8",
-    "faucetAmount": "0.1"
+    "faucetAmount": "0.1",
+    "tokenPrevious": "0x066aefBf67D73F8439440fD6ae6adaFCEa88b2D5",
+    "battleArena": "0x587644a2dc40a11184104a4Ecde47F5ef8aEb05a",
+    "battleArenaAt": "2026-09-06T09:37:01.926Z"
   },
   "somnia": {
     "token": "0xcf035621bC1FD5732839823a637f9Be4dA582354",

@@ -8,6 +8,7 @@ import { TurnstileProvider } from "./context/TurnstileContext";
 import { CHAIN_LIST } from "./config/chains";
 import { useAutoAuth } from "./hooks/useAutoAuth";
 
+
 const wagmiNetworks = CHAIN_LIST
   .filter(c => c.chainId && c.rpcUrl)
   .map(c =>

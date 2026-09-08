@@ -1,3 +1,4 @@
+import BattlePass from "./pages/BattlePass";
 import { Routes, Route } from "react-router-dom";
 import { useChain } from "./context/ChainContext";  // ← YE CRITICAL HAI
 import ChainSelector from "./pages/ChainSelector";
@@ -21,7 +22,7 @@ import CampaignDashboard from "./pages/CampaignDashboard";
 import CampaignLeaderboard from "./pages/CampaignLeaderboard";
 import CampaignAdmin from "./pages/CampaignAdmin";
 import AdminMST from "./pages/AdminMST";
-
+import BattleArena from "./pages/BattleArena";
 export default function App() {
   const { hasSelectedChain } = useChain();
 
@@ -54,7 +55,9 @@ export default function App() {
               <Route path="/campaign/dashboard" element={<CampaignDashboard />} />
               <Route path="/campaign/leaderboard" element={<CampaignLeaderboard />} />
               <Route path="/campaign/admin" element={<CampaignAdmin />} />
+              <Route path="/battle-arena" element={<BattleArena />} />
               <Route path="/admin/mst" element={<AdminMST />} />
+              <Route path="/battle-pass" element={<BattlePass />} />
             </Routes>
             {/* ChainSelector is a fixed full-screen overlay (z-9999), so it
                 covers the content for humans on first visit — preserving the
