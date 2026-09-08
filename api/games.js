@@ -1292,9 +1292,45 @@ export default async function handler(req, res) {
 
     try {
       const { randomUUID } = await import("crypto");
+      const ttlHours     = Number(process.env.BATTLE_SESSION_TTL_HOURS) || 2;
+      const ttlMs        = ttlHours * 60 * 60 * 1000;
+      const cutoff       = new Date(Date.now() - ttlMs);
+
+      // ── Reuse existing active session if one exists for this player+chain ──
+      // Prevents orphan session spam from page reloads, wallet re-connects,
+      // chain switches, etc. A player has AT MOST 1 active session per chain
+      // at a time — reload the page, get the same session back.
+      const existingSnap = await db.collection("battleSessions")
+        .where("player", "==", bUser.address.toLowerCase())
+        .where("chain",  "==", chain)
+        .where("status", "==", "active")
+        .orderBy("createdAt", "desc")
+        .limit(1)
+        .get()
+        .catch(() => null);
+
+      if (existingSnap && !existingSnap.empty) {
+        const doc = existingSnap.docs[0];
+        const d   = doc.data();
+        const created = d.createdAt?.toMillis?.() || 0;
+        // Only reuse if within TTL — otherwise mark expired and fall through
+        if (created > cutoff.getTime()) {
+          return res.status(200).json({
+            sessionId:    doc.id,
+            sessionToken: d.sessionToken,
+            resumed:      true,   // frontend can log this if it wants
+            rounds:       d.rounds || [],
+            totalDollars: d.totalDollars || 0,
+          });
+        } else {
+          // Stale — mark expired so match-history reflects it properly
+          await doc.ref.update({ status: "expired", expiredAt: new Date() })
+            .catch(() => {});
+        }
+      }
+
       const sessionId    = randomUUID();
       const sessionToken = randomUUID();
-      const ttlHours     = Number(process.env.BATTLE_SESSION_TTL_HOURS) || 2;
 
       await db.collection("battleSessions").doc(sessionId).set({
         sessionId,
@@ -1304,14 +1340,14 @@ export default async function handler(req, res) {
         chainId:     Number(chainId),
         battleArena: battleArenaAddr,
         createdAt:   new Date(),
-        expiresAt:   new Date(Date.now() + ttlHours * 60 * 60 * 1000),
+        expiresAt:   new Date(Date.now() + ttlMs),
         rounds:      [],           // [{ round, dollars, recordedAt }]
         totalDollars: 0,
         status:      "active",      // active | completed | claimed | expired
         claimTxHash: null,
       });
 
-      return res.status(200).json({ sessionId, sessionToken });
+      return res.status(200).json({ sessionId, sessionToken, resumed: false });
     } catch (err) {
       console.error("[battle-start-session]", err);
       return res.status(500).json({ error: err.message });
@@ -1602,18 +1638,20 @@ export default async function handler(req, res) {
     if (!bUser) return res.status(401).json({ error: "Unauthorized" });
 
     try {
+      // Fetch more than 20 so we can filter out empty in-progress sessions
+      // (orphans from page reloads / wallet re-connects) and still return 20
+      // meaningful entries in most cases.
       const snap = await db.collection("battleSessions")
         .where("player", "==", bUser.address.toLowerCase())
         .orderBy("createdAt", "desc")
-        .limit(20)
+        .limit(60)
         .get();
 
-      const sessions = [];
+      const toMs = (t) => (t && typeof t.toMillis === "function" ? t.toMillis() : null);
+      const all = [];
       snap.forEach(doc => {
         const d = doc.data();
-        // Firestore Timestamps → millis for easy client formatting
-        const toMs = (t) => (t && typeof t.toMillis === "function" ? t.toMillis() : null);
-        sessions.push({
+        all.push({
           sessionId:    doc.id,
           chain:        d.chain || null,
           chainId:      d.chainId || null,
@@ -1630,6 +1668,18 @@ export default async function handler(req, res) {
           lastRoundAt:  toMs(d.lastRoundAt),
         });
       });
+
+      // Hide orphans: sessions with 0 rounds that are still "active" or
+      // "expired" without ever having gameplay data. Keep everything else,
+      // including completed/claimed sessions even if rounds is empty (edge
+      // cases where a claim happened without recorded round detail).
+      const sessions = all
+        .filter(s => {
+          const hasRounds = (s.rounds?.length || 0) > 0;
+          const meaningful = ["completed", "claimed"].includes(s.status);
+          return hasRounds || meaningful;
+        })
+        .slice(0, 20);
 
       return res.status(200).json({ sessions });
     } catch (err) {
