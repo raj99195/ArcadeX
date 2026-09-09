@@ -156,11 +156,13 @@ export default function BattleShop3DViewer({ open, item, isOwned, onBuy, onClose
     onBuy(item, selectedCurrency, currentPrice);
   };
 
-  const backdropClose = (e) => { if (e.target === e.currentTarget) onClose(); };
+  // Backdrop click-to-close removed intentionally — the model viewer has
+  // large empty areas around the object where clicks bubble up to this
+  // container, dismissing the viewer accidentally. Close only via the
+  // explicit X button (line ~245) or the Escape key handler above.
 
   return (
     <div
-      onClick={backdropClose}
       style={{
         position: "fixed", inset: 0, zIndex: 9999,
         background: S.bg,
