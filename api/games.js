@@ -1754,6 +1754,7 @@ export default async function handler(req, res) {
             rarity:        d.rarity || "common",
             imageUrl:      d.imageUrl || "",
             modelUrl:      d.modelUrl || "",
+            slot:          d.slot || "",     // admin override; empty = auto-derive
             priceARCADE:   d.priceARCADE || 0,
             priceUSDC:     d.priceUSDC || 0,
             chain:         d.chain || "*",
@@ -1788,10 +1789,12 @@ export default async function handler(req, res) {
     if (!bUser) return res.status(401).json({ error: "Unauthorized" });
 
     try {
-      const invRef = db.collection("battleShopInventory")
-        .doc(bUser.address.toLowerCase())
-        .collection("items");
-      const snap = await invRef.get();
+      const addrLc = bUser.address.toLowerCase();
+      const invRef = db.collection("battleShopInventory").doc(addrLc).collection("items");
+      const [snap, eqSnap] = await Promise.all([
+        invRef.get(),
+        db.collection("battleShopEquipped").doc(addrLc).get(),
+      ]);
 
       const items = [];
       snap.forEach(doc => {
@@ -1806,9 +1809,119 @@ export default async function handler(req, res) {
         });
       });
 
-      return res.status(200).json({ items });
+      const eq = eqSnap.exists ? eqSnap.data() : {};
+      return res.status(200).json({
+        items,
+        equipped: eq.equipped || {},   // slot → itemId (single-equip skins)
+        powerUps: eq.powerUps || [],   // array (multi-equip power-ups)
+      });
     } catch (err) {
       console.error("[battle-shop-inventory]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-shop-equip ──────────────────────────────────────────────
+  // Equip an owned item. For skins (any category other than power_up), sets
+  // the slot to this itemId — automatically un-equipping any previous skin
+  // in the same slot. For power_up items, adds to the powerUps array
+  // (multi-equip). Requires ownership.
+  //
+  // Body: { itemId }
+  // Returns: { equipped, powerUps }  (updated state)
+  if (req.method === "POST" && action === "battle-shop-equip") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    const { itemId } = req.body;
+    if (!itemId) return res.status(400).json({ error: "itemId required" });
+
+    try {
+      const addrLc = bUser.address.toLowerCase();
+
+      // 1. Ownership check
+      const ownRef = db.collection("battleShopInventory").doc(addrLc)
+        .collection("items").doc(itemId);
+      const ownSnap = await ownRef.get();
+      if (!ownSnap.exists)
+        return res.status(403).json({ error: "You don't own this item" });
+
+      // 2. Item metadata (slot + category)
+      const itemSnap = await db.collection("battleShopItems").doc(itemId).get();
+      if (!itemSnap.exists) return res.status(404).json({ error: "Item no longer exists" });
+      const item = itemSnap.data();
+
+      // 3. Merge into equipped state
+      const eqRef  = db.collection("battleShopEquipped").doc(addrLc);
+      const eqSnap = await eqRef.get();
+      const eq     = eqSnap.exists ? eqSnap.data() : { equipped: {}, powerUps: [] };
+      const currentEquipped = { ...(eq.equipped || {}) };
+      const currentPowerUps = new Set(eq.powerUps || []);
+
+      if (item.category === "power_up") {
+        currentPowerUps.add(itemId);
+      } else {
+        const slot = _getItemSlot({ itemId, slot: item.slot });
+        currentEquipped[slot] = itemId;
+      }
+
+      const payload = {
+        address:  addrLc,
+        equipped: currentEquipped,
+        powerUps: Array.from(currentPowerUps),
+        updatedAt: new Date(),
+      };
+      await eqRef.set(payload, { merge: true });
+
+      return res.status(200).json({
+        ok:       true,
+        equipped: payload.equipped,
+        powerUps: payload.powerUps,
+      });
+    } catch (err) {
+      console.error("[battle-shop-equip]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST battle-shop-unequip ────────────────────────────────────────────
+  // Remove an item from equipped state. For power-ups, removes from array.
+  // For skins, removes from slot (game goes back to default). No ownership
+  // check needed — un-equipping something you don't own is a no-op.
+  //
+  // Body: { itemId }
+  if (req.method === "POST" && action === "battle-shop-unequip") {
+    const bUser = verifyToken(req);
+    if (!bUser) return res.status(401).json({ error: "Unauthorized" });
+
+    const { itemId } = req.body;
+    if (!itemId) return res.status(400).json({ error: "itemId required" });
+
+    try {
+      const addrLc = bUser.address.toLowerCase();
+      const eqRef  = db.collection("battleShopEquipped").doc(addrLc);
+      const eqSnap = await eqRef.get();
+      if (!eqSnap.exists)
+        return res.status(200).json({ ok: true, equipped: {}, powerUps: [] });
+
+      const eq = eqSnap.data();
+      const newPowerUps = (eq.powerUps || []).filter(id => id !== itemId);
+      const newEquipped = { ...(eq.equipped || {}) };
+      // Strip this itemId from any slot it's occupying
+      for (const [slot, val] of Object.entries(newEquipped)) {
+        if (val === itemId) delete newEquipped[slot];
+      }
+
+      await eqRef.set({
+        address:  addrLc,
+        equipped: newEquipped,
+        powerUps: newPowerUps,
+        updatedAt: new Date(),
+      });
+
+      return res.status(200).json({ ok: true, equipped: newEquipped, powerUps: newPowerUps });
+    } catch (err) {
+      console.error("[battle-shop-unequip]", err);
       return res.status(500).json({ error: err.message });
     }
   }
@@ -2027,6 +2140,47 @@ export default async function handler(req, res) {
         usedAt:      new Date(),
         txHash,
       });
+
+      // ── Auto-equip logic ──
+      // Fresh purchases become active immediately when it makes sense:
+      //   - Power-ups: always added to the equipped powerUps array (multi)
+      //   - Skins: only auto-equipped if the target slot is currently empty
+      //     (never override a skin the player deliberately chose earlier)
+      try {
+        const itemDataSnap = await db.collection("battleShopItems").doc(itemId).get();
+        if (itemDataSnap.exists) {
+          const itemMeta = itemDataSnap.data();
+          const eqRef  = db.collection("battleShopEquipped").doc(bUser.address.toLowerCase());
+          const eqSnap = await eqRef.get();
+          const eq     = eqSnap.exists ? eqSnap.data() : { equipped: {}, powerUps: [] };
+
+          if (itemMeta.category === "power_up") {
+            const pu = new Set(eq.powerUps || []);
+            pu.add(itemId);
+            await eqRef.set({
+              address:  bUser.address.toLowerCase(),
+              equipped: eq.equipped || {},
+              powerUps: Array.from(pu),
+              updatedAt: new Date(),
+            }, { merge: true });
+          } else {
+            const slot = _getItemSlot({ itemId, slot: itemMeta.slot });
+            const currentEquipped = { ...(eq.equipped || {}) };
+            if (!currentEquipped[slot]) {
+              currentEquipped[slot] = itemId;
+              await eqRef.set({
+                address:  bUser.address.toLowerCase(),
+                equipped: currentEquipped,
+                powerUps: eq.powerUps || [],
+                updatedAt: new Date(),
+              }, { merge: true });
+            }
+          }
+        }
+      } catch (eqErr) {
+        // Don't fail the purchase if auto-equip errors — user can equip from shop UI
+        console.error("[auto-equip]", eqErr);
+      }
 
       return res.status(200).json({ ok: true, itemId, txHash });
     } catch (err) {
@@ -3175,6 +3329,7 @@ export default async function handler(req, res) {
           rarity:        d.rarity || "common",
           imageUrl:      d.imageUrl || "",
           modelUrl:      d.modelUrl || "",
+          slot:          d.slot || "",
           priceARCADE:   d.priceARCADE || 0,
           priceUSDC:     d.priceUSDC || 0,
           chain:         d.chain || "*",
@@ -3205,7 +3360,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: "Admin only" });
 
     const {
-      itemId, name, description, category, rarity, imageUrl, modelUrl,
+      itemId, name, description, category, rarity, imageUrl, modelUrl, slot,
       priceARCADE, priceUSDC, chain, active,
     } = req.body;
 
@@ -3243,6 +3398,7 @@ export default async function handler(req, res) {
         rarity,
         imageUrl:      (imageUrl || "").trim(),
         modelUrl:      (modelUrl || "").trim(),
+        slot:          (slot || "").trim().toUpperCase(),
         priceARCADE:   pA,
         priceUSDC:     pU,
         chain,
@@ -3975,6 +4131,20 @@ export default async function handler(req, res) {
 // ═════════════════════════════════════════════════════════════════════════
 // BP helpers (outside handler to keep them warm across invocations)
 // ═════════════════════════════════════════════════════════════════════════
+// ─── Item slot resolver (single source of truth) ───
+// Admin can set an explicit "slot" on a shop item (dropdown in admin UI).
+// If not set, we derive it from itemId by splitting on the first "_".
+// Examples:
+//   { itemId: "AK47_RED",     slot: "" }        → "AK47"
+//   { itemId: "AK47_GOLD",    slot: "" }        → "AK47"    (same slot — mutually exclusive)
+//   { itemId: "AK47_RED_V2",  slot: "" }        → "AK47"    (only first "_" splits)
+//   { itemId: "custom_thing", slot: "PISTOL" }  → "PISTOL"  (admin override wins)
+function _getItemSlot(item) {
+  if (item.slot && String(item.slot).trim()) return String(item.slot).trim().toUpperCase();
+  const parts = String(item.itemId || "").split("_");
+  return (parts[0] || item.itemId || "").toUpperCase();
+}
+
 let _bpActiveCache = { seasonId: null, at: 0 };
 async function _getActiveSeasonId(db) {
   // 30-sec in-memory cache to save Firestore reads on hot paths (battle-round)

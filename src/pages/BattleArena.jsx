@@ -332,6 +332,8 @@ export default function BattleArena() {
   // ── Inventory (owned shop items) ──
   const [inventory, setInventory] = useState([]);       // array of itemIds
   const inventoryRef = useRef([]);                       // stale-closure fix for message handler
+  // ── Equipped loadout (skins + powerups currently active) ──
+  const equippedRef = useRef([]);
 
   // ── Battle progress state ──
   const [rounds, setRounds]           = useState([]); // [{ round, dollars }]
@@ -446,6 +448,10 @@ export default function BattleArena() {
   }, [BATTLE_ARENA_ADDRESS, publicClient]);
 
   // ─── Start session on wallet connect + chain ───
+  // Exposed via ref so recap "View later" can trigger a fresh session
+  // without duplicating the logic.
+  const startSessionRef = useRef(null);
+
   useEffect(() => {
     if (!address || !chainKey) return;
     let cancelled = false;
@@ -492,6 +498,7 @@ export default function BattleArena() {
       }
     };
 
+    startSessionRef.current = startSession;
     startSession();
     return () => { cancelled = true; };
   }, [address, chainKey, walletClient]);
@@ -521,8 +528,14 @@ export default function BattleArena() {
         const items = (data.items || []).map(x => x.itemId).filter(Boolean);
         setInventory(items);
         inventoryRef.current = items;
-        // Push to game in case it's already running
+        // Also process equipped loadout — combine skins slot map + powerUps into a flat list
+        const equippedMap = data.equipped || {};
+        const powerUps    = data.powerUps || [];
+        const activeItems = [...Object.values(equippedMap), ...powerUps].filter(Boolean);
+        equippedRef.current = activeItems;
+        // Push both to game
         sendToGame("BATTLE_INVENTORY", { items });
+        sendToGame("BATTLE_EQUIPPED",  { activeItems });
       } catch (err) {
         console.warn("[battle-shop-inventory]", err.message);
       }
@@ -607,12 +620,14 @@ export default function BattleArena() {
           // Also push the current inventory so the game can apply skins
           // immediately on boot (v1.1.0 SDK)
           sendToGame("BATTLE_INVENTORY", { items: inventoryRef.current });
+          sendToGame("BATTLE_EQUIPPED",  { activeItems: equippedRef.current });
           break;
         }
 
         case "BATTLE_GET_INVENTORY": {
           // Game requested an inventory refresh (e.g. after scene reload)
           sendToGame("BATTLE_INVENTORY", { items: inventoryRef.current });
+          sendToGame("BATTLE_EQUIPPED",  { activeItems: equippedRef.current });
           break;
         }
 
@@ -1492,6 +1507,13 @@ export default function BattleArena() {
           // 3. Push fresh full inventory so game re-applies state
           sendToGame("BATTLE_INVENTORY", { items: newInv });
         }}
+        onEquippedChanged={(activeItems) => {
+          // User equipped/unequipped inside the shop overlay OR backend
+          // auto-equipped a new purchase. Update ref + push to game so
+          // Unity's SkinManager activates the new loadout.
+          equippedRef.current = activeItems || [];
+          sendToGame("BATTLE_EQUIPPED", { activeItems: equippedRef.current });
+        }}
       />
 
       {/* ═══ MATCH HISTORY OVERLAY ═══ */}
@@ -1511,7 +1533,25 @@ export default function BattleArena() {
           claimError={claimError}
           canClaim={canClaim}
           onClaim={handleClaim}
-          onClose={() => setRecapDismissedFor(sessionId)}
+          onClose={() => {
+            // "View later" — user dismissed without claiming. Reset the
+            // whole battle UI (combat log, total bounty, round states,
+            // etc.) and start a fresh session so the sidebar is empty
+            // and ready for a new game.
+            setRecapDismissedFor(sessionId);
+            setRounds([]);
+            setTotalDollars(0);
+            setCurrentRound(0);
+            setGameCompleted(false);
+            setClaimStage(null);
+            setClaimError(null);
+            setTxHash("");
+            setArcadeAmount(null);
+            // Reset iframe game state via message so Unity clears too
+            sendToGame("BATTLE_RESET", {});
+            // Kick off a fresh session (old one stays "completed" for later claim from history)
+            if (startSessionRef.current) startSessionRef.current();
+          }}
           bpStatus={bpStatus}
           xpEarned={Object.values(roundXpFlashes).reduce((a, b) => a + (b || 0), 0)
                     /* Live-fired XP flashes may have cleared already; if all zero, fall back to summing round-level bonus estimates so the recap still shows something. */

@@ -80,7 +80,7 @@ const CATEGORY_ICON = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Item Card
 // ─────────────────────────────────────────────────────────────────────────────
-const ItemCard = memo(function ItemCard({ item, isOwned, onBuy, onOpen3D }) {
+const ItemCard = memo(function ItemCard({ item, isOwned, isEquipped, isEquipping, onBuy, onOpen3D, onEquip, onUnequip }) {
   const rarity = RARITY[item.rarity] || RARITY.common;
   const [imgError, setImgError] = useState(false);
   const hasArcade = item.priceARCADE > 0;
@@ -255,21 +255,56 @@ const ItemCard = memo(function ItemCard({ item, isOwned, onBuy, onOpen3D }) {
             </button>
           )}
 
-          {/* Price + Buy button */}
+          {/* Price + Buy / Equip / Equipped button */}
           {isOwned ? (
-            <div
-              style={{
-                padding: "10px",
-                background: "rgba(0,255,136,0.08)",
-                border: `1px solid ${S.green}`,
-                borderRadius: 6,
-                fontFamily: S.orb, fontWeight: 700, fontSize: 11,
-                color: S.green, textAlign: "center",
-                letterSpacing: "2px",
-              }}
-            >
-              UNLOCKED
-            </div>
+            isEquipped ? (
+              <button
+                onClick={() => onUnequip?.(item)}
+                disabled={isEquipping}
+                style={{
+                  padding: "10px",
+                  background: `linear-gradient(135deg, ${S.gold}, #ff8800)`,
+                  border: "none", borderRadius: 6,
+                  color: "#000",
+                  fontFamily: S.orb, fontWeight: 800, fontSize: 12,
+                  cursor: isEquipping ? "wait" : "pointer",
+                  letterSpacing: "2px", textTransform: "uppercase",
+                  boxShadow: `0 0 18px ${S.gold}, inset 0 0 12px rgba(255,255,255,0.15)`,
+                  opacity: isEquipping ? 0.7 : 1,
+                  transition: "all 0.15s ease",
+                }}
+              >
+                {isEquipping ? "…" : "✓ EQUIPPED"}
+              </button>
+            ) : (
+              <button
+                onClick={() => onEquip?.(item)}
+                disabled={isEquipping}
+                style={{
+                  padding: "10px",
+                  background: "rgba(0,255,136,0.08)",
+                  border: `1px solid ${S.green}`, borderRadius: 6,
+                  color: S.green,
+                  fontFamily: S.orb, fontWeight: 800, fontSize: 12,
+                  cursor: isEquipping ? "wait" : "pointer",
+                  letterSpacing: "2px", textTransform: "uppercase",
+                  transition: "all 0.15s ease",
+                  opacity: isEquipping ? 0.7 : 1,
+                }}
+                onMouseEnter={(e) => {
+                  if (!isEquipping) {
+                    e.currentTarget.style.background = "rgba(0,255,136,0.15)";
+                    e.currentTarget.style.boxShadow = `0 0 12px ${S.green}`;
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "rgba(0,255,136,0.08)";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              >
+                {isEquipping ? "…" : "◈ EQUIP"}
+              </button>
+            )
           ) : (
             <button
               onClick={() => onBuy(item, currency, price)}
@@ -508,13 +543,15 @@ function PurchaseModal({ item, currency, price, stage, error, onConfirm, onCance
 // ─────────────────────────────────────────────────────────────────────────────
 // Main overlay
 // ─────────────────────────────────────────────────────────────────────────────
-export default function BattleShopOverlay({ open, onClose, onItemUnlocked }) {
+export default function BattleShopOverlay({ open, onClose, onItemUnlocked, onEquippedChanged }) {
   const { chainKey } = useChain();
   const { address } = useAccount();
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [category, setCategory] = useState("all");
   const [items, setItems] = useState([]);
   const [inventory, setInventory] = useState([]);   // owned itemIds
+  const [equipped, setEquipped]   = useState([]);   // currently equipped (skins + powerups combined)
+  const [equipping, setEquipping] = useState(null); // itemId currently in equip flight
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -571,7 +608,7 @@ export default function BattleShopOverlay({ open, onClose, onItemUnlocked }) {
           setItems(itemsData.items || []);
         }
 
-        // Inventory (auth'd)
+        // Inventory + equipped (auth'd)
         if (address) {
           const token = localStorage.getItem("arcadex_jwt");
           if (token) {
@@ -582,6 +619,12 @@ export default function BattleShopOverlay({ open, onClose, onItemUnlocked }) {
               const invData = await invRes.json();
               if (!cancelled) {
                 setInventory((invData.items || []).map(x => x.itemId));
+                const active = [
+                  ...Object.values(invData.equipped || {}),
+                  ...(invData.powerUps || []),
+                ].filter(Boolean);
+                setEquipped(active);
+                if (typeof onEquippedChanged === "function") onEquippedChanged(active);
               }
             }
           }
@@ -616,6 +659,64 @@ export default function BattleShopOverlay({ open, onClose, onItemUnlocked }) {
     setPurchaseError("Shop backend + contract pending deploy (Turn 2)");
     setPurchaseStage("failed");
   }, [modalItem, modalCurrency, modalPrice, onItemUnlocked]);
+
+  // ── Equip / unequip flow ──
+  // Backend has all the slot / power-up logic; we just call, get back the
+  // updated state, and push it up to the parent so it can forward to Unity
+  // via the SDK's BATTLE_EQUIPPED message.
+  const equipItem = useCallback(async (item) => {
+    if (!address || equipping) return;
+    setEquipping(item.itemId);
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/games?action=battle-shop-equip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ itemId: item.itemId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Equip failed");
+      const active = [
+        ...Object.values(data.equipped || {}),
+        ...(data.powerUps || []),
+      ].filter(Boolean);
+      setEquipped(active);
+      if (typeof onEquippedChanged === "function") onEquippedChanged(active);
+    } catch (err) {
+      console.error("[equip]", err);
+      setError(err.message);
+      setTimeout(() => setError(null), 3000);
+    } finally {
+      setEquipping(null);
+    }
+  }, [address, equipping, onEquippedChanged]);
+
+  const unequipItem = useCallback(async (item) => {
+    if (!address || equipping) return;
+    setEquipping(item.itemId);
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const res = await fetch("/api/games?action=battle-shop-unequip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ itemId: item.itemId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Unequip failed");
+      const active = [
+        ...Object.values(data.equipped || {}),
+        ...(data.powerUps || []),
+      ].filter(Boolean);
+      setEquipped(active);
+      if (typeof onEquippedChanged === "function") onEquippedChanged(active);
+    } catch (err) {
+      console.error("[unequip]", err);
+      setError(err.message);
+      setTimeout(() => setError(null), 3000);
+    } finally {
+      setEquipping(null);
+    }
+  }, [address, equipping, onEquippedChanged]);
 
   const handleCloseModal = useCallback(() => {
     setModalItem(null);
@@ -804,8 +905,12 @@ export default function BattleShopOverlay({ open, onClose, onItemUnlocked }) {
                   key={item.itemId}
                   item={item}
                   isOwned={inventory.includes(item.itemId)}
+                  isEquipped={equipped.includes(item.itemId)}
+                  isEquipping={equipping === item.itemId}
                   onBuy={handleBuy}
                   onOpen3D={(it) => setViewer3DItem(it)}
+                  onEquip={equipItem}
+                  onUnequip={unequipItem}
                 />
               ))}
             </div>
