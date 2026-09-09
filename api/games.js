@@ -1296,10 +1296,13 @@ export default async function handler(req, res) {
       const ttlMs        = ttlHours * 60 * 60 * 1000;
       const cutoff       = new Date(Date.now() - ttlMs);
 
-      // ── Reuse existing active session if one exists for this player+chain ──
-      // Prevents orphan session spam from page reloads, wallet re-connects,
-      // chain switches, etc. A player has AT MOST 1 active session per chain
-      // at a time — reload the page, get the same session back.
+      // ── Reuse existing active session if it's completely fresh ─────────
+      // Only reuse if the session has NO rounds recorded AND is recent —
+      // this handles rapid page reloads / wallet re-connects BEFORE any
+      // gameplay started. Once even 1 round is recorded, Unity's game state
+      // is effectively gone (nothing to resume to), so a new session must
+      // be created and the old one is left as-is (shows up in match history
+      // as "5 ROUNDS REQUIRED — Can't Claim").
       const existingSnap = await db.collection("battleSessions")
         .where("player", "==", bUser.address.toLowerCase())
         .where("chain",  "==", chain)
@@ -1312,21 +1315,22 @@ export default async function handler(req, res) {
       if (existingSnap && !existingSnap.empty) {
         const doc = existingSnap.docs[0];
         const d   = doc.data();
-        const created = d.createdAt?.toMillis?.() || 0;
-        // Only reuse if within TTL — otherwise mark expired and fall through
-        if (created > cutoff.getTime()) {
+        const created    = d.createdAt?.toMillis?.() || 0;
+        const hasRounds  = (d.rounds || []).length > 0;
+
+        if (created > cutoff.getTime() && !hasRounds) {
+          // Fresh, unplayed session — safe to hand back for reload continuity
           return res.status(200).json({
             sessionId:    doc.id,
             sessionToken: d.sessionToken,
-            resumed:      true,   // frontend can log this if it wants
-            rounds:       d.rounds || [],
-            totalDollars: d.totalDollars || 0,
+            resumed:      true,
+            rounds:       [],
+            totalDollars: 0,
           });
-        } else {
-          // Stale — mark expired so match-history reflects it properly
-          await doc.ref.update({ status: "expired", expiredAt: new Date() })
-            .catch(() => {});
         }
+        // Otherwise: leave the old session untouched. Fall through to
+        // create a new one. The old session stays "active" and appears in
+        // match history where the user can see they abandoned it.
       }
 
       const sessionId    = randomUUID();
@@ -1373,9 +1377,18 @@ export default async function handler(req, res) {
     if (!Number.isFinite(dollarNum) || dollarNum < 0)
       return res.status(400).json({ error: "dollars must be >= 0" });
 
-    const maxPerRound = Number(process.env.BATTLE_MAX_DOLLARS_PER_ROUND) || 50;
-    if (dollarNum > maxPerRound)
-      return res.status(400).json({ error: `Round earning capped at $${maxPerRound}` });
+    // ── Per-round cap: CLAMP instead of REJECT ─────────────────────────
+    // Old behaviour rejected the round entirely if dollars > cap, which
+    // stalled the session (next round would be out-of-order). Now we just
+    // clamp the reward to the cap and record it — the game keeps flowing.
+    const maxPerRound = Number(process.env.BATTLE_MAX_DOLLARS_PER_ROUND) || 500;
+    let effectiveDollars = dollarNum;
+    let wasClampedRound  = false;
+    if (dollarNum > maxPerRound) {
+      effectiveDollars = maxPerRound;
+      wasClampedRound  = true;
+      console.warn(`[battle-round] clamped round ${roundNum} of ${sessionId}: reported $${dollarNum}, capped at $${maxPerRound}`);
+    }
 
     if (!rateLimit(`battle-round:${bUser.address}`, 30, 60_000))
       return res.status(429).json({ error: "Too many round updates" });
@@ -1404,14 +1417,22 @@ export default async function handler(req, res) {
       if (roundNum !== expectedRound)
         return res.status(409).json({ error: `Expected round ${expectedRound}, got ${roundNum}` });
 
-      const newTotal = (sess.totalDollars || 0) + dollarNum;
-      const maxPerSession = Number(process.env.BATTLE_MAX_DOLLARS_PER_SESSION) || 100;
-      if (newTotal > maxPerSession)
-        return res.status(400).json({ error: `Session total capped at $${maxPerSession}` });
+      // ── Per-session cap: CLAMP the last-round contribution ────────────
+      const maxPerSession = Number(process.env.BATTLE_MAX_DOLLARS_PER_SESSION) || 2500;
+      const currentTotal  = sess.totalDollars || 0;
+      let addedThisRound  = effectiveDollars;
+      let wasClampedSess  = false;
+      if (currentTotal + addedThisRound > maxPerSession) {
+        addedThisRound  = Math.max(0, maxPerSession - currentTotal);
+        wasClampedSess  = true;
+        console.warn(`[battle-round] clamped session ${sessionId} at $${maxPerSession} (had $${currentTotal}, tried +$${effectiveDollars}, actually added $${addedThisRound})`);
+      }
+      effectiveDollars = addedThisRound;
+      const newTotal   = currentTotal + effectiveDollars;
 
       const newRounds = [
         ...existingRounds,
-        { round: roundNum, dollars: dollarNum, recordedAt: new Date() },
+        { round: roundNum, dollars: effectiveDollars, recordedAt: new Date() },
       ];
 
       const updates = {
@@ -1437,9 +1458,10 @@ export default async function handler(req, res) {
       const XP_BIG_ROUND_MIN = Number(process.env.BATTLE_BP_XP_BIG_ROUND_MIN) || 20;
       const XP_MATCH_BONUS  = Number(process.env.BATTLE_BP_XP_MATCH_BONUS)   || 100;
 
-      let xpEarned = dollarNum * XP_PER_DOLLAR + XP_ROUND_BONUS;
-      if (dollarNum >= XP_BIG_ROUND_MIN) xpEarned += XP_BIG_ROUND;
-      if (roundNum === 5)                 xpEarned += XP_MATCH_BONUS;
+      // Use effectiveDollars (post-clamp) for XP so caps affect XP too
+      let xpEarned = effectiveDollars * XP_PER_DOLLAR + XP_ROUND_BONUS;
+      if (effectiveDollars >= XP_BIG_ROUND_MIN) xpEarned += XP_BIG_ROUND;
+      if (roundNum === 5)                        xpEarned += XP_MATCH_BONUS;
 
       // Fetch active season (cached briefly per warm invocation)
       const activeSeasonId = await _getActiveSeasonId(db);
@@ -1499,7 +1521,9 @@ export default async function handler(req, res) {
       return res.status(200).json({
         accepted: true,
         round: roundNum,
-        dollars: dollarNum,
+        dollars: effectiveDollars,          // post-clamp value
+        reported: dollarNum,                // what the game sent
+        clamped: wasClampedRound || wasClampedSess,
         totalDollars: newTotal,
         status: updates.status || sess.status,
         xp: {

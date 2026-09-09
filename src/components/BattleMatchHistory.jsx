@@ -60,18 +60,24 @@ function fmtDateTime(ms) {
 }
 
 const STATUS = {
-  active:    { color: C.cyanL,   glow: "rgba(0,229,255,0.4)",  label: "IN PROGRESS", icon: "◉" },
-  completed: { color: C.gold,    glow: "rgba(255,183,0,0.5)",  label: "CLAIM READY", icon: "⚡" },
-  claimed:   { color: C.green,   glow: "rgba(0,255,136,0.4)",  label: "CLAIMED",     icon: "✓" },
-  expired:   { color: C.dim,     glow: "rgba(153,119,204,0.3)",label: "EXPIRED",     icon: "○" },
+  active:     { color: C.cyanL,   glow: "rgba(0,229,255,0.4)",  label: "IN PROGRESS",       icon: "◉" },
+  incomplete: { color: "#ff8800", glow: "rgba(255,136,0,0.4)",  label: "5 ROUNDS REQUIRED", icon: "⚠" },
+  completed:  { color: C.gold,    glow: "rgba(255,183,0,0.5)",  label: "CLAIM READY",       icon: "⚡" },
+  claimed:    { color: C.green,   glow: "rgba(0,255,136,0.4)",  label: "CLAIMED",           icon: "✓" },
+  expired:    { color: C.dim,     glow: "rgba(153,119,204,0.3)",label: "EXPIRED",           icon: "○" },
 };
 
 function SessionCard({ session, expanded, onToggle, onClaim, claiming, walletChainId }) {
-  const st        = STATUS[session.status] || STATUS.completed;
+  const rounds    = session.rounds || [];
+  // "Incomplete" = user played some rounds but never made it to round 5.
+  // Show a distinct orange status so it's obvious this session can't be
+  // claimed unless the player finishes all 5 rounds.
+  const isIncomplete = session.status === "active" && rounds.length > 0 && rounds.length < 5;
+  const effectiveStatus = isIncomplete ? "incomplete" : session.status;
+  const st        = STATUS[effectiveStatus] || STATUS.completed;
   const chainMeta = Object.values(CHAINS).find(c => c.chainId === session.chainId) || null;
   const chainName = chainMeta?.name || session.chain;
   const explorer  = chainMeta?.explorerUrl;
-  const rounds    = session.rounds || [];
   const maxD      = Math.max(...rounds.map(r => r.dollars), 1);
   const best      = rounds.reduce((a, r) => (r.dollars > a.dollars ? r : a), { round: 0, dollars: 0 });
   const avg       = rounds.length ? Math.round((session.totalDollars || 0) / rounds.length) : 0;
@@ -226,6 +232,41 @@ function SessionCard({ session, expanded, onToggle, onClaim, claiming, walletCha
             <div>Started: {fmtDateTime(session.createdAt)}</div>
             {session.claimedAt && <div>Claimed: {fmtDateTime(session.claimedAt)}</div>}
           </div>
+
+          {/* ═══ CANNOT CLAIM — for incomplete active sessions ═══ */}
+          {isIncomplete && (
+            <div style={{
+              marginBottom: 12,
+              padding: "14px 16px",
+              background: "rgba(255,136,0,0.08)",
+              border: `1px solid #ff8800`,
+              borderRadius: 10,
+              display: "flex", alignItems: "center", gap: 14,
+            }}>
+              <div style={{
+                fontSize: 28, filter: `drop-shadow(0 0 8px #ff8800)`,
+                flexShrink: 0,
+              }}>⚠</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontFamily: C.orb, fontWeight: 800, fontSize: 12,
+                  color: "#ff8800", letterSpacing: "2px",
+                  marginBottom: 4, textTransform: "uppercase",
+                }}>
+                  Can't Claim
+                </div>
+                <div style={{
+                  fontFamily: C.raj, fontSize: 12, color: C.violetL,
+                  lineHeight: 1.5,
+                }}>
+                  This session was abandoned at <b style={{ color: "#ff8800" }}>{rounds.length}/5</b> rounds.
+                  Once you leave a game, it can't be resumed.
+                  <br />
+                  <span style={{ color: C.cyanL, fontWeight: 700 }}>▸ Play a NEW game and complete all 5 rounds to claim rewards.</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ═══ CLAIM BUTTON — for completed unclaimed sessions ═══ */}
           {canClaim && (
