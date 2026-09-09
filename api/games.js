@@ -1230,8 +1230,10 @@ export default async function handler(req, res) {
   }
 
   // ── All writes require JWT ──
-  const user = verifyToken(req);
-  if (!user) return res.status(401).json({ error: "Unauthorized — connect wallet" });
+  // Public GET actions bypass this — they read data that doesn't need auth.
+  const isPublicGet = req.method === "GET" && ["battle-shop-list"].includes(action);
+  const user = isPublicGet ? null : verifyToken(req);
+  if (!isPublicGet && !user) return res.status(401).json({ error: "Unauthorized — connect wallet" });
 
   // ── POST play ──
   if (req.method === "POST" && action === "play") {
