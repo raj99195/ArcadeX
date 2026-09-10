@@ -29,7 +29,7 @@
 // each session and applies the skin/environment/power-up automatically.
 
 import { useState, useEffect, useCallback, memo } from "react";
-import { useAccount } from "wagmi";
+import { useAccount, useWalletClient } from "wagmi";
 import { useChain } from "../context/ChainContext";
 import ConfettiBurst from "./ConfettiBurst";
 import BattleShop3DViewer from "./BattleShop3DViewer";
@@ -546,6 +546,7 @@ function PurchaseModal({ item, currency, price, stage, error, onConfirm, onCance
 export default function BattleShopOverlay({ open, onClose, onItemUnlocked, onEquippedChanged }) {
   const { chainKey } = useChain();
   const { address } = useAccount();
+  const { data: walletClient } = useWalletClient();
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [category, setCategory] = useState("all");
   const [items, setItems] = useState([]);
@@ -649,16 +650,139 @@ export default function BattleShopOverlay({ open, onClose, onItemUnlocked, onEqu
   }, []);
 
   const handleConfirmPurchase = useCallback(async () => {
-    // TODO (Turn 2 — after BattleShop.sol deploy + backend actions):
-    //   1. POST battle-shop-purchase-quote → get { itemId, token, price, nonce, signature }
-    //   2. If ERC20, ensure allowance: approve(BattleShop, price)
-    //   3. Contract: battleShop.purchase(itemId, token, price, nonce, signature)
-    //   4. Wait for receipt
-    //   5. POST battle-shop-record-purchase { itemId, txHash }
-    //   6. Update inventory locally, call onItemUnlocked(item)
-    setPurchaseError("Shop backend + contract pending deploy (Turn 2)");
-    setPurchaseStage("failed");
-  }, [modalItem, modalCurrency, modalPrice, onItemUnlocked]);
+    if (!modalItem || !modalCurrency || !address || !walletClient) return;
+    setPurchaseError(null);
+
+    try {
+      // ═══ Step 1: Get signed quote from backend ═══════════════════════
+      setPurchaseStage("quote");
+      const token = localStorage.getItem("arcadex_jwt");
+      if (!token) throw new Error("Please connect wallet + sign in first");
+
+      const quoteRes = await fetch("/api/games?action=battle-shop-purchase-quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          itemId:   modalItem.itemId,
+          chain:    chainKey,
+          currency: modalCurrency,
+        }),
+      });
+      const quote = await quoteRes.json();
+      if (!quoteRes.ok) throw new Error(quote.error || "Quote failed");
+
+      const {
+        itemIdBytes32, token: tokenAddr, price, nonce,
+        signature, contract: shopAddr, chainId,
+      } = quote;
+
+      // ═══ Step 2: Ensure ERC-20 allowance (approve if needed) ═════════
+      setPurchaseStage("approve");
+      const ERC20_ABI = [
+        "function allowance(address owner, address spender) view returns (uint256)",
+        "function approve(address spender, uint256 amount) returns (bool)",
+      ];
+      const allowanceData = await walletClient.request({
+        method: "eth_call",
+        params: [{
+          to:   tokenAddr,
+          data: `0xdd62ed3e${address.slice(2).padStart(64, "0")}${shopAddr.slice(2).padStart(64, "0")}`,
+        }, "latest"],
+      });
+      const currentAllowance = BigInt(allowanceData || "0x0");
+      const priceBig = BigInt(price);
+
+      if (currentAllowance < priceBig) {
+        const { writeContract, waitForTransactionReceipt } = await import("@wagmi/core");
+        const { wagmiAdapter } = await import("../Providers");
+        const approveHash = await writeContract(wagmiAdapter.wagmiConfig, {
+          address:      tokenAddr,
+          abi:          ERC20_ABI,
+          functionName: "approve",
+          args:         [shopAddr, priceBig],
+          chainId:      Number(chainId),
+        });
+        await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, {
+          hash: approveHash, chainId: Number(chainId),
+        });
+      }
+
+      // ═══ Step 3: Call BattleShop.purchase() ══════════════════════════
+      setPurchaseStage("purchase");
+      const SHOP_ABI = [
+        {
+          name: "purchase", type: "function", stateMutability: "nonpayable",
+          inputs: [
+            { name: "itemId",    type: "bytes32" },
+            { name: "token",     type: "address" },
+            { name: "price",     type: "uint256" },
+            { name: "nonce",     type: "bytes32" },
+            { name: "signature", type: "bytes"   },
+          ],
+          outputs: [],
+        },
+      ];
+      const { writeContract, waitForTransactionReceipt } = await import("@wagmi/core");
+      const { wagmiAdapter } = await import("../Providers");
+      const purchaseHash = await writeContract(wagmiAdapter.wagmiConfig, {
+        address:      shopAddr,
+        abi:          SHOP_ABI,
+        functionName: "purchase",
+        args:         [itemIdBytes32, tokenAddr, priceBig, nonce, signature],
+        chainId:      Number(chainId),
+      });
+
+      setPurchaseStage("confirming");
+      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, {
+        hash: purchaseHash, chainId: Number(chainId),
+      });
+
+      // ═══ Step 4: Tell backend to mirror on-chain ownership ═══════════
+      setPurchaseStage("recording");
+      const recRes = await fetch("/api/games?action=battle-shop-record-purchase", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          itemId: modalItem.itemId,
+          chain:  chainKey,
+          nonce,
+          txHash: purchaseHash,
+        }),
+      });
+      const recData = await recRes.json();
+      if (!recRes.ok) throw new Error(recData.error || "Record failed");
+
+      // ═══ Step 5: Success — update local state + notify parent ════════
+      setPurchaseStage("success");
+      setInventory(prev => prev.includes(modalItem.itemId) ? prev : [...prev, modalItem.itemId]);
+      // Backend auto-equipped it if slot was empty — refresh equipped map
+      if (recData.equipped || recData.powerUps) {
+        const active = [
+          ...Object.values(recData.equipped || {}),
+          ...(recData.powerUps || []),
+        ].filter(Boolean);
+        setEquipped(active);
+        if (typeof onEquippedChanged === "function") onEquippedChanged(active);
+      }
+      if (typeof onItemUnlocked === "function") {
+        onItemUnlocked({
+          itemId:   modalItem.itemId,
+          category: modalItem.category,
+          name:     modalItem.name,
+        });
+      }
+    } catch (err) {
+      console.error("[purchase]", err);
+      const raw = err?.shortMessage || err?.message || "Purchase failed";
+      const friendly = /user rejected|user denied/i.test(raw)
+        ? "Transaction cancelled"
+        : /insufficient/i.test(raw)
+          ? "Insufficient balance"
+          : raw.length > 140 ? raw.slice(0, 140) + "…" : raw;
+      setPurchaseError(friendly);
+      setPurchaseStage("failed");
+    }
+  }, [modalItem, modalCurrency, modalPrice, address, walletClient, chainKey, onItemUnlocked, onEquippedChanged]);
 
   // ── Equip / unequip flow ──
   // Backend has all the slot / power-up logic; we just call, get back the
