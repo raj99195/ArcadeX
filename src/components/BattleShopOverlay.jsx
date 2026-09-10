@@ -742,7 +742,10 @@ export default function BattleShopOverlay({ open, onClose, onItemUnlocked, onEqu
         padding: isMobile ? 0 : 30,
         animation: "fadeIn 0.3s ease",
       }}
-      onClick={onClose}
+      // Backdrop click closes shop — BUT not when 3D viewer is open on top
+      // (otherwise clicking outside the model in viewer would dismiss the
+      // whole shop, unmount the viewer, and confuse the user).
+      onClick={viewer3DItem ? undefined : onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
