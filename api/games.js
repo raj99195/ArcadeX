@@ -285,18 +285,35 @@ const BATTLE_ARENA_ADDRESSES = {
 // Env-driven. Each chain has its own BattleShop deployment. Payment tokens
 // (ARCADE / USDC) also per chain — ARCADE is per-chain, USDC only where a
 // bridged/native USDC exists on that chain.
+// Normalize an address string from env: strip whitespace, add "0x" prefix
+// if it's missing (Vercel dashboard sometimes strips leading zeros when
+// copy-pasting), and return undefined for empty/invalid values so downstream
+// null-checks still work.
+function _normAddr(s) {
+  if (!s) return undefined;
+  const trimmed = String(s).trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) return trimmed;
+  // Bare 40-char hex? Assume they lost the "0x" prefix.
+  if (/^[a-fA-F0-9]{40}$/.test(trimmed)) return "0x" + trimmed;
+  // "xABC..." shape (leading zero stripped on paste) — most common Vercel typo
+  if (/^x[a-fA-F0-9]{40}$/.test(trimmed)) return "0" + trimmed;
+  // Return as-is; ethers will surface a clearer error if it's genuinely bad
+  return trimmed;
+}
+
 const BATTLE_SHOP_ADDRESSES = {
-  botchain: process.env.BATTLE_SHOP_ADDRESS_BOTCHAIN,
-  mst:      process.env.BATTLE_SHOP_ADDRESS_MST,
+  botchain: _normAddr(process.env.BATTLE_SHOP_ADDRESS_BOTCHAIN),
+  mst:      _normAddr(process.env.BATTLE_SHOP_ADDRESS_MST),
 };
 const BATTLE_SHOP_TOKENS = {
   botchain: {
-    ARCADE: process.env.BATTLE_SHOP_TOKEN_ARCADE_BOTCHAIN,
-    USDC:   process.env.BATTLE_SHOP_TOKEN_USDC_BOTCHAIN,
+    ARCADE: _normAddr(process.env.BATTLE_SHOP_TOKEN_ARCADE_BOTCHAIN),
+    USDC:   _normAddr(process.env.BATTLE_SHOP_TOKEN_USDC_BOTCHAIN),
   },
   mst: {
-    ARCADE: process.env.BATTLE_SHOP_TOKEN_ARCADE_MST,
-    USDC:   process.env.BATTLE_SHOP_TOKEN_USDC_MST,
+    ARCADE: _normAddr(process.env.BATTLE_SHOP_TOKEN_ARCADE_MST),
+    USDC:   _normAddr(process.env.BATTLE_SHOP_TOKEN_USDC_MST),
   },
 };
 // Human-readable prices in Firestore are multiplied by 10^decimals to get
@@ -3515,6 +3532,11 @@ export default async function handler(req, res) {
       await file.save(buffer, {
         metadata: {
           contentType,
+          // Aggressive caching: filename has a UUID, so once uploaded the
+          // content NEVER changes for this URL. 1 year = max recommended by
+          // HTTP spec. `immutable` tells browsers not to even revalidate.
+          // Every shop open after the first = 0 Firebase bandwidth.
+          cacheControl: "public, max-age=31536000, immutable",
           metadata: {
             uploadedBy: user.address.toLowerCase(),
             uploadedAt: new Date().toISOString(),
@@ -3593,6 +3615,10 @@ export default async function handler(req, res) {
       await file.save(buffer, {
         metadata: {
           contentType: "model/gltf-binary",  // canonicalize
+          // 1-year immutable cache — UUID in filename means content never
+          // changes at this URL. 100 MB axe file downloads exactly ONCE
+          // per user browser instead of per-shop-open.
+          cacheControl: "public, max-age=31536000, immutable",
           metadata: {
             uploadedBy: user.address.toLowerCase(),
             uploadedAt: new Date().toISOString(),
