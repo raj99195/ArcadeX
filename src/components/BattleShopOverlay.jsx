@@ -739,16 +739,57 @@ export default function BattleShopOverlay({ open, onClose, onItemUnlocked, onEqu
 
       // ═══ Step 3: Call BattleShop.purchase() ══════════════════════════
       setPurchaseStage("purchase");
-      const purchaseHash = await writeContract(wagmiAdapter.wagmiConfig, {
-        address:      shopAddr,
-        abi:          SHOP_ABI,
-        functionName: "purchase",
-        args:         [itemIdBytes32, tokenAddr, priceBig, nonce, signature],
-        chainId:      Number(chainId),
+
+      // Log every arg for post-mortem debugging — MST RPC sometimes returns
+      // generic "invalid params" for what are really contract reverts, so
+      // seeing exact inputs makes triage possible.
+      console.log("[purchase] args:", {
+        shopAddr,
+        itemIdBytes32,
+        tokenAddr,
+        priceBig: priceBig.toString(),
+        nonce,
+        signature,
+        signatureLen: signature.length,   // should be 132 chars (0x + 130)
+        chainId: Number(chainId),
       });
 
+      // Simulate first — this gives a REAL revert reason instead of the
+      // vague "Invalid parameters were provided to the RPC method" that
+      // some RPCs (MST) throw when gas estimation catches a revert.
+      let simRequest;
+      try {
+        const { simulateContract } = await import("@wagmi/core");
+        const sim = await simulateContract(wagmiAdapter.wagmiConfig, {
+          address:      shopAddr,
+          abi:          SHOP_ABI,
+          functionName: "purchase",
+          args:         [itemIdBytes32, tokenAddr, priceBig, nonce, signature],
+          chainId:      Number(chainId),
+          account:      address,
+        });
+        simRequest = sim.request;
+        console.log("[purchase] simulation passed");
+      } catch (simErr) {
+        console.error("[purchase] simulation failed:", simErr);
+        // Common causes: signature mismatch (signer key ≠ granted SIGNER_ROLE),
+        // paused, already owned, nonce reused, token not accepted.
+        const reason =
+          simErr?.shortMessage ||
+          simErr?.cause?.shortMessage ||
+          simErr?.details ||
+          simErr?.message ||
+          "Contract simulation failed";
+        throw new Error(reason);
+      }
+
+      // Now submit the tx. Simulation-derived request has correct gas.
+      const { writeContract: writeContract2, waitForTransactionReceipt: waitForTransactionReceipt2 } =
+        await import("@wagmi/core");
+      const purchaseHash = await writeContract2(wagmiAdapter.wagmiConfig, simRequest);
+
       setPurchaseStage("confirming");
-      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, {
+      await waitForTransactionReceipt2(wagmiAdapter.wagmiConfig, {
         hash: purchaseHash, chainId: Number(chainId),
       });
 
