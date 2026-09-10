@@ -675,26 +675,56 @@ export default function BattleShopOverlay({ open, onClose, onItemUnlocked, onEqu
         itemIdBytes32, token: tokenAddr, price, nonce,
         signature, contract: shopAddr, chainId,
       } = quote;
-
-      // ═══ Step 2: Ensure ERC-20 allowance (approve if needed) ═════════
-      setPurchaseStage("approve");
-      const ERC20_ABI = [
-        "function allowance(address owner, address spender) view returns (uint256)",
-        "function approve(address spender, uint256 amount) returns (bool)",
-      ];
-      const allowanceData = await walletClient.request({
-        method: "eth_call",
-        params: [{
-          to:   tokenAddr,
-          data: `0xdd62ed3e${address.slice(2).padStart(64, "0")}${shopAddr.slice(2).padStart(64, "0")}`,
-        }, "latest"],
-      });
-      const currentAllowance = BigInt(allowanceData || "0x0");
       const priceBig = BigInt(price);
 
-      if (currentAllowance < priceBig) {
-        const { writeContract, waitForTransactionReceipt } = await import("@wagmi/core");
-        const { wagmiAdapter } = await import("../Providers");
+      // JSON-format ABIs (wagmi/viem requires object shape, not human-readable strings)
+      const ERC20_ABI = [
+        {
+          name: "allowance", type: "function", stateMutability: "view",
+          inputs:  [
+            { name: "owner",   type: "address" },
+            { name: "spender", type: "address" },
+          ],
+          outputs: [{ name: "", type: "uint256" }],
+        },
+        {
+          name: "approve", type: "function", stateMutability: "nonpayable",
+          inputs:  [
+            { name: "spender", type: "address" },
+            { name: "amount",  type: "uint256" },
+          ],
+          outputs: [{ name: "", type: "bool" }],
+        },
+      ];
+      const SHOP_ABI = [
+        {
+          name: "purchase", type: "function", stateMutability: "nonpayable",
+          inputs: [
+            { name: "itemId",    type: "bytes32" },
+            { name: "token",     type: "address" },
+            { name: "price",     type: "uint256" },
+            { name: "nonce",     type: "bytes32" },
+            { name: "signature", type: "bytes"   },
+          ],
+          outputs: [],
+        },
+      ];
+
+      const { readContract, writeContract, waitForTransactionReceipt } =
+        await import("@wagmi/core");
+      const { wagmiAdapter } = await import("../Providers");
+
+      // ═══ Step 2: Check current allowance + approve if needed ═════════
+      setPurchaseStage("approve");
+      const currentAllowance = await readContract(wagmiAdapter.wagmiConfig, {
+        address:      tokenAddr,
+        abi:          ERC20_ABI,
+        functionName: "allowance",
+        args:         [address, shopAddr],
+        chainId:      Number(chainId),
+      });
+
+      if (BigInt(currentAllowance) < priceBig) {
         const approveHash = await writeContract(wagmiAdapter.wagmiConfig, {
           address:      tokenAddr,
           abi:          ERC20_ABI,
@@ -709,21 +739,6 @@ export default function BattleShopOverlay({ open, onClose, onItemUnlocked, onEqu
 
       // ═══ Step 3: Call BattleShop.purchase() ══════════════════════════
       setPurchaseStage("purchase");
-      const SHOP_ABI = [
-        {
-          name: "purchase", type: "function", stateMutability: "nonpayable",
-          inputs: [
-            { name: "itemId",    type: "bytes32" },
-            { name: "token",     type: "address" },
-            { name: "price",     type: "uint256" },
-            { name: "nonce",     type: "bytes32" },
-            { name: "signature", type: "bytes"   },
-          ],
-          outputs: [],
-        },
-      ];
-      const { writeContract, waitForTransactionReceipt } = await import("@wagmi/core");
-      const { wagmiAdapter } = await import("../Providers");
       const purchaseHash = await writeContract(wagmiAdapter.wagmiConfig, {
         address:      shopAddr,
         abi:          SHOP_ABI,
