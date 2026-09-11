@@ -3921,7 +3921,7 @@ export default async function handler(req, res) {
         dollars:     arcadeAmount.toString(),
         signature,
         battleArena: battleArenaAddr,
-        chainId,
+        chainId:     Number(chainId),
         tier:        tierNum,
         track,
         seasonId:    activeSeasonId,
