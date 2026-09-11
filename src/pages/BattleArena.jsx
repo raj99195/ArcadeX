@@ -422,6 +422,11 @@ export default function BattleArena() {
   const BATTLE_ARENA_ADDRESS = contracts?.battleArena;
   const ARCADE_TOKEN_ADDRESS = contracts?.arcadeToken;
 
+  const { address, isConnected } = useAccount();
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
+  const { getToken: getTurnstileToken } = useTurnstile();
+
   // ── Live ARCADE balance read ──
   // Refreshes every 15s + immediately after a claim/purchase.
   const { data: arcadeBalanceRaw, refetch: refetchArcadeBalance } = useReadContract({
@@ -442,11 +447,6 @@ export default function BattleArena() {
   const arcadeBalance = arcadeBalanceRaw
     ? Number(BigInt(arcadeBalanceRaw) / 10n ** 16n) / 100  // 2 decimal precision
     : 0;
-
-  const { address, isConnected } = useAccount();
-  const publicClient = usePublicClient();
-  const { data: walletClient } = useWalletClient();
-  const { getToken: getTurnstileToken } = useTurnstile();
 
   // ── Session state ──
   const [sessionId, setSessionId]       = useState(null);
