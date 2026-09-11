@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback, memo, forwardRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAccount, usePublicClient, useWalletClient } from "wagmi";
+import { useAccount, usePublicClient, useWalletClient, useReadContract } from "wagmi";
 import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
 import { wagmiAdapter } from "../Providers";
 import { useChain } from "../context/ChainContext";
@@ -139,8 +139,10 @@ const GridOverlay = memo(function GridOverlay() {
   );
 });
 
-// ── Game Frame with Fullscreen (same pattern as GamePlay) ───────────────────
-const GameFrame = memo(forwardRef(function GameFrame({ url, isMobile, isFullscreen, onToggleFullscreen }, ref) {
+// ── Game Frame with Fullscreen + Reload + Landscape (mobile) ───────────────
+const GameFrame = memo(forwardRef(function GameFrame({
+  url, isMobile, isFullscreen, onToggleFullscreen, onReload, reloadKey,
+}, ref) {
   const containerStyle = isFullscreen
     ? {
         position: "fixed", inset: 0, zIndex: 9999, background: "#000",
@@ -156,8 +158,8 @@ const GameFrame = memo(forwardRef(function GameFrame({ url, isMobile, isFullscre
     ? { flex: 1, width: "100%", border: "none", display: "block" }
     : {
         width: "100%",
-        height: isMobile ? "75vw" : "calc(100vh - 54px - 180px)",
-        minHeight: isMobile ? 300 : 500,
+        height: isMobile ? "56vw" : "calc(100vh - 54px - 220px)",
+        minHeight: isMobile ? 240 : 500,
         border: "none",
         display: "block",
         background: "#000",
@@ -171,33 +173,134 @@ const GameFrame = memo(forwardRef(function GameFrame({ url, isMobile, isFullscre
     backdropFilter: "blur(8px)", display: "flex",
     alignItems: "center", gap: 5,
     boxShadow: `0 0 20px rgba(0,229,255,0.3)`,
+    letterSpacing: "1.5px", textTransform: "uppercase",
+    transition: "all 0.15s ease",
   };
-  const exitBtnStyle = isFullscreen
-    ? {
-        ...btnBase, position: "absolute",
-        top:   `calc(12px + env(safe-area-inset-top, 0px))`,
-        right: `calc(12px + env(safe-area-inset-right, 0px))`,
-        zIndex: 10000,
-        padding: isMobile ? "10px 16px" : "8px 14px",
-        fontSize: isMobile ? 13 : 11,
-      }
-    : { ...btnBase, position: "absolute", bottom: 12, right: 12 };
+  // Fullscreen overlay button style
+  const overlayBtnStyle = {
+    ...btnBase, position: "absolute",
+    top:   `calc(12px + env(safe-area-inset-top, 0px))`,
+    right: `calc(12px + env(safe-area-inset-right, 0px))`,
+    zIndex: 10000,
+    padding: isMobile ? "10px 16px" : "8px 14px",
+    fontSize: isMobile ? 13 : 11,
+  };
 
   return (
     <div style={containerStyle}>
+      {/* Iframe — key prop forces remount on reload, giving a fresh game load */}
       <iframe
-        ref={ref} src={url}
+        key={reloadKey}
+        ref={ref}
+        src={url}
         style={iframeStyle}
         allow="fullscreen; autoplay; gyroscope; accelerometer; gamepad *"
         allowFullScreen
         title="Battle Arena"
       />
-      <button onClick={onToggleFullscreen} style={exitBtnStyle}>
-        <span>{isFullscreen ? "✕" : "⛶"}</span> {isFullscreen ? "Exit" : "Fullscreen"}
-      </button>
+
+      {/* Fullscreen: overlay controls at top-right (Reload + Exit) */}
+      {isFullscreen && (
+        <>
+          <button
+            onClick={onReload}
+            style={{ ...overlayBtnStyle, right: `calc(120px + env(safe-area-inset-right, 0px))` }}
+            title="Reload game"
+          >
+            <span>↻</span> Reload
+          </button>
+          <button onClick={onToggleFullscreen} style={overlayBtnStyle}>
+            <span>✕</span> Exit
+          </button>
+        </>
+      )}
+
+      {/* Not fullscreen: dedicated control bar BELOW the iframe — no overlap with game HUD */}
+      {!isFullscreen && (
+        <div style={{
+          display: "flex", gap: 10, justifyContent: "flex-end",
+          padding: "10px 4px 0",
+          flexWrap: "wrap",
+        }}>
+          <button
+            onClick={onReload}
+            style={btnBase}
+            title="Reload game (if stuck)"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(0,229,255,0.12)";
+              e.currentTarget.style.boxShadow = `0 0 25px rgba(0,229,255,0.5)`;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(0,0,0,0.85)";
+              e.currentTarget.style.boxShadow = `0 0 20px rgba(0,229,255,0.3)`;
+            }}
+          >
+            <span>↻</span> Reload
+          </button>
+          <button
+            onClick={onToggleFullscreen}
+            style={btnBase}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(0,229,255,0.12)";
+              e.currentTarget.style.boxShadow = `0 0 25px rgba(0,229,255,0.5)`;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(0,0,0,0.85)";
+              e.currentTarget.style.boxShadow = `0 0 20px rgba(0,229,255,0.3)`;
+            }}
+          >
+            <span>⛶</span> Fullscreen
+          </button>
+        </div>
+      )}
     </div>
   );
 }));
+
+// ── Portrait Warning (mobile only) ─────────────────────────────────────────
+// Battle Arena is designed for landscape orientation — show a rotate hint
+// when a phone is held vertically.
+function PortraitWarning({ visible }) {
+  if (!visible) return null;
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 100000,
+      background: "linear-gradient(180deg, #04030a 0%, #12081f 100%)",
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center",
+      padding: 24, textAlign: "center",
+    }}>
+      <div style={{
+        fontSize: 72, marginBottom: 24,
+        animation: "rotateHint 1.5s ease-in-out infinite",
+        filter: `drop-shadow(0 0 20px ${C.cyan})`,
+      }}>
+        📱
+      </div>
+      <div style={{
+        fontFamily: C.orb, fontWeight: 900, fontSize: 20,
+        color: C.cyanL, letterSpacing: "3px",
+        textTransform: "uppercase", marginBottom: 12,
+        textShadow: `0 0 15px ${C.cyan}`,
+      }}>
+        Rotate Your Device
+      </div>
+      <div style={{
+        fontFamily: C.raj, fontWeight: 500, fontSize: 14,
+        color: C.violetL, maxWidth: 320, lineHeight: 1.5,
+      }}>
+        Battle Arena is best played in <b style={{ color: C.gold }}>landscape mode</b>.
+        Turn your phone sideways to enter combat.
+      </div>
+      <style>{`
+        @keyframes rotateHint {
+          0%,100% { transform: rotate(0deg); }
+          50%     { transform: rotate(90deg); }
+        }
+      `}</style>
+    </div>
+  );
+}
 
 // ── Round Card ─────────────────────────────────────────────────────────────
 function RoundCard({ round, status, dollars, xpFlash }) {
@@ -317,6 +420,28 @@ export default function BattleArena() {
     chainKey, contracts, chainId, chainName, explorerUrl,
   } = useChain();
   const BATTLE_ARENA_ADDRESS = contracts?.battleArena;
+  const ARCADE_TOKEN_ADDRESS = contracts?.arcadeToken;
+
+  // ── Live ARCADE balance read ──
+  // Refreshes every 15s + immediately after a claim/purchase.
+  const { data: arcadeBalanceRaw, refetch: refetchArcadeBalance } = useReadContract({
+    address:      ARCADE_TOKEN_ADDRESS,
+    abi:          [{
+      name: "balanceOf", type: "function", stateMutability: "view",
+      inputs:  [{ name: "account", type: "address" }],
+      outputs: [{ name: "", type: "uint256" }],
+    }],
+    functionName: "balanceOf",
+    args:         address ? [address] : undefined,
+    chainId:      chainId,
+    query: {
+      enabled: !!address && !!ARCADE_TOKEN_ADDRESS,
+      refetchInterval: 15000,
+    },
+  });
+  const arcadeBalance = arcadeBalanceRaw
+    ? Number(BigInt(arcadeBalanceRaw) / 10n ** 16n) / 100  // 2 decimal precision
+    : 0;
 
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
@@ -374,6 +499,33 @@ export default function BattleArena() {
   const isFullscreen = isNativeFullscreen || isFakeFullscreen;
   const iframeRef = useRef(null);
 
+  // ── Reload counter — increment to force iframe remount ──
+  const [reloadKey, setReloadKey] = useState(0);
+  const handleReloadGame = useCallback(() => {
+    // Reset all UI state that ties to the current session, then increment
+    // key so the iframe fully remounts (fresh game load, fresh SDK init).
+    setReloadKey(k => k + 1);
+  }, []);
+
+  // ── Portrait warning (mobile only) ──
+  const [isPortrait, setIsPortrait] = useState(false);
+  useEffect(() => {
+    const check = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      // Only trigger portrait warning on actual phones (small screens),
+      // not on desktop windows that happen to be taller than wide.
+      setIsPortrait(w <= 768 && h > w);
+    };
+    check();
+    window.addEventListener("resize", check);
+    window.addEventListener("orientationchange", check);
+    return () => {
+      window.removeEventListener("resize", check);
+      window.removeEventListener("orientationchange", check);
+    };
+  }, []);
+
   const BATTLE_GAME_URL = import.meta.env.VITE_BATTLE_ARENA_URL;
 
   // ─── Effects: window / fullscreen / mobile ───
@@ -415,17 +567,57 @@ export default function BattleArena() {
     if (fsEl) {
       const exit = document.exitFullscreen || document.webkitExitFullscreen;
       try { exit?.call(document); } catch { /* no-op */ }
+      // Also clear the fake-fullscreen state in case both were somehow active
+      setIsFakeFullscreen(false);
       return;
     }
     if (isFakeFullscreen) { setIsFakeFullscreen(false); return; }
-    if (isMobile) { setIsFakeFullscreen(true); return; }
+
+    // Mobile: skip native fullscreen (spotty support). Use fake fullscreen
+    // + orientation lock for the best experience.
+    if (isMobile) {
+      setIsFakeFullscreen(true);
+      // Try to lock landscape — no-op on iOS Safari, works on Android
+      try {
+        screen.orientation?.lock?.("landscape").catch(() => {});
+      } catch { /* not supported */ }
+      return;
+    }
+
     const iframe = iframeRef.current;
     const nativeFS = iframe?.requestFullscreen || iframe?.webkitRequestFullscreen;
     if (!nativeFS) { setIsFakeFullscreen(true); return; }
+
+    // Safety timeout: if native fullscreen doesn't respond in 800ms, fall
+    // back to fake — prevents the "stuck loading" bug where the browser
+    // never resolves the promise (rare, but happens when clicking during
+    // page navigation or before user gesture registers).
+    let settled = false;
+    const timeoutId = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        setIsFakeFullscreen(true);
+      }
+    }, 800);
+
     try {
       const p = nativeFS.call(iframe);
-      if (p && typeof p.then === "function") p.catch(() => setIsFakeFullscreen(true));
-    } catch { setIsFakeFullscreen(true); }
+      if (p && typeof p.then === "function") {
+        p.then(() => { settled = true; clearTimeout(timeoutId); })
+         .catch(() => {
+           settled = true;
+           clearTimeout(timeoutId);
+           setIsFakeFullscreen(true);
+         });
+      } else {
+        settled = true;
+        clearTimeout(timeoutId);
+      }
+    } catch {
+      settled = true;
+      clearTimeout(timeoutId);
+      setIsFakeFullscreen(true);
+    }
   }, [isMobile, isFakeFullscreen]);
 
   // ─── Fetch on-chain dollar → ARCADE rate for UI display ───
@@ -803,6 +995,9 @@ export default function BattleArena() {
         explorerUrl: `${explorerUrl}/tx/${hash}`,
       });
 
+      // Trigger balance refresh so the sidebar card shows the new ARCADE
+      try { refetchArcadeBalance?.(); } catch { /* no-op */ }
+
       // 🎉 Full-screen celebration
       setConfettiActive(true);
       setTimeout(() => setConfettiActive(false), 4500);
@@ -1141,6 +1336,8 @@ export default function BattleArena() {
                 isMobile={isMobile}
                 isFullscreen={isFullscreen}
                 onToggleFullscreen={handleToggleFullscreen}
+                onReload={handleReloadGame}
+                reloadKey={reloadKey}
               />
             ) : (
               <div
@@ -1195,6 +1392,45 @@ export default function BattleArena() {
 
           {/* ─── SIDEBAR ─── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+            {/* ── ARCADE Balance card ── */}
+            {isConnected && ARCADE_TOKEN_ADDRESS && (
+              <div style={{
+                position: "relative",
+                background: `linear-gradient(135deg, rgba(0,255,136,0.06), rgba(0,229,255,0.05))`,
+                border: `1px solid ${C.green}`,
+                borderRadius: 12,
+                padding: "12px 16px",
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                boxShadow: `0 0 20px rgba(0,255,136,0.12)`,
+                overflow: "hidden",
+              }}>
+                {/* Ambient corner glow */}
+                <div style={{
+                  position: "absolute", top: -20, right: -20, width: 80, height: 80,
+                  background: `radial-gradient(circle, ${C.green}44 0%, transparent 70%)`,
+                  pointerEvents: "none",
+                }} />
+                <div style={{
+                  fontFamily: C.orb, fontWeight: 800, fontSize: 10,
+                  color: C.green, letterSpacing: "2px",
+                  textTransform: "uppercase",
+                  display: "flex", alignItems: "center", gap: 6,
+                }}>
+                  <span style={{ fontSize: 14 }}>◆</span> ARCADE
+                </div>
+                <div style={{
+                  fontFamily: C.orb, fontWeight: 900, fontSize: 18,
+                  color: "#fff",
+                  textShadow: `0 0 12px ${C.green}`,
+                  fontVariantNumeric: "tabular-nums",
+                }}>
+                  {arcadeBalance.toLocaleString(undefined, {
+                    maximumFractionDigits: arcadeBalance < 100 ? 2 : 0,
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* ── Battle Pass XP card (compact) ── */}
             {bpStatus && (
@@ -1506,6 +1742,9 @@ export default function BattleArena() {
 
           // 3. Push fresh full inventory so game re-applies state
           sendToGame("BATTLE_INVENTORY", { items: newInv });
+
+          // 4. Balance dropped after purchase — refresh sidebar
+          try { refetchArcadeBalance?.(); } catch { /* no-op */ }
         }}
         onEquippedChanged={(activeItems) => {
           // User equipped/unequipped inside the shop overlay OR backend
@@ -1515,6 +1754,9 @@ export default function BattleArena() {
           sendToGame("BATTLE_EQUIPPED", { activeItems: equippedRef.current });
         }}
       />
+
+      {/* ═══ PORTRAIT ROTATION HINT (mobile only) ═══ */}
+      <PortraitWarning visible={isPortrait} />
 
       {/* ═══ MATCH HISTORY OVERLAY ═══ */}
       <BattleMatchHistory
