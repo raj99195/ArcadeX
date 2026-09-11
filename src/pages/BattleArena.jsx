@@ -420,7 +420,25 @@ export default function BattleArena() {
     chainKey, contracts, chainId, chainName, explorerUrl,
   } = useChain();
   const BATTLE_ARENA_ADDRESS = contracts?.battleArena;
-  const ARCADE_TOKEN_ADDRESS = contracts?.arcadeToken;
+
+  // ARCADE token address — try chain context first, then fall back to known
+  // deployed addresses per chain. This makes the balance card work even if
+  // the ChainContext doesn't expose the token address under `arcadeToken`.
+  const ARCADE_TOKEN_ADDRESSES = {
+    mst:      "0xA3C5ffB1B9d0640e72720D0A029878262943D943",
+    botchain: "0x66D4484CE37CB5108A7846E7D97E0d38e5e141c8",
+  };
+  const ARCADE_TOKEN_ADDRESS =
+    contracts?.arcadeToken ||
+    contracts?.arcade ||
+    contracts?.token ||
+    ARCADE_TOKEN_ADDRESSES[chainKey] ||
+    null;
+
+  const { address, isConnected } = useAccount();
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
+  const { getToken: getTurnstileToken } = useTurnstile();
 
   // ── Live ARCADE balance read ──
   // Refreshes every 15s + immediately after a claim/purchase.
@@ -442,11 +460,6 @@ export default function BattleArena() {
   const arcadeBalance = arcadeBalanceRaw
     ? Number(BigInt(arcadeBalanceRaw) / 10n ** 16n) / 100  // 2 decimal precision
     : 0;
-
-  const { address, isConnected } = useAccount();
-  const publicClient = usePublicClient();
-  const { data: walletClient } = useWalletClient();
-  const { getToken: getTurnstileToken } = useTurnstile();
 
   // ── Session state ──
   const [sessionId, setSessionId]       = useState(null);
@@ -1394,7 +1407,7 @@ export default function BattleArena() {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
             {/* ── ARCADE Balance card ── */}
-            {isConnected && ARCADE_TOKEN_ADDRESS && (
+            {isConnected && (
               <div style={{
                 position: "relative",
                 background: `linear-gradient(135deg, rgba(0,255,136,0.06), rgba(0,229,255,0.05))`,
