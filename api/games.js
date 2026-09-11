@@ -1575,8 +1575,13 @@ export default async function handler(req, res) {
     if (!bUser) return res.status(401).json({ error: "Unauthorized" });
 
     const { sessionId, sessionToken } = req.body;
-    if (!sessionId || !sessionToken)
-      return res.status(400).json({ error: "sessionId, sessionToken required" });
+    if (!sessionId)
+      return res.status(400).json({ error: "sessionId required" });
+    // sessionToken is optional here. Frontend from an active game passes it
+    // (defence-in-depth), but late-claim from Match History doesn't have it
+    // in memory. That's fine — JWT proves player identity, and the contract
+    // enforces single-claim per sessionId via `claimedSessions` mapping, so
+    // there's no replay risk even without a token check.
 
     if (await isWalletBanned(db, bUser.address))
       return res.status(403).json({ error: "This wallet has been suspended." });
@@ -1592,7 +1597,8 @@ export default async function handler(req, res) {
       if (!sessSnap.exists) return res.status(404).json({ error: "Session not found" });
       const sess = sessSnap.data();
 
-      if (sess.sessionToken !== sessionToken)
+      // Only enforce token match when the caller actually provided one
+      if (sessionToken && sess.sessionToken !== sessionToken)
         return res.status(403).json({ error: "Invalid session token" });
       if (sess.player !== bUser.address.toLowerCase())
         return res.status(403).json({ error: "Session belongs to another player" });
