@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite",
     "server": "node server.js",
+    "studio:server": "node studio/server.mjs",
+    "studio:test": "node --test studio/tests/*.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -24,6 +26,7 @@
     "firebase-admin": "^13.10.0",
     "framer-motion": "^12.42.2",
     "jsonwebtoken": "^9.0.3",
+    "phaser": "3.90.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-is": "^19.2.6",

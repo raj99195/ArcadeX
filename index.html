@@ -6,7 +6,29 @@
     <link rel="icon" type="image/png" href="/IA-logo.png" />
 
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-   <title>ArcadeX | Web3 Games</title>
+
+    <!-- ArcadeX typography stack:
+         • Space Grotesk  — body / UI text (modern geometric sans)
+         • Rajdhani       — headings / labels (condensed display face)
+         • Orbitron       — numeric displays / scores / mega-titles (futuristic mono-ish)
+         Preconnect + display=swap so first paint doesn't block on the font fetch. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Rajdhani:wght@400;500;600;700&family=Orbitron:wght@500;600;700;800;900&display=swap"
+    />
+
+    <!-- Google AdSense — UNCOMMENT after signup, replace ca-pub-XXXXXXXXXXXXXXXX
+         with your real publisher ID. Needed so AdSense's crawler can verify
+         the site during initial approval. Keep public/ads.txt in sync with
+         the same pub ID, and update ADSENSE_CLIENT_ID in src/components/AdBanner.jsx.
+    <script async
+      src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXXXXXXXXXXXXXX"
+      crossorigin="anonymous"></script>
+    -->
+
+    <title>ArcadeX | Web3 Games</title>
   </head>
   <body>
     <div id="root"></div>

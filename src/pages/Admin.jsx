@@ -120,6 +120,15 @@ export default function Admin() {
   const [timeRange, setTimeRange] = useState("7d");
   const [playsChartData, setPlaysChartData] = useState([]);
 
+  // ── Web2 analytics state ──────────────────────────────────────────
+  // Separate from Web3 analytics so a slow Firestore scan on web2Scores
+  // never blocks the main Analytics tab.
+  const [web2Loading, setWeb2Loading]       = useState(false);
+  const [web2Analytics, setWeb2Analytics]   = useState(null);
+  const [web2Period, setWeb2Period]         = useState("weekly"); // daily|weekly|monthly|all
+  const [web2Flagged, setWeb2Flagged]       = useState([]);
+  const [web2FlaggedLoading, setWeb2FlaggedLoading] = useState(false);
+
   // ── Flags & Bans state ──────────────────────────────────────────────
   // Two Firestore-backed lists managed from one section.
   //   • flagged: soft-ban tracking (`flagged` collection) — auto-banned
@@ -279,6 +288,51 @@ export default function Admin() {
   useEffect(() => { if (isAdmin && activeTab === "analytics") fetchAnalytics(); }, [isAdmin, activeTab]);
   useEffect(() => { if (isAdmin && activeTab === "support") fetchTickets(); }, [isAdmin, activeTab]);
   useEffect(() => { if (scores.length) generateChartData(scores, timeRange); }, [timeRange]);
+
+  // ── Web2 analytics: separate endpoint so slow Firestore scans on
+  //     web2Scores don't tie up the main Analytics tab load.
+  const fetchWeb2Analytics = async () => {
+    setWeb2Loading(true);
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const r = await fetch(`/api/admin?action=web2-analytics&period=${web2Period}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "Failed to load Web2 analytics");
+      setWeb2Analytics(data);
+    } catch (e) { console.error("web2-analytics", e); setWeb2Analytics(null); }
+    finally { setWeb2Loading(false); }
+  };
+  const fetchWeb2Flagged = async () => {
+    setWeb2FlaggedLoading(true);
+    try {
+      const token = localStorage.getItem("arcadex_jwt");
+      const r = await fetch("/api/admin?action=web2-flagged-list&limit=100", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await r.json();
+      if (r.ok) setWeb2Flagged(data.flagged || []);
+    } catch (e) { console.error("web2-flagged", e); }
+    finally { setWeb2FlaggedLoading(false); }
+  };
+  const downloadWeb2Csv = async () => {
+    const token = localStorage.getItem("arcadex_jwt");
+    const r = await fetch("/api/admin?action=web2-export-csv", {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!r.ok) { alert("CSV export failed"); return; }
+    const blob = await r.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url;
+    a.download = `web2-users-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+  useEffect(() => {
+    if (isAdmin && activeTab === "web2") { fetchWeb2Analytics(); fetchWeb2Flagged(); }
+  }, [isAdmin, activeTab, web2Period]);
 
   // ── Fetch: Flags + Banned (both loaded together for the Flags tab) ──
   const fetchFlagsAndBans = async () => {
@@ -807,7 +861,7 @@ export default function Admin() {
     setSyncResults(prev => ({ ...prev, [gameId]: null }));
     try {
       const token = localStorage.getItem("arcadex_jwt");
-      const res = await fetch("/api/admin/deploy-multichain", {
+      const res = await fetch("/api/admin?action=deploy-multichain", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ gameId }),
@@ -826,7 +880,7 @@ export default function Admin() {
     setCreatorsLoading(true);
     try {
       const token = localStorage.getItem("arcadex_jwt");
-      const res = await fetch("/api/admin/creators", {
+      const res = await fetch("/api/admin?action=creators", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const data = await res.json();
@@ -842,7 +896,7 @@ export default function Admin() {
     setCreatorSyncResults(prev => ({ ...prev, [creator.address]: null }));
     try {
       const token = localStorage.getItem("arcadex_jwt");
-      const res = await fetch("/api/admin/sync-creator-nft", {
+      const res = await fetch("/api/admin?action=sync-creator-nft", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
@@ -867,7 +921,7 @@ export default function Admin() {
     setLeaderboardMsg("");
     try {
       const token = localStorage.getItem("arcadex_jwt");
-      const res = await fetch("/api/admin/games?action=refresh-leaderboard", {
+      const res = await fetch("/api/admin?action=games-refresh-leaderboard", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -886,7 +940,7 @@ export default function Admin() {
     setMarketplaceSyncResults(null);
     try {
       const token = localStorage.getItem("arcadex_jwt");
-      const res = await fetch("/api/admin/sync-marketplace", {
+      const res = await fetch("/api/admin?action=sync-marketplace", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -1011,6 +1065,7 @@ export default function Admin() {
               { id: "flags",        label: `🚩 Flags & Bans`,      color: "#ff4488" },
               { id: "taskon",       label: `🎯 TaskOn Config`,     color: "#00d4ff" },
               { id: "analytics",    label: `📊 Analytics`,         color: "#00d4ff" },
+              { id: "web2",         label: `🪙 Web2 Analytics`,    color: "#00d4ff" },
             ]},
           ].map(g => (
             <div key={g.group} style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
@@ -1937,7 +1992,150 @@ export default function Admin() {
           </div>
         )}
 
-        {activeTab !== "analytics" && activeTab !== "creators" && activeTab !== "support" && (gamesLoading ? (
+        {/* ── WEB2 ANALYTICS TAB ── */}
+        {activeTab === "web2" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Period + CSV controls */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {["daily","weekly","monthly","all"].map(p => (
+                <button key={p} onClick={() => setWeb2Period(p)} style={{
+                  padding: "6px 14px",
+                  background: web2Period === p ? "rgba(0,212,255,0.18)" : "transparent",
+                  border: `1px solid ${web2Period === p ? "#00d4ff" : "rgba(0,212,255,0.2)"}`,
+                  borderRadius: 6, color: web2Period === p ? "#00d4ff" : "#5a7f93",
+                  fontSize: 10.5, cursor: "pointer", fontFamily: P.raj, fontWeight: 700,
+                  letterSpacing: "0.4px", textTransform: "uppercase",
+                }}>{p}</button>
+              ))}
+              <div style={{ flex: 1 }} />
+              <button onClick={downloadWeb2Csv} style={{
+                padding: "6px 14px", background: "rgba(0,255,136,0.1)",
+                border: "1px solid rgba(0,255,136,0.35)", borderRadius: 6,
+                color: "#00ff88", fontSize: 10.5, cursor: "pointer",
+                fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.4px", textTransform: "uppercase",
+              }}>⬇ Export Users CSV</button>
+            </div>
+
+            {web2Loading ? (
+              <div style={{ padding: 48, textAlign: "center", fontSize: 11, color: "#5533aa", fontFamily: P.raj }}>Loading Web2 analytics...</div>
+            ) : !web2Analytics ? (
+              <div style={{ padding: 48, textAlign: "center", fontSize: 11, color: "#5533aa", fontFamily: P.raj }}>No data yet.</div>
+            ) : (
+              <>
+                {/* Top-line tiles */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 10 }}>
+                  {[
+                    { label: "Total Users",         value: web2Analytics.totals.users, color: "#00d4ff", icon: "👥" },
+                    { label: `Active (${web2Period})`, value: web2Analytics.totals.activeUsersInWindow, color: "#00ff88", icon: "✨" },
+                    { label: `Submissions (${web2Period})`, value: web2Analytics.totals.submissionsInWindow, color: "#9ee8ff", icon: "🎮" },
+                    { label: `Coins (${web2Period})`, value: web2Analytics.totals.coinsInWindow, color: "#FFB700", icon: "🪙" },
+                    { label: "Coins Lifetime",      value: web2Analytics.totals.coinsLifetime, color: "#ffb700", icon: "💰" },
+                    { label: "Flagged",             value: web2Analytics.totals.flaggedCount, color: web2Analytics.totals.flaggedCount ? "#ff4488" : "#5533aa", icon: "🚩" },
+                  ].map(s => (
+                    <div key={s.label} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: "14px 16px" }}>
+                      <div style={{ fontSize: 9, color: "#5a7f93", fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase" }}>{s.icon} {s.label}</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: s.color, fontFamily: "'Orbitron',sans-serif", marginTop: 4 }}>
+                        {Number(s.value).toLocaleString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Provider breakdown */}
+                <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 10, color: "#5a7f93", fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10 }}>Provider Breakdown</div>
+                  <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+                    {[
+                      { k: "google",  label: "Google",  color: "#4285F4" },
+                      { k: "twitter", label: "X",       color: "#1DA1F2" },
+                      { k: "other",   label: "Other",   color: "#64748b" },
+                    ].map(p => (
+                      <div key={p.k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: "50%", background: p.color }} />
+                        <span style={{ fontFamily: P.raj, fontSize: 12, color: "#9ee8ff" }}>{p.label}</span>
+                        <span style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 14, fontWeight: 700, color: "#fff" }}>
+                          {web2Analytics.providerBreakdown?.[p.k] || 0}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Daily chart (simple bars) */}
+                {web2Analytics.daily?.length > 0 && (
+                  <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 16 }}>
+                    <div style={{ fontSize: 10, color: "#5a7f93", fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 12 }}>Submissions / Day</div>
+                    <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 80 }}>
+                      {web2Analytics.daily.map(d => {
+                        const max = Math.max(...web2Analytics.daily.map(x => x.submissions), 1);
+                        const h = Math.max(2, (d.submissions / max) * 70);
+                        return (
+                          <div key={d.date} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                            <div title={`${d.submissions} subs · 🪙 ${d.coins}`} style={{ width: "100%", maxWidth: 24, height: h, background: "linear-gradient(180deg,#00d4ff,#1a7bbd)", borderRadius: 3 }} />
+                            <span style={{ fontSize: 8, color: "#5a7f93", fontFamily: P.raj }}>{d.date.slice(5)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Top games */}
+                <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 10, color: "#5a7f93", fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10 }}>Top Games ({web2Period})</div>
+                  {(web2Analytics.topGames || []).slice(0, 10).map(g => (
+                    <div key={g.gameId} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 8, padding: "6px 0", borderBottom: `1px solid ${P.b}`, fontSize: 11, color: "#cde6f3", fontFamily: P.raj }}>
+                      <span style={{ fontWeight: 700 }}>{g.gameName || `Game #${g.gameId}`}</span>
+                      <span>{g.plays} plays</span>
+                      <span>{g.uniquePlayers} unique</span>
+                      <span style={{ color: "#FFB700" }}>🪙 {g.coins}</span>
+                    </div>
+                  ))}
+                  {(!web2Analytics.topGames || web2Analytics.topGames.length === 0) && (
+                    <div style={{ color: "#5a7f93", fontSize: 11, fontFamily: P.raj }}>No plays in this window.</div>
+                  )}
+                </div>
+
+                {/* Top earners */}
+                <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 10, color: "#5a7f93", fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10 }}>Top Earners (Lifetime)</div>
+                  {(web2Analytics.topEarners || []).slice(0, 20).map((u, i) => (
+                    <div key={u.uid} style={{ display: "grid", gridTemplateColumns: "40px 2fr 1fr 1fr", gap: 8, padding: "6px 0", borderBottom: `1px solid ${P.b}`, fontSize: 11, color: "#cde6f3", fontFamily: P.raj, alignItems: "center" }}>
+                      <span style={{ color: "#5a7f93", fontFamily: "'Orbitron',sans-serif" }}>#{i + 1}</span>
+                      <span style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.displayName}</span>
+                      <span style={{ color: "#9ee8ff" }}>{u.provider}</span>
+                      <span style={{ color: "#FFB700" }}>🪙 {Number(u.totalArcadeCoins).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Flagged review */}
+                <div style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: "#ff4488", fontFamily: P.raj, letterSpacing: "1px", textTransform: "uppercase" }}>🚩 Flagged Submissions</div>
+                    <button onClick={fetchWeb2Flagged} disabled={web2FlaggedLoading} style={{
+                      padding: "4px 10px", background: "transparent", border: "1px solid rgba(255,68,136,0.3)",
+                      borderRadius: 5, color: "#ff4488", fontSize: 9, cursor: "pointer",
+                      fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px",
+                    }}>↻ {web2FlaggedLoading ? "..." : "Refresh"}</button>
+                  </div>
+                  {web2Flagged.length === 0 ? (
+                    <div style={{ color: "#5a7f93", fontSize: 11, fontFamily: P.raj }}>No flagged submissions.</div>
+                  ) : web2Flagged.map(f => (
+                    <div key={f.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 2fr", gap: 8, padding: "6px 0", borderBottom: `1px solid ${P.b}`, fontSize: 11, color: "#cde6f3", fontFamily: P.raj }}>
+                      <span>uid: {f.uid?.slice(0, 10)}…</span>
+                      <span>Game #{f.gameId}</span>
+                      <span style={{ color: "#ff4488" }}>Score {Number(f.score).toLocaleString()}</span>
+                      <span style={{ color: "#5a7f93" }}>{f.reason} · {f.at?.slice(0, 10)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {activeTab !== "analytics" && activeTab !== "creators" && activeTab !== "support" && activeTab !== "web2" && (gamesLoading ? (
           <div style={{ padding: 48, textAlign: "center", fontSize: 11, color: "#5533aa", fontFamily: P.raj }}>Loading...</div>
         ) : tabGames.length === 0 ? (
           <div style={{ padding: 56, textAlign: "center" }}>

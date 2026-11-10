@@ -29,11 +29,26 @@ const DEPLOYED_ADDRESSES_PATH = path.join(
 
 // Set this when migrating to a native-token chain (e.g. MST) to override
 // every game's rate to a safe fixed value, ignoring whatever's stored in
-// Firestore. Leave unset for ERC-20 chain migrations (BOTChain/Somnia) —
-// those keep using each game's own stored rewardRate as before.
-const FORCE_REWARD_RATE = process.env.FORCE_REWARD_RATE
-  ? parseInt(process.env.FORCE_REWARD_RATE)
-  : null;
+// Firestore.
+//
+// NEW Platform.sol stores rewardRate in WEI directly:
+//   FORCE_REWARD_RATE=0.5  → 500000000000000000 (0.5 MSTC)
+//   FORCE_REWARD_RATE=1    → 1000000000000000000 (1 MSTC)
+//
+// For ERC-20 chains (BOTChain/Somnia) leave unset — those use whole-token
+// Firestore values as before (their Platform still multiplies by 1e18 internally).
+function parseForceRate(raw) {
+  if (!raw) return null;
+  const parsed = parseFloat(raw);
+  if (isNaN(parsed) || parsed <= 0) {
+    console.error(`❌ Invalid FORCE_REWARD_RATE: "${raw}"`);
+    process.exit(1);
+  }
+  // Convert to wei for native-token chains (MST new Platform stores rate in wei)
+  return BigInt(Math.round(parsed * 1e18));
+}
+
+const FORCE_REWARD_RATE = parseForceRate(process.env.FORCE_REWARD_RATE);
 
 const PLATFORM_ABI = [
   "function adminRegisterAndApprove(uint256 specificGameId, address creator, string name, string iframeUrl, uint256 rewardRate) external",
@@ -117,8 +132,11 @@ async function main() {
 
   console.log(`\n✅ ${GAMES.length} approved games mile:`);
   GAMES.forEach(g => {
-    const rate = FORCE_REWARD_RATE !== null ? FORCE_REWARD_RATE : g.rewardRate;
-    console.log(`   #${g.gameId} — ${g.name} | rate → ${rate} | creator: ${g.creator?.slice(0,12)}...`);
+    const rate = FORCE_REWARD_RATE !== null ? FORCE_REWARD_RATE : BigInt(Math.round(g.rewardRate * 1e18));
+    const displayRate = FORCE_REWARD_RATE !== null
+      ? `${process.env.FORCE_REWARD_RATE} MSTC (${rate} wei)`
+      : g.rewardRate;
+    console.log(`   #${g.gameId} — ${g.name} | rate → ${displayRate} | creator: ${g.creator?.slice(0,12)}...`);
   });
 
   const [admin] = await ethers.getSigners();
@@ -138,8 +156,17 @@ async function main() {
   }
 
   for (const game of GAMES) {
-    const rateToUse = FORCE_REWARD_RATE !== null ? FORCE_REWARD_RATE : game.rewardRate;
-    console.log(`\n📋 Game #${game.gameId} — "${game.name}" | rate: ${rateToUse}`);
+    // MST (native token, new Platform): rate stored in wei
+    // BOTChain (ERC-20, old Platform): rate stored as whole tokens (Platform multiplies by 1e18)
+    const rateToUse = FORCE_REWARD_RATE !== null
+      ? FORCE_REWARD_RATE
+      : BigInt(Math.round((game.rewardRateNative ?? game.rewardRate ?? 1) * 1e18));
+
+    const displayRate = FORCE_REWARD_RATE !== null
+      ? `${process.env.FORCE_REWARD_RATE} MSTC`
+      : `${game.rewardRateNative ?? 1} MSTC`;
+
+    console.log(`\n📋 Game #${game.gameId} — "${game.name}" | rate: ${displayRate} (${rateToUse} wei)`);
     try {
       const existing = await platform.games(game.gameId);
       if (existing.isActive) { console.log(`   ✅ Already active — skip`); continue; }

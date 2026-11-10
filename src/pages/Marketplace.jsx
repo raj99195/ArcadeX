@@ -637,35 +637,85 @@ const arcadeBalance = Number(balance);
       <div style={{ position: "relative", zIndex: 1, padding: isMobile ? "16px" : "28px 36px" }}>
 
         {/* Header */}
-        <div style={{ marginBottom: 20, animation: "slideUp 0.5s ease forwards" }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 12px", border: "1px solid rgba(255,183,0,0.25)", borderRadius: 4, fontSize: 9, color: "rgba(255,183,0,0.7)", letterSpacing: "2px", textTransform: "uppercase", marginBottom: 10, background: "rgba(255,183,0,0.06)", fontFamily: P.raj, fontWeight: 600 }}>
-            <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#FFB700", animation: "pulse 1.5s ease-in-out infinite" }} />
+        <div className="ax-fade-down" style={{ marginBottom: 20 }}>
+          <div
+            className="ax-fade-down ax-purple-glow"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "4px 12px", border: "1px solid rgba(255,183,0,0.3)",
+              borderRadius: 4, fontSize: 9, color: "#FFD56A",
+              letterSpacing: "2px", textTransform: "uppercase",
+              marginBottom: 10, background: "rgba(255,183,0,0.08)",
+              fontFamily: P.raj, fontWeight: 600,
+            }}>
+            <span style={{
+              width: 5, height: 5, borderRadius: "50%", background: "#FFB700",
+              animation: "pulse 1.5s ease-in-out infinite",
+              boxShadow: "0 0 8px #FFB700",
+            }} />
             ArcadeX Marketplace
           </div>
-          <h1 style={{ fontFamily: P.raj, fontWeight: 700, fontSize: isMobile ? 28 : 44, letterSpacing: "-0.5px", textTransform: "uppercase", lineHeight: 0.95, color: "#fff", margin: "0 0 8px" }}>
+          <h1
+            className="ax-slide-left"
+            style={{
+              fontFamily: P.raj, fontWeight: 700,
+              fontSize: isMobile ? 28 : 44, letterSpacing: "-0.5px",
+              textTransform: "uppercase", lineHeight: 0.95,
+              color: "#fff", margin: "0 0 8px",
+            }}>
             MARKET<br />
-            <span style={{ background: "linear-gradient(90deg,#7B2FFF,#00d4ff,#7B2FFF)", backgroundSize: "200% 100%", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", animation: "gradientShift 3s ease infinite" }}>PLACE</span>
+            <span className="ax-holo-text">PLACE</span>
           </h1>
-          <p style={{ color: "#5533aa", fontSize: 12, fontFamily: P.raj }}>Buy badges, frames & power-ups with {tokenName} or {NATIVE_SYMBOL}</p>
+          <p
+            className="ax-fade-in"
+            style={{
+              color: "#8d6ec4", fontSize: 12, fontFamily: P.raj,
+              animationDelay: "0.2s",
+            }}>Buy badges, frames & power-ups with {tokenName} or {NATIVE_SYMBOL}</p>
         </div>
 
       {/* Balance cards */}
         {isConnected && (
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : (rewardType === "native" ? "1fr 1fr" : "repeat(3,1fr)"), gap: 10, marginBottom: 20 }}>
+          <div className="ax-stagger" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : (rewardType === "native" ? "1fr 1fr" : "repeat(3,1fr)"), gap: 10, marginBottom: 20 }}>
             {[
-              // ARCADE Box sirf ERC-20 chains par dikhega
               ...(rewardType !== "native" ? [{ label: `${tokenName} Balance`, value: arcadeBalance.toLocaleString(), color: "#a67fff", icon: "🎮", sub: "Available to spend" }] : []),
               { label: `${NATIVE_SYMBOL} Balance`, value: Number(botBalance?.formatted || 0).toFixed(4), color: "#00d4ff", icon: "⛓️", sub: "Native token" },
               { label: "Active Style", value: AVATAR_STYLES.find(s => s.id === activeStyle)?.label || "Bottts", color: "#00FF88", icon: "🎨", sub: "Your avatar style" },
             ].map(s => (
-              <div key={s.label} style={{ background: P.s1, border: `1px solid ${P.b}`, borderRadius: 12, padding: isMobile ? "12px" : "16px 20px", position: "relative", overflow: "hidden" }}>
-                <div style={{ position: "absolute", top: -20, right: -20, width: 80, height: 80, background: `radial-gradient(circle,${s.color}15 0%,transparent 70%)`, borderRadius: "50%", pointerEvents: "none" }} />
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
-                  <span style={{ fontSize: isMobile ? 14 : 18 }}>{s.icon}</span>
-                  <div style={{ fontSize: 8, color: "#5533aa", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" }}>{s.label}</div>
+              <div
+                key={s.label}
+                className="ax-lift ax-tilt-hover"
+                style={{
+                  background: P.s1, border: `1px solid ${P.b}`,
+                  borderRadius: 12, padding: isMobile ? "12px" : "16px 20px",
+                  position: "relative", overflow: "hidden",
+                }}>
+                <div
+                  className="ax-float"
+                  style={{
+                    position: "absolute", top: -20, right: -20, width: 80, height: 80,
+                    background: `radial-gradient(circle,${s.color}22 0%,transparent 70%)`,
+                    borderRadius: "50%", pointerEvents: "none",
+                  }} />
+                {/* Animated accent line */}
+                <div style={{
+                  position: "absolute", top: 0, left: 0, right: 0, height: 2,
+                  background: `linear-gradient(90deg, transparent, ${s.color}, transparent)`,
+                  backgroundSize: "200% 100%",
+                  animation: "axSheenMove 3s linear infinite",
+                }} />
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5, position: "relative" }}>
+                  <span style={{ fontSize: isMobile ? 14 : 18, display: "inline-block", animation: "axHeartbeat 3s ease-in-out infinite" }}>{s.icon}</span>
+                  <div style={{ fontSize: 8, color: "#8d6ec4", fontFamily: P.raj, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" }}>{s.label}</div>
                 </div>
-                <div style={{ fontFamily: P.orb, fontWeight: 700, fontSize: isMobile ? 16 : 22, color: s.color, letterSpacing: "-0.5px" }}>{s.value}</div>
-                <div style={{ fontSize: 9, color: "#3a2a5a", fontFamily: P.raj, marginTop: 2 }}>{s.sub}</div>
+                <div style={{
+                  fontFamily: P.orb, fontWeight: 700,
+                  fontSize: isMobile ? 16 : 22, color: s.color,
+                  letterSpacing: "-0.5px",
+                  textShadow: `0 0 16px ${s.color}44`,
+                  position: "relative",
+                }}>{s.value}</div>
+                <div style={{ fontSize: 9, color: "#5a4280", fontFamily: P.raj, marginTop: 2 }}>{s.sub}</div>
               </div>
             ))}
           </div>
@@ -679,7 +729,24 @@ const arcadeBalance = Number(balance);
   ...(rewardType !== "native" ? [{ id: "buy-arcade", label: `💱 Buy ${tokenName}` }] : []),
   { id: "badges", label: "🏆 Campaign Badges" },
 ].map(t => (
-            <button key={t.id} className="tab-btn" onClick={() => setActiveTab(t.id)} style={{ padding: "10px 22px", background: "transparent", border: "none", borderBottom: activeTab === t.id ? "2px solid #7B2FFF" : "2px solid transparent", color: activeTab === t.id ? "#c4a0ff" : "#3a2a5a", fontSize: 12, cursor: "pointer", marginBottom: "-1px", fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", transition: "color 0.18s" }}>
+            <button
+              key={t.id}
+              className="tab-btn"
+              onClick={() => setActiveTab(t.id)}
+              style={{
+                padding: "10px 24px", background: "transparent", border: "none",
+                borderBottom: activeTab === t.id ? "2px solid #a67fff" : "2px solid transparent",
+                color: activeTab === t.id ? "#d8c0ff" : "#5a4280",
+                fontSize: 12, cursor: "pointer", marginBottom: "-1px",
+                fontFamily: P.raj, fontWeight: 700, letterSpacing: "0.5px",
+                textTransform: "uppercase",
+                transition: "all 0.25s cubic-bezier(0.2,1,0.3,1)",
+                textShadow: activeTab === t.id ? "0 0 12px rgba(166,127,255,0.5)" : "none",
+                transform: activeTab === t.id ? "translateY(-1px)" : "translateY(0)",
+              }}
+              onMouseEnter={(e) => { if (activeTab !== t.id) { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.color = "#8d6ec4"; } }}
+              onMouseLeave={(e) => { if (activeTab !== t.id) { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.color = "#5a4280"; } }}
+            >
               {t.label}
             </button>
           ))}

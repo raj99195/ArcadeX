@@ -427,52 +427,75 @@ export default function BattlePass() {
         background: "linear-gradient(180deg, rgba(4,3,10,0.85), rgba(4,3,10,0.4))",
         backdropFilter: "blur(6px)",
       }}>
-        <button onClick={() => navigate(-1)} style={{
-          padding: "8px 16px", background: "rgba(0,0,0,0.6)",
-          border: `1px solid ${C.border}`, borderRadius: 8,
-          color: C.violetL, fontSize: 12, cursor: "pointer",
-          fontFamily: C.raj, fontWeight: 700, flexShrink: 0,
-          boxShadow: `0 0 12px rgba(139,92,246,0.3)`,
-        }}>
+        <button
+          onClick={() => navigate(-1)}
+          className="ax-slide-left ax-beam-host"
+          style={{
+            padding: "9px 18px", background: "rgba(0,0,0,0.6)",
+            border: `1px solid ${C.border}`, borderRadius: 8,
+            color: C.violetL, fontSize: 12, cursor: "pointer",
+            fontFamily: C.raj, fontWeight: 700, flexShrink: 0,
+            boxShadow: `0 0 12px rgba(139,92,246,0.3)`,
+            transition: "transform 0.25s, box-shadow 0.25s, background 0.25s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "translateX(-3px)";
+            e.currentTarget.style.background = "rgba(139,92,246,0.15)";
+            e.currentTarget.style.boxShadow = "0 0 20px rgba(139,92,246,0.5)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "translateX(0)";
+            e.currentTarget.style.background = "rgba(0,0,0,0.6)";
+            e.currentTarget.style.boxShadow = "0 0 12px rgba(139,92,246,0.3)";
+          }}
+        >
           ← EXIT
         </button>
 
-        <div style={{ flex: 1, textAlign: "center", position: "relative" }}>
-          <div style={{
-            fontFamily: C.orb, fontWeight: 900,
-            fontSize: isMobile ? 22 : 36,
-            color: "#fff",
-            letterSpacing: isMobile ? "3px" : "6px",
-            textTransform: "uppercase",
-            animation: "titleGlow 3s ease-in-out infinite",
-            lineHeight: 1,
-          }}>
-            ⚡ Battle Pass ⚡
+        <div className="ax-pop-in" style={{ flex: 1, textAlign: "center", position: "relative" }}>
+          <div
+            className="ax-aura"
+            style={{
+              fontFamily: C.orb, fontWeight: 900,
+              fontSize: isMobile ? 22 : 36,
+              color: "#fff",
+              letterSpacing: isMobile ? "3px" : "6px",
+              textTransform: "uppercase",
+              animation: "titleGlow 3s ease-in-out infinite, axAura 3.5s ease-in-out infinite",
+              lineHeight: 1,
+            }}>
+            <span style={{ display: "inline-block", animation: "axHeartbeat 1.6s ease-in-out infinite" }}>⚡</span>
+            {" "}Battle Pass{" "}
+            <span style={{ display: "inline-block", animation: "axHeartbeat 1.6s ease-in-out infinite 0.3s" }}>⚡</span>
           </div>
           {season && !isMobile && (
-            <div style={{
-              fontFamily: C.raj, fontSize: 12, color: C.cyan,
-              letterSpacing: "4px", marginTop: 6,
-              textShadow: `0 0 10px ${C.cyan}`,
-              textTransform: "uppercase",
-            }}>
+            <div
+              className="ax-fade-up"
+              style={{
+                fontFamily: C.raj, fontSize: 12, color: C.cyan,
+                letterSpacing: "4px", marginTop: 6,
+                textShadow: `0 0 10px ${C.cyan}`,
+                textTransform: "uppercase",
+                animationDelay: "0.2s",
+              }}>
               ▸ {season.name} ◂
             </div>
           )}
         </div>
 
         {daysLeft != null && !isMobile && (
-          <div style={{
-            padding: "8px 16px",
-            background: "rgba(0,0,0,0.6)",
-            border: `1px solid ${C.borderHot}`,
-            borderRadius: 20,
-            fontFamily: C.raj, fontWeight: 700, fontSize: 11,
-            color: C.cyanL, letterSpacing: "1.5px",
-            boxShadow: `0 0 20px rgba(0,229,255,0.3)`,
-            display: "flex", alignItems: "center", gap: 8,
-          }}>
-            <span>⏱</span> {daysLeft} DAYS LEFT
+          <div
+            className="ax-slide-right ax-glow-cyan"
+            style={{
+              padding: "9px 18px",
+              background: "rgba(0,0,0,0.6)",
+              border: `1px solid ${C.borderHot}`,
+              borderRadius: 20,
+              fontFamily: C.raj, fontWeight: 700, fontSize: 11,
+              color: C.cyanL, letterSpacing: "1.5px",
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+            <span style={{ display: "inline-block", animation: "axHeartbeat 1.6s ease-in-out infinite" }}>⏱</span> {daysLeft} DAYS LEFT
           </div>
         )}
       </div>

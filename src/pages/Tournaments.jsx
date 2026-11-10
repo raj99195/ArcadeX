@@ -514,47 +514,142 @@ export default function Tournaments() {
       `}</style>
       <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
         {particles.map(p => (
-          <div key={p.id} style={{ position: "absolute", left: `${p.x}%`, top: `${p.y}%`, width: p.size, height: p.size, borderRadius: "50%", background: p.id % 3 === 0 ? "#7B2FFF" : p.id % 3 === 1 ? "#00d4ff" : "#FFB700", opacity: 0.3, animation: `floatParticle ${p.duration}s ${p.delay}s ease-in-out infinite` }} />
+          <div key={p.id} style={{
+            position: "absolute", left: `${p.x}%`, top: `${p.y}%`,
+            width: p.size, height: p.size, borderRadius: "50%",
+            background: p.id % 3 === 0 ? "#7B2FFF" : p.id % 3 === 1 ? "#00d4ff" : "#FFB700",
+            opacity: 0.4,
+            boxShadow: `0 0 ${p.size * 3}px currentColor`,
+            animation: `floatParticle ${p.duration}s ${p.delay}s ease-in-out infinite`,
+          }} />
         ))}
-        <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(123,47,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(123,47,255,0.04) 1px, transparent 1px)", backgroundSize: "50px 50px" }} />
-        <div style={{ position: "absolute", top: "10%", left: "50%", transform: "translateX(-50%)", width: 600, height: 300, background: "radial-gradient(ellipse, rgba(123,47,255,0.12) 0%, transparent 70%)", borderRadius: "50%", pointerEvents: "none" }} />
+        <div className="ax-grid-bg" style={{ position: "absolute", inset: 0, opacity: 0.5 }} />
+        <div
+          className="ax-float"
+          style={{
+            position: "absolute", top: "10%", left: "50%", transform: "translateX(-50%)",
+            width: 600, height: 300,
+            background: "radial-gradient(ellipse, rgba(255,183,0,0.15) 0%, transparent 70%)",
+            borderRadius: "50%", pointerEvents: "none",
+          }} />
+        <div
+          className="ax-float-rotate"
+          style={{
+            position: "absolute", bottom: "5%", right: "10%",
+            width: 400, height: 400,
+            background: "radial-gradient(circle, rgba(123,47,255,0.1) 0%, transparent 70%)",
+            borderRadius: "50%", pointerEvents: "none",
+          }} />
       </div>
       <div style={{ position: "relative", zIndex: 1, padding: isMobile ? "16px 14px" : "28px 36px" }}>
-        <div style={{ marginBottom: 32, animation: "slideUp 0.6s ease forwards" }}>
+        <div className="ax-fade-down" style={{ marginBottom: 32 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-            <div style={{ fontSize: 40, animation: "trophyBounce 2s ease-in-out infinite" }}>🏆</div>
+            <div
+              className="ax-aura ax-heartbeat-hover"
+              style={{
+                fontSize: 48,
+                animation: "trophyBounce 2s ease-in-out infinite, axAura 3s ease-in-out infinite",
+                filter: "drop-shadow(0 0 24px rgba(255,183,0,0.7))",
+              }}>🏆</div>
             <div>
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 12px", border: "1px solid rgba(255,183,0,0.25)", borderRadius: 4, fontSize: 9, color: "rgba(255,183,0,0.7)", letterSpacing: "2px", textTransform: "uppercase", marginBottom: 8, background: "rgba(255,183,0,0.06)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 600 }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#FFB700", animation: "livePulse 1.5s ease-in-out infinite" }} />
+              <div
+                className="ax-fade-down"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "4px 12px", border: "1px solid rgba(255,183,0,0.35)",
+                  borderRadius: 4, fontSize: 9, color: "#FFD56A",
+                  letterSpacing: "2px", textTransform: "uppercase",
+                  marginBottom: 8, background: "rgba(255,183,0,0.08)",
+                  fontFamily: "'Rajdhani',sans-serif", fontWeight: 600,
+                  boxShadow: "0 0 20px rgba(255,183,0,0.2)",
+                }}>
+                <span style={{
+                  width: 5, height: 5, borderRadius: "50%", background: "#FFB700",
+                  animation: "livePulse 1.5s ease-in-out infinite",
+                  boxShadow: "0 0 8px #FFB700",
+                }} />
                 Compete · Earn · Dominate
               </div>
-              <h1 style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: isMobile ? 28 : 44, letterSpacing: "-0.5px", textTransform: "uppercase", lineHeight: 0.95, color: "#fff", margin: 0 }}>
+              <h1
+                className="ax-slide-left"
+                style={{
+                  fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+                  fontSize: isMobile ? 28 : 44, letterSpacing: "-0.5px",
+                  textTransform: "uppercase", lineHeight: 0.95, color: "#fff", margin: 0,
+                }}>
                 TOURNAMENT<br />
-                <span style={{ background: "linear-gradient(90deg,#FFB700,#FF6B00,#FFB700)", backgroundSize: "200% 100%", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", animation: "gradientShift 3s ease infinite" }}>ARENA</span>
+                <span className="ax-holo-text">ARENA</span>
               </h1>
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div className="ax-stagger" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             {[{ label: "Active", value: activeCnt, color: "#00FF88", icon: "⚡" }, { label: "Upcoming", value: upcomingCnt, color: "#00d4ff", icon: "🔜" }, { label: "Total", value: tournaments.length, color: "#a67fff", icon: "🎮" }].map(s => (
-              <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", background: "rgba(0,0,0,0.4)", border: `1px solid rgba(${s.color === "#00FF88" ? "0,255,136" : s.color === "#00d4ff" ? "0,212,255" : "123,47,255"},0.2)`, borderRadius: 20, backdropFilter: "blur(8px)" }}>
-                <span style={{ fontSize: 12 }}>{s.icon}</span>
-                <span style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 14, color: s.color }}>{s.value}</span>
-                <span style={{ fontSize: 10, color: "#5533aa", fontFamily: "'Rajdhani',sans-serif" }}>{s.label}</span>
+              <div
+                key={s.label}
+                className="ax-lift"
+                style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "9px 18px", background: "rgba(0,0,0,0.5)",
+                  border: `1px solid rgba(${s.color === "#00FF88" ? "0,255,136" : s.color === "#00d4ff" ? "0,212,255" : "123,47,255"},0.3)`,
+                  borderRadius: 20, backdropFilter: "blur(8px)",
+                  boxShadow: `0 0 20px ${s.color}22 inset`,
+                  transition: "all 0.3s cubic-bezier(0.2,1,0.3,1)",
+                }}>
+                <span style={{ fontSize: 14, display: "inline-block", animation: "axHeartbeat 2.4s ease-in-out infinite" }}>{s.icon}</span>
+                <span style={{
+                  fontFamily: "'Orbitron',sans-serif", fontWeight: 700,
+                  fontSize: 15, color: s.color,
+                  textShadow: `0 0 10px ${s.color}66`,
+                }}>{s.value}</span>
+                <span style={{ fontSize: 10, color: "#8d6ec4", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "0.5px" }}>{s.label}</span>
               </div>
             ))}
             {isConnected && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", background: "rgba(123,47,255,0.08)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 20 }}>
-                <span style={{ fontSize: 12 }}>🎮</span>
-                <span style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 14, color: "#a67fff" }}>{arcadeBalance.toFixed(0)}</span>
-                <span style={{ fontSize: 10, color: "#5533aa", fontFamily: "'Rajdhani',sans-serif" }}>{rewardToken || "ARCADE"}</span>
+              <div
+                className="ax-lift ax-purple-glow"
+                style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "9px 18px",
+                  background: "linear-gradient(135deg,rgba(123,47,255,0.2),rgba(0,212,255,0.08))",
+                  border: "1px solid rgba(123,47,255,0.4)", borderRadius: 20,
+                }}>
+                <span style={{ fontSize: 14, display: "inline-block", animation: "axHeartbeat 2.4s ease-in-out infinite" }}>🎮</span>
+                <span style={{
+                  fontFamily: "'Orbitron',sans-serif", fontWeight: 700,
+                  fontSize: 15, color: "#c4a0ff",
+                  textShadow: "0 0 10px rgba(166,127,255,0.6)",
+                }}>{arcadeBalance.toFixed(0)}</span>
+                <span style={{ fontSize: 10, color: "#8d6ec4", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "0.5px" }}>{rewardToken || "ARCADE"}</span>
               </div>
             )}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid rgba(123,47,255,0.15)", overflowX: "auto" }}>
+        <div className="ax-fade-up" style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid rgba(123,47,255,0.15)", overflowX: "auto", animationDelay: "0.1s" }}>
           {[{ id: "all", label: `All (${tournaments.length})` }, { id: "active", label: `Live (${activeCnt})`, dot: true }, { id: "upcoming", label: `Upcoming (${upcomingCnt})` }, { id: "ended", label: `Ended (${endedCnt})` }].map(t => (
-            <button key={t.id} className="tab-btn" onClick={() => setActiveTab(t.id)} style={{ padding: "10px 22px", background: "transparent", border: "none", borderBottom: activeTab === t.id ? "2px solid #7B2FFF" : "2px solid transparent", color: activeTab === t.id ? "#c4a0ff" : "#3a2a5a", fontSize: 12, cursor: "pointer", marginBottom: "-1px", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", transition: "color 0.18s", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-              {t.dot && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00FF88", animation: "livePulse 1s ease-in-out infinite" }} />}
+            <button
+              key={t.id}
+              className="tab-btn"
+              onClick={() => setActiveTab(t.id)}
+              style={{
+                padding: "10px 24px", background: "transparent", border: "none",
+                borderBottom: activeTab === t.id ? "2px solid #a67fff" : "2px solid transparent",
+                color: activeTab === t.id ? "#d8c0ff" : "#5a4280",
+                fontSize: 12, cursor: "pointer", marginBottom: "-1px",
+                fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+                letterSpacing: "0.5px", textTransform: "uppercase",
+                transition: "all 0.25s cubic-bezier(0.2,1,0.3,1)",
+                display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+                textShadow: activeTab === t.id ? "0 0 10px rgba(166,127,255,0.5)" : "none",
+                transform: activeTab === t.id ? "translateY(-1px)" : "translateY(0)",
+              }}
+              onMouseEnter={(e) => { if (activeTab !== t.id) { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.color = "#8d6ec4"; } }}
+              onMouseLeave={(e) => { if (activeTab !== t.id) { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.color = "#5a4280"; } }}
+            >
+              {t.dot && <span style={{
+                width: 7, height: 7, borderRadius: "50%", background: "#00FF88",
+                animation: "livePulse 1s ease-in-out infinite",
+                boxShadow: "0 0 10px #00FF88",
+              }} />}
               {t.label}
             </button>
           ))}

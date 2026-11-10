@@ -153,13 +153,17 @@ export async function signInAndGetJwt(address, walletClient, getTurnstileToken, 
   return signInPromise;
 }
 
-export function useAutoAuth() {
+export function useAutoAuth(enabled = true) {
   const { address, isConnected } = useAccount();
   const { data: walletClient }   = useWalletClient();
   const { getToken: getTurnstileToken } = useTurnstile();
   const signingRef = useRef(false); // guards against double-firing (StrictMode, fast re-renders)
 
   useEffect(() => {
+    // Web2 mode never requests a wallet signature — gate everything on
+    // the `enabled` flag so MetaMask doesn't pop up when a cached wagmi
+    // session reconnects in the background.
+    if (!enabled) return;
     if (!isConnected || !address || !walletClient) return;
     if (hasValidJwtForWallet(address)) return;
     if (signingRef.current) return;
@@ -178,5 +182,5 @@ export function useAutoAuth() {
         signingRef.current = false;
       }
     })();
-  }, [isConnected, address, walletClient, getTurnstileToken]);
+  }, [enabled, isConnected, address, walletClient, getTurnstileToken]);
 }

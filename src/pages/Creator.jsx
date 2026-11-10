@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAccount, usePublicClient } from "wagmi";
 import { useNavigate } from "react-router-dom";
 import { saveGame, saveCreator, getGamesByCreator, registerCreator, getCreatorStatus, getGameById } from "../lib/gameService";
@@ -62,8 +62,8 @@ const statusMap = {
   rejected: { bg: "rgba(255,68,68,0.08)", color: "#ff4444", border: "rgba(255,68,68,0.2)", label: "✗ Rejected" },
 };
 
-const CLOUDINARY_CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
-const CLOUDINARY_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+const MAX_THUMBNAIL_BYTES = 3 * 1024 * 1024;
+const THUMBNAIL_TYPES = ["image/png", "image/jpeg", "image/webp"];
 // TOURNAMENT_ADDRESS and ARCADE_TOKEN_ADDRESS now come from useChain()
 
 const TOURNAMENT_ABI = [
@@ -203,6 +203,7 @@ export default function Creator() {
   const [creatorLoading, setCreatorLoading] = useState(false);
   const [form, setForm] = useState({ name: "", description: "", iframeUrl: "", thumbnailUrl: "", category: "Action", customCategory: "", rewardRate: "50", rewardRateNative: "1" });
   const [uploading, setUploading] = useState(false);
+  const thumbnailUpload = useRef(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = { current: null };
 
@@ -514,41 +515,62 @@ export default function Creator() {
     }
   };
 
-  const uploadToCloudinary = async (file) => {
-    if (!file) return null;
+  const uploadThumbnail = async (file) => {
+    if (!file || thumbnailUpload.current || loading) return;
+    if (!THUMBNAIL_TYPES.includes(file.type)) {
+      setError("Use a PNG, JPG, or WebP image.");
+      return;
+    }
+    if (file.size > MAX_THUMBNAIL_BYTES) {
+      setError("Thumbnail must be 3 MB or smaller.");
+      return;
+    }
+    const token = localStorage.getItem("arcadex_jwt");
+    if (!token) {
+      setError("Reconnect your wallet before uploading a thumbnail.");
+      return;
+    }
+    thumbnailUpload.current = true;
+    setError("");
     setUploading(true);
     setUploadProgress(0);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("upload_preset", CLOUDINARY_PRESET);
-      formData.append("folder", "arcadex-games");
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Could not read the selected image."));
+        reader.readAsDataURL(file);
+      });
       const xhr = new XMLHttpRequest();
-      const uploadUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`;
-      return await new Promise((resolve, reject) => {
+      const url = await new Promise((resolve, reject) => {
+        xhr.open("POST", "/api/games?action=upload-creator-thumbnail");
+        xhr.responseType = "json";
+        xhr.timeout = 60000;
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100));
         };
         xhr.onload = () => {
-          if (xhr.status === 200) {
-            const data = JSON.parse(xhr.responseText);
-            resolve(data.secure_url);
-          } else reject(new Error("Upload failed"));
+          if (xhr.status === 200 && xhr.response?.url) resolve(xhr.response.url);
+          else reject(new Error(xhr.response?.error || "Could not upload the thumbnail."));
         };
-        xhr.onerror = () => reject(new Error("Upload failed"));
-        xhr.open("POST", uploadUrl);
-        xhr.send(formData);
+        xhr.onerror = () => reject(new Error("Network error. Try again."));
+        xhr.ontimeout = () => reject(new Error("Upload timed out. Try again."));
+        xhr.send(JSON.stringify({ base64Data: dataUrl.split(",")[1] }));
       });
+      setForm(f => ({ ...f, thumbnailUrl: url }));
     } catch (err) {
       setError("Image upload failed: " + err.message);
-      return null;
     } finally {
+      thumbnailUpload.current = false;
       setUploading(false);
       setUploadProgress(0);
     }
   };
 
 const submitGame = async () => {
+    if (thumbnailUpload.current) return;
     if (!form.name || !form.iframeUrl || !form.description) { setError("Fill in all required fields."); return; }
     if (!validateUrl(form.iframeUrl)) { setError("Enter a valid game URL."); return; }
     if (!form.thumbnailUrl) { setError("Please upload a thumbnail image."); return; }
@@ -1140,15 +1162,11 @@ const submitGame = async () => {
                     onDrop={async e => {
                       e.preventDefault();
                       e.currentTarget.style.borderColor = P.b;
-                      const file = e.dataTransfer.files[0];
-                      if (file && file.type.startsWith("image/")) {
-                        const url = await uploadToCloudinary(file);
-                        if (url) setForm(f => ({ ...f, thumbnailUrl: url }));
-                      }
+                      await uploadThumbnail(e.dataTransfer.files[0]);
                     }}
                     style={{ width: "100%", minHeight: 100, border: `2px dashed ${form.thumbnailUrl ? "rgba(0,255,136,0.3)" : P.b}`, borderRadius: 8, background: "rgba(123,47,255,0.04)", cursor: uploading ? "not-allowed" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, transition: "all 0.2s", position: "relative", overflow: "hidden", boxSizing: "border-box" }}
                   >
-                    {form.thumbnailUrl ? (
+                    {form.thumbnailUrl && !uploading ? (
                       <>
                         <img src={form.thumbnailUrl} alt="thumbnail" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7 }} />
                         <div style={{ position: "relative", zIndex: 1, background: "rgba(0,0,0,0.6)", padding: "4px 12px", borderRadius: 20, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1167,21 +1185,19 @@ const submitGame = async () => {
                       <>
                         <div style={{ fontSize: 24 }}>🖼️</div>
                         <div style={{ fontSize: 12, color: "#a67fff", fontFamily: P.raj, fontWeight: 700 }}>Click or drag & drop image</div>
-                        <div style={{ fontSize: 10, color: "#5533aa", fontFamily: P.raj }}>PNG, JPG, WebP — max 5MB</div>
+                        <div style={{ fontSize: 10, color: "#5533aa", fontFamily: P.raj }}>PNG, JPG, WebP — max 3 MB</div>
                       </>
                     )}
                   </div>
                   <input
                     id="thumb-upload"
                     type="file"
-                    accept="image/*"
+                    accept="image/png,image/jpeg,image/webp"
                     style={{ display: "none" }}
                     onChange={async e => {
                       const file = e.target.files[0];
-                      if (file) {
-                        const url = await uploadToCloudinary(file);
-                        if (url) setForm(f => ({ ...f, thumbnailUrl: url }));
-                      }
+                      e.target.value = "";
+                      await uploadThumbnail(file);
                     }}
                   />
                 </div>
@@ -1216,7 +1232,8 @@ const submitGame = async () => {
                   Native-chain rate is capped {NATIVE_MIN}–{NATIVE_MAX} since MSTC carries real value — this only applies when your game is played on a native-token chain like MST.
                 </div>
                 {error && <div style={{ padding: 10, background: "rgba(255,68,68,0.07)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 7, color: "#ff4444", fontSize: 11, fontFamily: P.raj }}>{error}</div>}
-                <Btn onClick={() => {
+                <Btn disabled={uploading} onClick={() => {
+                  if (thumbnailUpload.current) return;
                   if (!form.name || !form.iframeUrl || !form.description) { setError("Please fill in all required fields."); return; }
                   if (!validateUrl(form.iframeUrl)) { setError("Please enter a valid game URL."); return; }
                   if (!form.thumbnailUrl) { setError("Please upload a thumbnail image."); return; }
@@ -1241,7 +1258,7 @@ const submitGame = async () => {
                 {error && <div style={{ padding: 10, background: "rgba(255,68,68,0.07)", border: "1px solid rgba(255,68,68,0.2)", borderRadius: 7, color: "#ff4444", fontSize: 11, fontFamily: P.raj }}>{error}</div>}
                 <div style={{ display: "flex", gap: 10 }}>
                   <Btn onClick={() => setStep(1)} variant="ghost" style={{ flex: 1 }}>← Back</Btn>
-                  <Btn onClick={submitGame} disabled={loading} style={{ flex: 2 }}>
+                  <Btn onClick={submitGame} disabled={loading || uploading} style={{ flex: 2 }}>
                     {loading ? `Submitting to ${chainName}...` : "Submit Game 🚀"}
                   </Btn>
                 </div>

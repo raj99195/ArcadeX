@@ -2,11 +2,59 @@
 import jwt from "jsonwebtoken";
 import admin from "firebase-admin";
 import { ethers } from "ethers";
+import { creatorThumbnailBucket, uploadCreatorThumbnail } from "../lib/creatorThumbnail.mjs";
 function verifyToken(req) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith("Bearer ")) return null;
   try { return jwt.verify(auth.split(" ")[1], process.env.JWT_SECRET); }
   catch { return null; }
+}
+
+// ── Web2 mode: Firebase ID token verifier ───────────────────────────
+// Web3 uses JWT (verifyToken above). Web2 uses Firebase ID tokens from
+// Google / X / Twitter login. Frontend passes it via the same
+// Authorization: Bearer <token> header — the Web2 action handlers at
+// the bottom of this handler call this verifier instead of verifyToken.
+async function verifyFirebaseToken(req) {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) return null;
+  const token = auth.split(" ")[1];
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    const providerId = decoded.firebase?.sign_in_provider || "";
+    const provider = providerId.includes("twitter") ? "twitter"
+                   : providerId.includes("google")  ? "google"
+                   : providerId;
+    return {
+      uid:         decoded.uid,
+      provider,
+      displayName: decoded.name    || "Player",
+      photoURL:    decoded.picture || null,
+      email:       decoded.email   || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ── Web2 mode: constants ────────────────────────────────────────────
+// Shared with the Web2 action handlers below the Web3 handlers.
+const WEB2_DAILY_COIN_CAP     = 500;        // ArcadeCoins per uid per day
+const WEB2_ABSOLUTE_MAX_SCORE = 10_000_000; // Anti-cheat ceiling
+const WEB2_SUBMIT_COOLDOWN_MS = 60_000;     // 60s between score submits
+const WEB2_IP_BURST_MAX       = 10;         // Max submits per IP per minute
+
+// ── Web2 admin check ────────────────────────────────────────────────
+// Admins are identified by their verified Firebase email. ADMIN_EMAILS env
+// var takes a comma-separated list; a built-in fallback keeps the owner
+// account working even before the env is wired up.
+function isWeb2Admin(user) {
+  if (!user?.email) return false;
+  const envList = (process.env.WEB2_ADMIN_EMAILS || process.env.ADMIN_EMAILS || "")
+    .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  const fallback = ["rajagrahari9919@gmail.com"];
+  const list = envList.length ? envList : fallback;
+  return list.includes(String(user.email).toLowerCase());
 }
 // ── CORS ────────────────────────────────────────────────────────────
 // FAIL-CLOSED: pehle "*" fallback tha. Vercel pe ALLOWED_ORIGIN accidentally
@@ -359,7 +407,861 @@ export default async function handler(req, res) {
   cors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
   const { action } = req.query;
+  if (req.method === "POST" && action === "upload-creator-thumbnail") {
+    return uploadCreatorThumbnail(req, res, {
+      verifyToken,
+      rateLimit,
+      getBucket: () => {
+        getDb();
+        return creatorThumbnailBucket(admin);
+      },
+    });
+  }
   const db = getDb();
+
+  // ── Web2 mode dispatch (Firebase auth, off-chain ArcadeCoins) ──
+  // All Web2 actions go through this single file so the Vercel function
+  // count stays low. Web3 flow (JWT + on-chain) continues below untouched.
+  //
+  // POST web2-submit-score — submit a game score, award ArcadeCoins
+  //   Body: { gameId, score }
+  //   Caps: 500 coins/uid/day, 1 submit/60s/uid, 10/min/IP, 10M score ceiling
+  if (req.method === "POST" && action === "web2-submit-score") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+
+    const { gameId, score } = req.body || {};
+    if (gameId == null || score == null) {
+      return res.status(400).json({ error: "gameId and score required" });
+    }
+    const gid = Number(gameId);
+    const sc  = Number(score);
+    if (!Number.isFinite(gid) || gid < 0 || gid > 1e9) {
+      return res.status(400).json({ error: "Invalid gameId" });
+    }
+    if (!Number.isFinite(sc) || sc < 0) {
+      return res.status(400).json({ error: "Invalid score" });
+    }
+
+    if (!rateLimit(`w2-score:${user.uid}`, 1, WEB2_SUBMIT_COOLDOWN_MS)) {
+      return res.status(429).json({ error: "Please wait 60 seconds between score submissions." });
+    }
+    const ip = getClientIp(req);
+    if (ip && !rateLimit(`w2-score-ip:${ip}`, WEB2_IP_BURST_MAX, 60_000)) {
+      return res.status(429).json({ error: "Too many submissions from this network." });
+    }
+
+    try {
+      const gameSnap = await db.collection("games").doc(String(gid)).get();
+      if (!gameSnap.exists || gameSnap.data().status !== "approved") {
+        return res.status(404).json({ error: "Game not found or not approved" });
+      }
+      const game = gameSnap.data();
+      const rewardRate = Number(game.rewardRate) || 50;
+
+      if (sc > WEB2_ABSOLUTE_MAX_SCORE) {
+        await db.collection("web2Flagged").add({
+          uid: user.uid, provider: user.provider, gameId: gid, score: sc,
+          reason: "Absolute score ceiling exceeded", at: new Date(),
+        });
+        return res.status(400).json({ error: "Score flagged for review." });
+      }
+
+      const minScore = Number(game.minScoreWeb2) || 0;
+      if (minScore > 0 && sc < minScore) {
+        return res.status(400).json({
+          error: `Score below ${minScore} — need more points to earn ArcadeCoins.`,
+          softReject: true, minScore,
+        });
+      }
+
+      const todayKey    = new Date().toISOString().slice(0, 10);
+      const capRef      = db.collection("web2DailyCaps").doc(`${user.uid}_${todayKey}`);
+      const capSnap     = await capRef.get();
+      const todayEarned = capSnap.exists ? Number(capSnap.data().coins || 0) : 0;
+      const remainingCap = Math.max(0, WEB2_DAILY_COIN_CAP - todayEarned);
+      const coinsAwarded = Math.min(rewardRate, remainingCap);
+      const cappedToday  = coinsAwarded < rewardRate;
+
+      const scoreRef = await db.collection("web2Scores").add({
+        uid: user.uid, displayName: user.displayName, photoURL: user.photoURL,
+        provider: user.provider, gameId: gid, gameName: game.name || "",
+        score: sc, coinsEarned: coinsAwarded, cappedToday,
+        rewardRateAtTime: rewardRate, createdAt: new Date(),
+      });
+
+      const userRef  = db.collection("web2Users").doc(user.uid);
+      const userSnap = await userRef.get();
+      const existing = userSnap.exists ? userSnap.data() : {};
+      const userUpdate = {
+        uid: user.uid, displayName: user.displayName, photoURL: user.photoURL,
+        provider: user.provider, email: user.email,
+        totalArcadeCoins: FV.increment(coinsAwarded),
+        totalPlays: FV.increment(1), lastPlayed: new Date(),
+      };
+      if (!userSnap.exists) userUpdate.createdAt = new Date();
+      await userRef.set(userUpdate, { merge: true });
+
+      await capRef.set({
+        uid: user.uid, date: todayKey,
+        coins: FV.increment(coinsAwarded), updatedAt: new Date(),
+      }, { merge: true });
+
+      await db.collection("web2Transactions").add({
+        uid: user.uid, gameId: gid, type: "score_reward",
+        coinsAwarded, cappedToday, scoreRefId: scoreRef.id, at: new Date(),
+      });
+
+      // Tournament bestScore update — if any active tournament for this
+      // gameId has the user as a player, bump their bestScore to max(old, sc).
+      try {
+        const now = Date.now();
+        const tSnap = await db.collection("web2Tournaments")
+          .where("gameId", "==", gid).get();
+        for (const tDoc of tSnap.docs) {
+          const t = tDoc.data();
+          const start = t.startTime?.toDate?.()?.getTime?.() || Number(t.startTime);
+          const end   = t.endTime?.toDate?.()?.getTime?.()   || Number(t.endTime);
+          if (now < start || now > end) continue;
+          const players = Array.isArray(t.players) ? t.players : [];
+          const idx = players.findIndex(p => p.uid === user.uid);
+          if (idx < 0) continue;
+          if (sc > Number(players[idx].bestScore || 0)) {
+            players[idx] = { ...players[idx], bestScore: sc };
+            await tDoc.ref.update({ players, status: "active" });
+          }
+        }
+      } catch (tErr) {
+        // Tournament update failures must not block the regular score save.
+        console.warn("[web2-submit-score] tournament sync skipped:", tErr.message);
+      }
+
+      const newBalance = Number(existing.totalArcadeCoins || 0) + coinsAwarded;
+      return res.status(200).json({
+        success: true, coinsAwarded, newBalance, cappedToday,
+        remainingToday: Math.max(0, WEB2_DAILY_COIN_CAP - todayEarned - coinsAwarded),
+        dailyCap: WEB2_DAILY_COIN_CAP,
+      });
+    } catch (err) {
+      console.error("[web2-submit-score]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // GET web2-user-stats — navbar balance + today's cap usage
+  if (req.method === "GET" && action === "web2-user-stats") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+
+    try {
+      const userSnap = await db.collection("web2Users").doc(user.uid).get();
+      const data     = userSnap.exists ? userSnap.data() : {};
+      const todayKey    = new Date().toISOString().slice(0, 10);
+      const capSnap     = await db.collection("web2DailyCaps").doc(`${user.uid}_${todayKey}`).get();
+      const todayEarned = capSnap.exists ? Number(capSnap.data().coins || 0) : 0;
+      return res.status(200).json({
+        uid:              user.uid,
+        displayName:      data.displayName || user.displayName,
+        photoURL:         data.photoURL    || user.photoURL,
+        provider:         data.provider    || user.provider,
+        totalArcadeCoins: Number(data.totalArcadeCoins || 0),
+        totalPlays:       Number(data.totalPlays || 0),
+        lastPlayed:       data.lastPlayed?.toDate?.()?.toISOString?.() || null,
+        todayEarned,
+        dailyCap:         WEB2_DAILY_COIN_CAP,
+        remainingToday:   Math.max(0, WEB2_DAILY_COIN_CAP - todayEarned),
+      });
+    } catch (err) {
+      console.error("[web2-user-stats]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // GET web2-leaderboard (public, 2-min edge cache)
+  //   ?period=all     (default) — lifetime totalArcadeCoins from web2Users
+  //   ?period=daily   — sum of today's coinsEarned from web2Scores (UTC day)
+  //   ?period=weekly  — sum of last-7-days coinsEarned from web2Scores
+  if (req.method === "GET" && action === "web2-leaderboard") {
+    try {
+      res.setHeader("Cache-Control", "public, s-maxage=120, stale-while-revalidate=300");
+      const limit  = Math.min(parseInt(req.query.limit) || 100, 200);
+      const period = (req.query.period || "all").toLowerCase();
+
+      if (period === "all") {
+        const snap = await db.collection("web2Users")
+          .orderBy("totalArcadeCoins", "desc").limit(limit).get();
+        const rows = snap.docs.map((d, i) => {
+          const data = d.data();
+          return {
+            rank: i + 1, uid: d.id,
+            displayName: data.displayName || "Player",
+            photoURL:    data.photoURL    || null,
+            provider:    data.provider    || "unknown",
+            totalArcadeCoins: Number(data.totalArcadeCoins || 0),
+            totalPlays:       Number(data.totalPlays       || 0),
+          };
+        });
+        return res.status(200).json({ period, leaderboard: rows });
+      }
+
+      // Daily / weekly: aggregate from web2Scores. Period rolls over at UTC.
+      const now = Date.now();
+      const windowMs = period === "weekly" ? 7 * 86_400_000 : 86_400_000;
+      const since = new Date(now - windowMs);
+      const snap = await db.collection("web2Scores")
+        .where("createdAt", ">=", since).get();
+
+      const agg = new Map(); // uid → { coins, plays, displayName, photoURL, provider }
+      snap.docs.forEach(d => {
+        const s = d.data();
+        if (!s.uid) return;
+        const cur = agg.get(s.uid) || { coins: 0, plays: 0, displayName: s.displayName || "Player", photoURL: s.photoURL || null, provider: s.provider || "unknown" };
+        cur.coins += Number(s.coinsEarned || 0);
+        cur.plays += 1;
+        // Keep the latest display name/photo we see
+        if (s.displayName) cur.displayName = s.displayName;
+        if (s.photoURL)    cur.photoURL    = s.photoURL;
+        if (s.provider)    cur.provider    = s.provider;
+        agg.set(s.uid, cur);
+      });
+      const rows = [...agg.entries()]
+        .map(([uid, v]) => ({ uid, ...v }))
+        .sort((a, b) => b.coins - a.coins)
+        .slice(0, limit)
+        .map((r, i) => ({
+          rank: i + 1, uid: r.uid,
+          displayName: r.displayName, photoURL: r.photoURL, provider: r.provider,
+          totalArcadeCoins: r.coins, totalPlays: r.plays,
+        }));
+      return res.status(200).json({ period, leaderboard: rows });
+    } catch (err) {
+      console.error("[web2-leaderboard]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // GET web2-user-profile — public profile + rank + recent plays for any uid.
+  // Visited profiles don't require auth (same as Web3 Leaderboard profiles).
+  if (req.method === "GET" && action === "web2-user-profile") {
+    try {
+      const uid = req.query.uid;
+      if (!uid) return res.status(400).json({ error: "uid required" });
+      res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+
+      const userSnap = await db.collection("web2Users").doc(uid).get();
+      if (!userSnap.exists) return res.status(404).json({ error: "User not found" });
+      const u = userSnap.data();
+
+      // Rank: count users with strictly MORE coins. Capped so we don't scan
+      // the full collection — if the user is below rank 500 they just see "500+".
+      let rank = null;
+      try {
+        const totalCoins = Number(u.totalArcadeCoins || 0);
+        const higherSnap = await db.collection("web2Users")
+          .where("totalArcadeCoins", ">", totalCoins).limit(500).count().get();
+        const higher = higherSnap.data().count;
+        rank = higher < 500 ? higher + 1 : null;
+      } catch { /* count() unsupported on older admin SDK — skip rank */ }
+
+      // SH0031 — Firestore composite-index fallback. Composite (uid asc +
+      // createdAt desc) requires an index; if it isn't deployed yet (new
+      // Firebase project), fall back to an unordered where() + sort in
+      // memory. firestore.indexes.json carries the proper definition for
+      // deployments to pick up via `firebase deploy --only firestore:indexes`.
+      const historyLimit = Math.min(parseInt(req.query.history) || 30, 100);
+      let history = [];
+      try {
+        const histSnap = await db.collection("web2Scores")
+          .where("uid", "==", uid)
+          .orderBy("createdAt", "desc").limit(historyLimit).get();
+        history = histSnap.docs.map(d => {
+          const s = d.data();
+          return {
+            id:          d.id,
+            gameId:      s.gameId,
+            gameName:    s.gameName || "",
+            score:       Number(s.score || 0),
+            coinsEarned: Number(s.coinsEarned || 0),
+            cappedToday: !!s.cappedToday,
+            createdAt:   s.createdAt?.toDate?.()?.toISOString?.() || null,
+          };
+        });
+      } catch (indexErr) {
+        console.warn("[web2-user-profile] orderBy fallback:", indexErr.code, indexErr.message);
+        // Pull a safe multiple of the window, sort in memory, trim.
+        const histSnap = await db.collection("web2Scores")
+          .where("uid", "==", uid).limit(Math.max(historyLimit * 3, 100)).get();
+        history = histSnap.docs.map(d => {
+          const s = d.data();
+          return {
+            id:          d.id,
+            gameId:      s.gameId,
+            gameName:    s.gameName || "",
+            score:       Number(s.score || 0),
+            coinsEarned: Number(s.coinsEarned || 0),
+            cappedToday: !!s.cappedToday,
+            createdAt:   s.createdAt?.toDate?.()?.toISOString?.() || null,
+          };
+        })
+          .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+          .slice(0, historyLimit);
+      }
+
+      return res.status(200).json({
+        profile: {
+          uid,
+          displayName: u.displayName || "Player",
+          photoURL:    u.photoURL    || null,
+          provider:    u.provider    || "unknown",
+          totalArcadeCoins: Number(u.totalArcadeCoins || 0),
+          totalPlays:       Number(u.totalPlays || 0),
+          createdAt:        u.createdAt?.toDate?.()?.toISOString?.() || null,
+          lastPlayed:       u.lastPlayed?.toDate?.()?.toISOString?.() || null,
+          rank,
+        },
+        history,
+      });
+    } catch (err) {
+      console.error("[web2-user-profile]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // ─── Web2 Creator Portal ──────────────────────────────────────────
+  // Firestore-backed off-chain mirror of the Web3 creator flow.
+  // Collections:
+  //   web2Creators/{uid}  — creator profile + status
+  //   web2Games/{id}      — Web2 game submissions
+  //   games/{id}          — approved Web2 games also mirrored here so
+  //                         they show up in the regular library listing
+  // ══════════════════════════════════════════════════════════════════
+
+  // GET web2-creator-status — am I a creator? Return my record + my games
+  if (req.method === "GET" && action === "web2-creator-status") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    try {
+      const cRef  = db.collection("web2Creators").doc(user.uid);
+      const cSnap = await cRef.get();
+      const admin = isWeb2Admin(user);
+      if (!cSnap.exists) {
+        return res.status(200).json({
+          isCreator: false, isAdmin: admin, email: user.email || null,
+        });
+      }
+      const c = cSnap.data();
+      const gamesSnap = await db.collection("web2Games")
+        .where("creatorUid", "==", user.uid).get();
+      const games = gamesSnap.docs.map(d => ({ id: d.id, ...d.data(),
+        createdAt: d.data().createdAt?.toDate?.()?.toISOString?.() || null,
+        approvedAt: d.data().approvedAt?.toDate?.()?.toISOString?.() || null,
+      }));
+      return res.status(200).json({
+        isCreator: true,
+        isAdmin: admin,
+        creator: {
+          uid: user.uid,
+          email: c.email || user.email,
+          displayName: c.displayName || user.displayName,
+          photoURL: c.photoURL || user.photoURL,
+          provider: c.provider || user.provider,
+          bio: c.bio || "",
+          status: c.status || "approved",
+          createdAt: c.createdAt?.toDate?.()?.toISOString?.() || null,
+          totalGames: Number(c.totalGames || 0),
+          totalPlays: Number(c.totalPlays || 0),
+          totalCoinsPaid: Number(c.totalCoinsPaid || 0),
+        },
+        games,
+      });
+    } catch (err) {
+      console.error("[web2-creator-status]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // POST web2-register-creator — self-serve creator onboarding
+  //   Body: { displayName?, bio? }
+  //   Guests blocked; Google/X auto-approved (admin can ban later).
+  if (req.method === "POST" && action === "web2-register-creator") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    if (!rateLimit(`w2cReg:${user.uid}`, 3, 60_000))
+      return res.status(429).json({ error: "Slow down — try again in a minute." });
+
+    try {
+      const { displayName, bio } = req.body || {};
+      const cRef  = db.collection("web2Creators").doc(user.uid);
+      const cSnap = await cRef.get();
+      if (cSnap.exists && cSnap.data().status === "banned") {
+        return res.status(403).json({ error: "Creator account is banned." });
+      }
+      const payload = {
+        uid:         user.uid,
+        email:       user.email || null,
+        displayName: (displayName || user.displayName || "Creator").toString().slice(0, 40),
+        photoURL:    user.photoURL || null,
+        provider:    user.provider,
+        bio:         (bio || "").toString().slice(0, 400),
+        status:      cSnap.exists ? cSnap.data().status : "approved",
+      };
+      if (!cSnap.exists) {
+        payload.createdAt     = new Date();
+        payload.totalGames    = 0;
+        payload.totalPlays    = 0;
+        payload.totalCoinsPaid = 0;
+      }
+      await cRef.set(payload, { merge: true });
+      return res.status(200).json({ success: true, creator: payload });
+    } catch (err) {
+      console.error("[web2-register-creator]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // POST web2-submit-game — submit a new game for admin review
+  //   Body: { name, description, iframeUrl, thumbnailUrl, category, rewardRate }
+  if (req.method === "POST" && action === "web2-submit-game") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    if (!rateLimit(`w2gSub:${user.uid}`, 5, 300_000))
+      return res.status(429).json({ error: "Too many submissions. Try again later." });
+
+    try {
+      const cSnap = await db.collection("web2Creators").doc(user.uid).get();
+      if (!cSnap.exists)         return res.status(403).json({ error: "Register as a creator first." });
+      if (cSnap.data().status === "banned") return res.status(403).json({ error: "Creator account banned." });
+
+      const { name, description, iframeUrl, thumbnailUrl, category, rewardRate } = req.body || {};
+      if (!name || !iframeUrl)   return res.status(400).json({ error: "Name and iframe URL are required." });
+
+      // Validate iframe URL — must be https
+      if (!/^https:\/\//i.test(iframeUrl))
+        return res.status(400).json({ error: "iframe URL must start with https://" });
+      if (thumbnailUrl && !/^https:\/\//i.test(thumbnailUrl))
+        return res.status(400).json({ error: "Thumbnail URL must start with https://" });
+
+      const rate = Math.max(1, Math.min(500, Number(rewardRate) || 50));
+      const payload = {
+        creatorUid:   user.uid,
+        creatorName:  cSnap.data().displayName || user.displayName,
+        creatorPhoto: cSnap.data().photoURL    || user.photoURL,
+        name:         String(name).slice(0, 60),
+        description:  String(description || "").slice(0, 400),
+        iframeUrl:    String(iframeUrl),
+        thumbnailUrl: String(thumbnailUrl || ""),
+        category:     String(category || "Casual").slice(0, 24),
+        rewardRate:   rate,
+        status:       "pending",
+        createdAt:    new Date(),
+        plays:        0,
+        totalCoinsPaid: 0,
+        source:       "web2",
+      };
+      const ref = await db.collection("web2Games").add(payload);
+      return res.status(200).json({ success: true, id: ref.id, game: payload });
+    } catch (err) {
+      console.error("[web2-submit-game]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // DELETE web2-delete-game — creator deletes their own pending game
+  //   Query: ?id=<web2GameId>
+  if (req.method === "DELETE" && action === "web2-delete-game") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    try {
+      const id = String(req.query.id || "");
+      if (!id) return res.status(400).json({ error: "id required" });
+      const gRef  = db.collection("web2Games").doc(id);
+      const gSnap = await gRef.get();
+      if (!gSnap.exists) return res.status(404).json({ error: "Game not found" });
+      const g = gSnap.data();
+      if (g.creatorUid !== user.uid && !isWeb2Admin(user))
+        return res.status(403).json({ error: "Not your game." });
+      if (g.status === "approved" && !isWeb2Admin(user))
+        return res.status(400).json({ error: "Approved games can't be deleted — contact admin." });
+      await gRef.delete();
+      // If a mirror exists in `games`, remove it too (admin cleanup only)
+      if (isWeb2Admin(user) && g.mirrorGameId) {
+        try { await db.collection("games").doc(String(g.mirrorGameId)).delete(); } catch {}
+      }
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("[web2-delete-game]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // GET web2-admin-queue — admin: list pending + recent games + ALL games
+  // (Web3 + Web2 approved) so the admin can manage the whole platform
+  // from one place.
+  if (req.method === "GET" && action === "web2-admin-queue") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    if (!isWeb2Admin(user)) return res.status(403).json({ error: "Admin only." });
+    try {
+      const pendingSnap = await db.collection("web2Games")
+        .where("status", "==", "pending").get();
+      const pending = pendingSnap.docs.map(d => ({ id: d.id, ...d.data(),
+        createdAt: d.data().createdAt?.toDate?.()?.toISOString?.() || null,
+      })).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+
+      const creatorsSnap = await db.collection("web2Creators").get();
+      const creators = creatorsSnap.docs.map(d => ({ uid: d.id, ...d.data(),
+        createdAt: d.data().createdAt?.toDate?.()?.toISOString?.() || null,
+      }));
+
+      // All platform games — Web3 + mirrored Web2 — so admin can see
+      // every live/approved title in one admin pane.
+      const gamesSnap = await db.collection("games").get();
+      const allGames = gamesSnap.docs.map(d => {
+        const g = d.data();
+        return {
+          id: d.id,
+          gameId: g.gameId || d.id,
+          name: g.name || "Untitled",
+          description: g.description || "",
+          category: g.category || "",
+          thumbnailUrl: g.thumbnailUrl || g.thumbnail || "",
+          iframeUrl: g.iframeUrl || "",
+          rewardRate: Number(g.rewardRate || 0),
+          rewardRateNative: Number(g.rewardRateNative || 0),
+          plays: Number(g.plays || 0),
+          likes: Number(g.likes || 0),
+          source: g.source || "web3",
+          status: g.status || "approved",
+          creator: g.creator || null,
+          creatorUid: g.creatorUid || null,
+          creatorName: g.creatorName || null,
+          createdAt: g.createdAt?.toDate?.()?.toISOString?.() || null,
+        };
+      }).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+
+      return res.status(200).json({ pending, creators, allGames });
+    } catch (err) {
+      console.error("[web2-admin-queue]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // POST web2-admin-moderate — admin: approve/reject game or ban/unban creator
+  //   Body: { kind: 'game' | 'creator', id, action: 'approve'|'reject'|'ban'|'unban', reason? }
+  if (req.method === "POST" && action === "web2-admin-moderate") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    if (!isWeb2Admin(user)) return res.status(403).json({ error: "Admin only." });
+
+    try {
+      const { kind, id, action: op, reason } = req.body || {};
+      if (!kind || !id || !op) return res.status(400).json({ error: "kind, id, action required" });
+
+      if (kind === "game") {
+        const gRef  = db.collection("web2Games").doc(String(id));
+        const gSnap = await gRef.get();
+        if (!gSnap.exists) return res.status(404).json({ error: "Game not found." });
+        const g = gSnap.data();
+
+        if (op === "approve") {
+          // Mirror into the public `games` collection so useGames() picks it up.
+          const mirrorId = g.mirrorGameId || `w2_${id}`;
+          const mirror = {
+            id: mirrorId,
+            gameId: mirrorId,
+            name: g.name,
+            description: g.description,
+            iframeUrl: g.iframeUrl,
+            thumbnailUrl: g.thumbnailUrl,
+            category: g.category || "Casual",
+            rewardRate: g.rewardRate || 50,
+            rewardRateNative: 0, // Web2 games don't pay native tokens
+            creator: null,       // No wallet creator address
+            creatorUid: g.creatorUid,
+            creatorName: g.creatorName,
+            status: "approved",
+            source: "web2",
+            plays: g.plays || 0,
+            likes: 0,
+            uniquePlayers: 0,
+            createdAt: g.createdAt || new Date(),
+            approvedAt: new Date(),
+          };
+          await db.collection("games").doc(String(mirrorId)).set(mirror, { merge: true });
+          await gRef.update({
+            status: "approved", approvedAt: new Date(), mirrorGameId: mirrorId,
+            rejectionReason: null,
+          });
+          // Increment creator's game counter
+          await db.collection("web2Creators").doc(g.creatorUid)
+            .set({ totalGames: FV.increment(1) }, { merge: true });
+          return res.status(200).json({ success: true, mirrorId });
+        }
+        if (op === "reject") {
+          await gRef.update({
+            status: "rejected",
+            rejectionReason: String(reason || "").slice(0, 300) || "Did not meet guidelines.",
+          });
+          // Remove mirror if it existed from a prior approval
+          if (g.mirrorGameId) {
+            try { await db.collection("games").doc(String(g.mirrorGameId)).delete(); } catch {}
+          }
+          return res.status(200).json({ success: true });
+        }
+        return res.status(400).json({ error: "Unknown op" });
+      }
+
+      if (kind === "creator") {
+        const cRef  = db.collection("web2Creators").doc(String(id));
+        const cSnap = await cRef.get();
+        if (!cSnap.exists) return res.status(404).json({ error: "Creator not found." });
+        if (op === "ban")    { await cRef.update({ status: "banned" });  return res.status(200).json({ success: true }); }
+        if (op === "unban")  { await cRef.update({ status: "approved" }); return res.status(200).json({ success: true }); }
+        return res.status(400).json({ error: "Unknown op" });
+      }
+
+      return res.status(400).json({ error: "Unknown kind" });
+    } catch (err) {
+      console.error("[web2-admin-moderate]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════════
+  // Web2 Tournaments (mirror of on-chain Tournament.sol flow)
+  // Collection: web2Tournaments/{id} — one doc per tournament; players
+  // stored inline for atomic join + score updates. Status is derived at
+  // read time from startTime/endTime so stale "upcoming" docs can't miss
+  // transitions.
+  // ═════════════════════════════════════════════════════════════
+
+  // GET web2-tournaments — public list
+  if (req.method === "GET" && action === "web2-tournaments") {
+    try {
+      const snap = await db.collection("web2Tournaments").get();
+      const rows = snap.docs.map(d => {
+        const t = d.data();
+        return {
+          id: d.id,
+          gameId: t.gameId,
+          gameName: t.gameName,
+          gameThumbnail: t.gameThumbnail || "",
+          creatorUid: t.creatorUid || null,
+          creatorName: t.creatorName || "Admin",
+          entryFee: Number(t.entryFee || 0),
+          maxPlayers: Number(t.maxPlayers || 10),
+          startTime: t.startTime?.toDate?.()?.getTime?.() || Number(t.startTime) || 0,
+          endTime:   t.endTime?.toDate?.()?.getTime?.()   || Number(t.endTime)   || 0,
+          prizePool: Number(t.prizePool || 0),
+          status: t.status || "upcoming", // upcoming | active | ended | cancelled
+          prizesDistributed: !!t.prizesDistributed,
+          players: Array.isArray(t.players) ? t.players : [],
+          createdAt: t.createdAt?.toDate?.()?.toISOString?.() || null,
+        };
+      });
+      return res.status(200).json({ tournaments: rows });
+    } catch (err) {
+      console.error("[web2-tournaments]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // POST web2-tournament-create — admin only
+  //   Body: { gameId, entryFee, maxPlayers, startTime (ms), durationHours }
+  if (req.method === "POST" && action === "web2-tournament-create") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    if (!isWeb2Admin(user)) return res.status(403).json({ error: "Admin only." });
+    try {
+      const { gameId, entryFee, maxPlayers, startTime, durationHours } = req.body || {};
+      if (!gameId) return res.status(400).json({ error: "gameId required" });
+      const fee   = Math.max(0, Math.min(10_000, Number(entryFee) || 0));
+      const cap   = Math.max(2, Math.min(1000, Number(maxPlayers) || 10));
+      const start = Math.max(Date.now(), Number(startTime) || Date.now());
+      const dur   = Math.max(1, Math.min(24 * 30, Number(durationHours) || 24));
+      const end   = start + dur * 3_600_000;
+
+      const gSnap = await db.collection("games").doc(String(gameId)).get();
+      if (!gSnap.exists) return res.status(404).json({ error: "Game not found." });
+      const g = gSnap.data();
+
+      const payload = {
+        gameId: String(gameId),
+        gameName: g.name || "Game",
+        gameThumbnail: g.thumbnailUrl || "",
+        creatorUid: user.uid,
+        creatorName: user.displayName,
+        entryFee: fee,
+        maxPlayers: cap,
+        startTime: new Date(start),
+        endTime: new Date(end),
+        prizePool: 0,
+        status: "upcoming",
+        prizesDistributed: false,
+        players: [],
+        createdAt: new Date(),
+      };
+      const ref = await db.collection("web2Tournaments").add(payload);
+      return res.status(200).json({ success: true, id: ref.id });
+    } catch (err) {
+      console.error("[web2-tournament-create]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // POST web2-tournament-join — pay entry fee, add to players
+  //   Body: { tournamentId }
+  if (req.method === "POST" && action === "web2-tournament-join") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    try {
+      const { tournamentId } = req.body || {};
+      if (!tournamentId) return res.status(400).json({ error: "tournamentId required" });
+
+      await db.runTransaction(async (tx) => {
+        const tRef  = db.collection("web2Tournaments").doc(String(tournamentId));
+        const tSnap = await tx.get(tRef);
+        if (!tSnap.exists) throw new Error("Tournament not found.");
+        const t = tSnap.data();
+
+        const now = Date.now();
+        const start = t.startTime?.toDate?.()?.getTime?.() || Number(t.startTime);
+        const end   = t.endTime?.toDate?.()?.getTime?.()   || Number(t.endTime);
+        if (now > end) throw new Error("Tournament already ended.");
+        if (t.status === "cancelled") throw new Error("Tournament cancelled.");
+        const players = Array.isArray(t.players) ? t.players : [];
+        if (players.some(p => p.uid === user.uid)) throw new Error("You already joined.");
+        if (players.length >= Number(t.maxPlayers || 10)) throw new Error("Tournament is full.");
+
+        const fee = Number(t.entryFee || 0);
+        if (fee > 0) {
+          const uRef  = db.collection("web2Users").doc(user.uid);
+          const uSnap = await tx.get(uRef);
+          const bal   = Number(uSnap.data()?.totalArcadeCoins || 0);
+          if (bal < fee) throw new Error(`Need ${fee} ArcadeCoins — you have ${bal}.`);
+          tx.update(uRef, { totalArcadeCoins: FV.increment(-fee) });
+        }
+
+        players.push({
+          uid: user.uid,
+          displayName: user.displayName,
+          photoURL: user.photoURL || null,
+          joinedAt: new Date().toISOString(),
+          bestScore: 0,
+        });
+        tx.update(tRef, {
+          players,
+          prizePool: FV.increment(fee),
+          status: now >= start ? "active" : (t.status || "upcoming"),
+        });
+      });
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("[web2-tournament-join]", err);
+      return res.status(400).json({ error: err.message });
+    }
+  }
+
+  // POST web2-tournament-end — admin triggers prize distribution
+  //   Body: { tournamentId }
+  //   Splits prizePool 60/25/15 to top-3 by bestScore; writes transactions.
+  if (req.method === "POST" && action === "web2-tournament-end") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    if (!isWeb2Admin(user)) return res.status(403).json({ error: "Admin only." });
+    try {
+      const { tournamentId } = req.body || {};
+      if (!tournamentId) return res.status(400).json({ error: "tournamentId required" });
+
+      const tRef  = db.collection("web2Tournaments").doc(String(tournamentId));
+      const tSnap = await tRef.get();
+      if (!tSnap.exists) return res.status(404).json({ error: "Tournament not found." });
+      const t = tSnap.data();
+      if (t.prizesDistributed) return res.status(400).json({ error: "Prizes already distributed." });
+
+      const players = (Array.isArray(t.players) ? t.players : [])
+        .slice().sort((a, b) => Number(b.bestScore || 0) - Number(a.bestScore || 0));
+      const pool = Number(t.prizePool || 0);
+      const splits = [0.6, 0.25, 0.15];
+      const prizes = [];
+      for (let i = 0; i < Math.min(3, players.length); i++) {
+        const amount = Math.floor(pool * splits[i]);
+        if (amount <= 0) continue;
+        const uRef = db.collection("web2Users").doc(players[i].uid);
+        await uRef.set({ totalArcadeCoins: FV.increment(amount) }, { merge: true });
+        await db.collection("web2Transactions").add({
+          uid: players[i].uid, type: "tournament_prize", tournamentId: String(tournamentId),
+          rank: i + 1, coinsAwarded: amount, at: new Date(),
+        });
+        prizes.push({ uid: players[i].uid, rank: i + 1, amount });
+      }
+      await tRef.update({ status: "ended", prizesDistributed: true, prizes });
+      return res.status(200).json({ success: true, prizes });
+    } catch (err) {
+      console.error("[web2-tournament-end]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // POST web2-tournament-cancel — admin cancels an upcoming/active tournament
+  // Refunds every participant's entry fee.
+  if (req.method === "POST" && action === "web2-tournament-cancel") {
+    const user = await verifyFirebaseToken(req);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    if (!isWeb2Admin(user)) return res.status(403).json({ error: "Admin only." });
+    try {
+      const { tournamentId } = req.body || {};
+      const tRef  = db.collection("web2Tournaments").doc(String(tournamentId));
+      const tSnap = await tRef.get();
+      if (!tSnap.exists) return res.status(404).json({ error: "Not found." });
+      const t = tSnap.data();
+      if (t.prizesDistributed) return res.status(400).json({ error: "Already settled." });
+
+      const fee = Number(t.entryFee || 0);
+      for (const p of (t.players || [])) {
+        if (fee > 0) {
+          await db.collection("web2Users").doc(p.uid)
+            .set({ totalArcadeCoins: FV.increment(fee) }, { merge: true });
+          await db.collection("web2Transactions").add({
+            uid: p.uid, type: "tournament_refund", tournamentId: String(tournamentId),
+            coinsAwarded: fee, at: new Date(),
+          });
+        }
+      }
+      await tRef.update({ status: "cancelled", prizePool: 0 });
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("[web2-tournament-cancel]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // GET web2-creators-list — public showcase of approved creators
+  if (req.method === "GET" && action === "web2-creators-list") {
+    try {
+      res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+      const snap = await db.collection("web2Creators")
+        .where("status", "==", "approved").get();
+      const rows = snap.docs.map(d => {
+        const c = d.data();
+        return {
+          uid: d.id,
+          displayName: c.displayName || "Creator",
+          photoURL: c.photoURL || null,
+          provider: c.provider || "unknown",
+          bio: c.bio || "",
+          totalGames: Number(c.totalGames || 0),
+          totalPlays: Number(c.totalPlays || 0),
+          totalCoinsPaid: Number(c.totalCoinsPaid || 0),
+        };
+      }).sort((a, b) => (b.totalPlays || 0) - (a.totalPlays || 0));
+      return res.status(200).json({ creators: rows });
+    } catch (err) {
+      console.error("[web2-creators-list]", err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
 
   // ── GET stats (public) ──
   // SH0030/SH0035 — cost-explosion fix + comments split-out.

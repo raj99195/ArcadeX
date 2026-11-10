@@ -22,7 +22,7 @@ const SERVER_URL = "http://localhost:3000";
 async function main() {
   console.log(`\n🔗 Syncing creator profile "${USERNAME}.arcade" to all live chains except "${ORIGIN_CHAIN_KEY}"...\n`);
 
-  const res = await fetch(`${SERVER_URL}/api/admin/sync-creator-nft`, {
+  const res = await fetch(`${SERVER_URL}/api/admin?action=sync-creator-nft`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

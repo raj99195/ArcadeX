@@ -13,6 +13,14 @@
   display: none;
 }
 
+/* Anchor the root font so rem units render consistently regardless of
+   user-agent default or any transform:scale upstream. */
+html { font-size: 16px; }
+
+/* Default line-height for every element unless overridden — fixes the
+   cramped feel on multi-line descriptions throughout the app. */
+html, body { line-height: 1.55; }
+
 :root {
   --green: #00FF88;
   --purple: #7B2FFF;
@@ -25,8 +33,154 @@
 body {
   background: var(--bg);
   color: #ffffff;
-  font-family: 'Inter', -apple-system, sans-serif;
+  /* Primary UI font — Space Grotesk reads cleanly at small sizes and
+     carries the modern-gaming vibe. Rajdhani / Orbitron stay available
+     for headings and numeric displays via inline font-family. */
+  font-family: 'Space Grotesk', 'Rajdhani', 'Inter', -apple-system, sans-serif;
+  font-feature-settings: "ss01", "ss02", "cv11";
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  /* Boost small-text legibility: font-size-adjust equalises x-height
+     across fonts so Rajdhani at 10px doesn't look thinner than Space
+     Grotesk at the same size. */
+  font-size-adjust: 0.52;
+  font-synthesis: none;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Legibility fixes — any text <= 11px gets a readable floor.
+   Browsers don't enforce a min-font-size, so we scale up the tiny
+   inline styles via attribute selectors. This hits most micro-labels
+   across the app without touching every component.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Universal: boost font weight for the condensed display face at any
+   size <= 12px, where its 400 weight reads as hairline on dim colors. */
+[style*="'Rajdhani'"],
+[style*="'Rajdhani',sans-serif"],
+[style*="'Rajdhani', sans-serif"] {
+  font-weight: 600;
+}
+
+/* Round tiny inline font sizes up to a readable floor. Hits every
+   `fontSize: N` in inline styles across the app. Spec targets:
+   • 14–16px for body copy
+   • 12–14px for secondary labels, chips, badges, captions
+   • 13–14px for navigation
+   Order matters — more specific (longer value substring) comes first. */
+[style*="font-size: 6px"],
+[style*="font-size:6px"],
+[style*="font-size: 7px"],
+[style*="font-size:7px"] { font-size: 12px !important; }
+
+[style*="font-size: 8px"],
+[style*="font-size:8px"] { font-size: 12px !important; }
+
+[style*="font-size: 9px"],
+[style*="font-size:9px"] { font-size: 12px !important; }
+
+[style*="font-size: 10px"],
+[style*="font-size:10px"] { font-size: 12.5px !important; }
+
+[style*="font-size: 11px"],
+[style*="font-size:11px"] { font-size: 13px !important; }
+
+/* 12px itself gets a small floor boost on dark bg (Rajdhani at 600
+   weight stays legible). Skipped — bumping all 12s to 13 would ripple
+   through hundreds of chip layouts; the attribute selector route only
+   touches sizes that were already *problematic*. */
+
+/* Tighten the overly-wide letter-spacing on tiny labels so each
+   glyph sits closer to its neighbour and reads as a word, not dots.
+   clamp() keeps headlines near their original tracking while squeezing
+   small labels — the lower bound caps spacing on 10px text, the upper
+   bound preserves it on 40px+ titles. */
+[style*="letter-spacing: 2px"],
+[style*="letter-spacing:2px"],
+[style*="letter-spacing: 1.8px"],
+[style*="letter-spacing:1.8px"],
+[style*="letter-spacing: 1.5px"],
+[style*="letter-spacing:1.5px"] {
+  letter-spacing: clamp(0.4px, 0.06em, 2px) !important;
+}
+
+/* Rescue the dimmest text colours the app uses on dark backgrounds —
+   lift them to a readable luminance without changing semantics.
+   Browsers normalise hex to rgb() in the inline-style attribute, so
+   both forms are listed. Minimum WCAG AA contrast target against the
+   #08070f app background: ~4.5:1 for small text. */
+
+/* The darkest tier — pure gray and dim-purple navigation hints. */
+[style*="color: #777"],      [style*="color:#777"],      [style*="color: rgb(119, 119, 119)"],
+[style*="color: #3a2a5a"],   [style*="color:#3a2a5a"],   [style*="color: rgb(58, 42, 90)"],
+[style*="color: #5533aa"],   [style*="color:#5533aa"],   [style*="color: rgb(85, 51, 170)"],
+[style*="color: #3a5a7a"],   [style*="color:#3a5a7a"],   [style*="color: rgb(58, 90, 122)"],
+[style*="color: #4a7a9a"],   [style*="color:#4a7a9a"],   [style*="color: rgb(74, 122, 154)"],
+[style*="color: #5a4280"],   [style*="color:#5a4280"],   [style*="color: rgb(90, 66, 128)"],
+[style*="color: #3a2a4a"],   [style*="color:#3a2a4a"],   [style*="color: rgb(58, 42, 74)"],
+[style*="color: #7755aa"],   [style*="color:#7755aa"],   [style*="color: rgb(119, 85, 170)"],
+[style*="color: #64748b"],   [style*="color:#64748b"],   [style*="color: rgb(100, 116, 139)"],
+[style*="color: #4a7a9a"],   [style*="color:#4a7a9a"],   [style*="color: rgb(74, 122, 154)"],
+[style*="color: #8b6fd4"],   [style*="color:#8b6fd4"],   [style*="color: rgb(139, 111, 212)"] {
+  color: #c7bfe8 !important;
+}
+
+/* Mid tier — labels & small-caption text. */
+[style*="color: #8d6ec4"],   [style*="color:#8d6ec4"],   [style*="color: rgb(141, 110, 196)"],
+[style*="color: #3d7a95"],   [style*="color:#3d7a95"],   [style*="color: rgb(61, 122, 149)"],
+[style*="color: #5a7f93"],   [style*="color:#5a7f93"],   [style*="color: rgb(90, 127, 147)"],
+[style*="color: #6fb8d4"],   [style*="color:#6fb8d4"],   [style*="color: rgb(111, 184, 212)"],
+[style*="color: #8ab8d8"],   [style*="color:#8ab8d8"],   [style*="color: rgb(138, 184, 216)"],
+[style*="color: #9a8fc2"],   [style*="color:#9a8fc2"],   [style*="color: rgb(154, 143, 194)"],
+[style*="color: #a79cd8"],   [style*="color:#a79cd8"],   [style*="color: rgb(167, 156, 216)"],
+[style*="color: #c4a0ff"],   [style*="color:#c4a0ff"],   [style*="color: rgb(196, 160, 255)"] {
+  color: #e0d8f5 !important;
+}
+
+/* Low-opacity rgba text on dim backgrounds — overwrite with a solid
+   bright colour. Note: alpha inside color: can't be fixed by element
+   opacity, we need to replace the whole color property. */
+[style*="color: rgba(180,150,255,0.55)"],
+[style*="color:rgba(180,150,255,0.55)"],
+[style*="color: rgba(180,150,255,0.6)"],
+[style*="color:rgba(180,150,255,0.6)"],
+[style*="color: rgba(180,220,255,0.65)"],
+[style*="color:rgba(180,220,255,0.65)"],
+[style*="color: rgba(180,220,255,0.6)"],
+[style*="color:rgba(180,220,255,0.6)"],
+[style*="color: rgba(220,200,255,0.6)"],
+[style*="color:rgba(220,200,255,0.6)"],
+[style*="color: rgba(220,200,255,0.65)"],
+[style*="color:rgba(220,200,255,0.65)"],
+[style*="color: rgba(220,200,255,0.72)"],
+[style*="color:rgba(220,200,255,0.72)"],
+[style*="color: rgba(220,200,255,0.7)"],
+[style*="color:rgba(220,200,255,0.7)"],
+[style*="color: rgba(220,200,255,0.85)"],
+[style*="color:rgba(220,200,255,0.85)"],
+[style*="color: rgba(210,185,255,0.85)"],
+[style*="color:rgba(210,185,255,0.85)"],
+[style*="color: rgba(190,220,240,0.72)"],
+[style*="color:rgba(190,220,240,0.72)"],
+[style*="color: rgba(200,230,245,0.85)"],
+[style*="color:rgba(200,230,245,0.85)"],
+[style*="color: rgba(176,160,220,0.5)"],
+[style*="color:rgba(176,160,220,0.5)"],
+[style*="color: rgba(150,220,255,0.85)"],
+[style*="color:rgba(150,220,255,0.85)"],
+[style*="color: rgba(210,190,255,0.75)"],
+[style*="color:rgba(210,190,255,0.75)"] {
+  color: #e0d8f5 !important;
+}
+
+/* Border rescue — same idea for the dimmest divider lines */
+[style*="rgba(123,47,255,0.1)"],
+[style*="rgba(123,47,255,0.08)"],
+[style*="rgba(0,212,255,0.08)"] {
+  /* keep borders exactly as-is — this rule is a placeholder to make
+     the dim-colour pass easy to grow if specific borders get flagged */
 }
 
 a {
@@ -38,7 +192,432 @@ button {
   cursor: pointer;
   font-family: inherit;
 }
-@keyframes float {
-  0%, 100% { transform: translateY(0px); }
-  50%       { transform: translateY(-12px); }
+
+/* ══════════════════════════════════════════════════════════════════
+   ArcadeX shared animation / interaction kit (ax-* prefix)
+   Any component can opt in by adding one of these class names.
+   Keep namespaced so project-specific styles never collide.
+   ══════════════════════════════════════════════════════════════════ */
+
+@keyframes float               { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-12px)} }
+@keyframes axFadeUp            { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+@keyframes axFadeDown          { from{opacity:0;transform:translateY(-14px)} to{opacity:1;transform:translateY(0)} }
+@keyframes axFadeIn            { from{opacity:0} to{opacity:1} }
+@keyframes axPopIn             { from{opacity:0;transform:scale(0.9)} to{opacity:1;transform:scale(1)} }
+@keyframes axZoomIn            { from{opacity:0;transform:scale(0.6)} to{opacity:1;transform:scale(1)} }
+@keyframes axSlideInLeft       { from{opacity:0;transform:translateX(-24px)} to{opacity:1;transform:translateX(0)} }
+@keyframes axSlideInRight      { from{opacity:0;transform:translateX(24px)} to{opacity:1;transform:translateX(0)} }
+@keyframes axShimmer           { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+@keyframes axGradFlow          { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
+@keyframes axBeamSweep         { 0%{transform:translateX(-150%) skewX(-20deg)} 100%{transform:translateX(250%) skewX(-20deg)} }
+@keyframes axPulse             { 0%,100%{transform:scale(1);opacity:0.6} 50%{transform:scale(1.1);opacity:1} }
+@keyframes axOrbit             { from{transform:rotate(0)} to{transform:rotate(360deg)} }
+@keyframes axRingPulse         { 0%,100%{box-shadow:0 0 0 0 rgba(0,212,255,0.4)} 50%{box-shadow:0 0 0 10px rgba(0,212,255,0)} }
+@keyframes axCountFlash        { 0%{color:#00ff88;text-shadow:0 0 20px rgba(0,255,136,0.8)} 100%{color:inherit;text-shadow:none} }
+@keyframes axGlowPulse         { 0%,100%{box-shadow:0 0 10px rgba(0,212,255,0.25),0 0 20px rgba(0,212,255,0.08)} 50%{box-shadow:0 0 24px rgba(0,212,255,0.55),0 0 48px rgba(0,212,255,0.18)} }
+@keyframes axGlowPulseGold     { 0%,100%{box-shadow:0 0 10px rgba(255,183,0,0.25),0 0 20px rgba(255,183,0,0.08)} 50%{box-shadow:0 0 24px rgba(255,183,0,0.55),0 0 48px rgba(255,183,0,0.18)} }
+@keyframes axGlowPulseGreen    { 0%,100%{box-shadow:0 0 10px rgba(0,255,136,0.25),0 0 20px rgba(0,255,136,0.08)} 50%{box-shadow:0 0 24px rgba(0,255,136,0.55),0 0 48px rgba(0,255,136,0.18)} }
+@keyframes axBounceSoft        { 0%,100%{transform:translateY(0)} 25%{transform:translateY(-5px)} 50%{transform:translateY(0)} 75%{transform:translateY(-2px)} }
+@keyframes axHeartbeat         { 0%,70%,100%{transform:scale(1)} 15%{transform:scale(1.14)} 30%{transform:scale(0.95)} 45%{transform:scale(1.08)} }
+@keyframes axWiggle            { 0%,100%{transform:rotate(0)} 25%{transform:rotate(-3deg)} 75%{transform:rotate(3deg)} }
+@keyframes axShake             { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-4px)} 40%,80%{transform:translateX(4px)} }
+@keyframes axFloatY            { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+@keyframes axFloatRotate       { 0%{transform:translateY(0) rotate(-2deg)} 50%{transform:translateY(-8px) rotate(2deg)} 100%{transform:translateY(0) rotate(-2deg)} }
+@keyframes axBreathe           { 0%,100%{opacity:0.6;transform:scale(1)} 50%{opacity:1;transform:scale(1.03)} }
+@keyframes axScanLine          { 0%{transform:translateY(-100%)} 100%{transform:translateY(100%)} }
+@keyframes axBorderDance       { 0%{background-position:0% 50%} 100%{background-position:300% 50%} }
+@keyframes axIconHoverSpin     { from{transform:rotate(0)} to{transform:rotate(360deg)} }
+@keyframes axFlicker           { 0%,100%{opacity:1} 50%{opacity:0.75} }
+@keyframes axDigitTick         { 0%{transform:translateY(0);opacity:1} 50%{transform:translateY(-6px);opacity:0.4} 51%{transform:translateY(6px)} 100%{transform:translateY(0);opacity:1} }
+@keyframes axSheenMove         { 0%{background-position:-250% 0} 100%{background-position:250% 0} }
+
+/* ── Web3 / cyberpunk-flavoured FX ── */
+@keyframes axNeonFlicker       { 0%,100%{opacity:1;text-shadow:0 0 10px currentColor,0 0 20px currentColor,0 0 36px currentColor} 7%{opacity:0.4;text-shadow:none} 10%{opacity:1} 50%{opacity:0.95} 52%{opacity:0.3} 54%{opacity:1} }
+@keyframes axHoloShift         { 0%{background-position:0% 50%;filter:hue-rotate(0deg)} 50%{background-position:100% 50%;filter:hue-rotate(30deg)} 100%{background-position:0% 50%;filter:hue-rotate(0deg)} }
+@keyframes axPrismGlow         { 0%,100%{box-shadow:0 0 20px rgba(123,47,255,0.5),0 0 40px rgba(0,212,255,0.3)} 33%{box-shadow:0 0 20px rgba(0,212,255,0.5),0 0 40px rgba(0,255,136,0.3)} 66%{box-shadow:0 0 20px rgba(255,183,0,0.5),0 0 40px rgba(123,47,255,0.3)} }
+@keyframes axEnergyRing        { 0%{transform:scale(0.6);opacity:0.9} 100%{transform:scale(2.4);opacity:0} }
+@keyframes axGridScroll        { 0%{background-position:0 0} 100%{background-position:50px 50px} }
+@keyframes axLaserSweep        { 0%{transform:translateX(-120%) rotate(0deg)} 100%{transform:translateX(120%) rotate(0deg)} }
+@keyframes axPurpleGlow        { 0%,100%{box-shadow:0 0 10px rgba(123,47,255,0.3),0 0 24px rgba(123,47,255,0.1)} 50%{box-shadow:0 0 28px rgba(123,47,255,0.7),0 0 60px rgba(123,47,255,0.25)} }
+@keyframes axSparkle           { 0%,100%{transform:scale(0) rotate(0deg);opacity:0} 50%{transform:scale(1) rotate(180deg);opacity:1} }
+@keyframes axTicker            { 0%{transform:translateY(0)} 100%{transform:translateY(-100%)} }
+@keyframes axGlitch            { 0%,100%{transform:translate(0,0);filter:none} 20%{transform:translate(-2px,1px);filter:hue-rotate(90deg)} 40%{transform:translate(2px,-1px);filter:hue-rotate(-90deg)} 60%{transform:translate(-1px,2px);filter:none} 80%{transform:translate(1px,-1px);filter:hue-rotate(45deg)} }
+@keyframes axRotate3D          { 0%{transform:rotateY(0)} 100%{transform:rotateY(360deg)} }
+@keyframes axFloat3D           { 0%,100%{transform:translateY(0) rotateX(0) rotateY(0)} 25%{transform:translateY(-6px) rotateX(2deg) rotateY(3deg)} 75%{transform:translateY(-6px) rotateX(-2deg) rotateY(-3deg)} }
+@keyframes axPulseStroke       { 0%,100%{stroke-dashoffset:0;opacity:0.4} 50%{stroke-dashoffset:-20;opacity:1} }
+@keyframes axAura              { 0%,100%{filter:drop-shadow(0 0 8px rgba(123,47,255,0.6))} 50%{filter:drop-shadow(0 0 20px rgba(0,212,255,0.9))} }
+
+/* ── Scroll-reveal, marquee, ripple, typewriter, magnetic ── */
+@keyframes axRipple            { 0%{transform:scale(0);opacity:0.6} 100%{transform:scale(4);opacity:0} }
+@keyframes axMarquee           { 0%{transform:translateX(0)} 100%{transform:translateX(-50%)} }
+@keyframes axMarqueeReverse    { 0%{transform:translateX(-50%)} 100%{transform:translateX(0)} }
+@keyframes axTypewriterBlink   { 0%,100%{opacity:1} 50%{opacity:0} }
+@keyframes axRevealFromBottom  { from{opacity:0;transform:translateY(40px)} to{opacity:1;transform:translateY(0)} }
+@keyframes axRevealFromLeft    { from{opacity:0;transform:translateX(-40px)} to{opacity:1;transform:translateX(0)} }
+@keyframes axRevealScale       { from{opacity:0;transform:scale(0.85)} to{opacity:1;transform:scale(1)} }
+@keyframes axRevealBlur        { from{opacity:0;filter:blur(10px)} to{opacity:1;filter:blur(0)} }
+@keyframes axCardFlip          { 0%{transform:rotateY(0)} 50%{transform:rotateY(180deg)} 100%{transform:rotateY(360deg)} }
+@keyframes axSkeletonShine     { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+@keyframes axGradientBg        { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
+@keyframes axDotLoading        { 0%,80%,100%{opacity:0.3;transform:scale(0.8)} 40%{opacity:1;transform:scale(1.2)} }
+@keyframes axSpinnerDual       { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+@keyframes axRise              { 0%{transform:translateY(60px);opacity:0;filter:blur(6px)} 100%{transform:translateY(0);opacity:1;filter:blur(0)} }
+@keyframes axWave2             { 0%{transform:translateX(-100%)} 50%{transform:translateX(100%)} 100%{transform:translateX(-100%)} }
+@keyframes axGrainDrift        { 0%{transform:translate(0,0)} 25%{transform:translate(-3px,2px)} 50%{transform:translate(2px,-3px)} 75%{transform:translate(-2px,-2px)} 100%{transform:translate(0,0)} }
+@keyframes axNumberTick        { 0%{transform:translateY(-100%);opacity:0} 100%{transform:translateY(0);opacity:1} }
+@keyframes axPingDot           { 0%{transform:scale(1);opacity:1} 75%,100%{transform:scale(2.5);opacity:0} }
+
+.ax-fade-up      { animation: axFadeUp 0.5s cubic-bezier(0.2,1,0.3,1) both; }
+.ax-fade-down    { animation: axFadeDown 0.5s cubic-bezier(0.2,1,0.3,1) both; }
+.ax-fade-in      { animation: axFadeIn 0.4s ease both; }
+.ax-pop-in       { animation: axPopIn 0.4s cubic-bezier(0.34,1.56,0.64,1) both; }
+.ax-zoom-in      { animation: axZoomIn 0.45s cubic-bezier(0.34,1.56,0.64,1) both; }
+.ax-slide-left   { animation: axSlideInLeft 0.5s cubic-bezier(0.2,1,0.3,1) both; }
+.ax-slide-right  { animation: axSlideInRight 0.5s cubic-bezier(0.2,1,0.3,1) both; }
+.ax-float        { animation: axFloatY 4s ease-in-out infinite; }
+.ax-float-rotate { animation: axFloatRotate 6s ease-in-out infinite; }
+.ax-breathe      { animation: axBreathe 3s ease-in-out infinite; }
+.ax-flicker      { animation: axFlicker 2.2s ease-in-out infinite; }
+.ax-wiggle-hover { transition: transform 0.2s; }
+.ax-wiggle-hover:hover { animation: axWiggle 0.5s ease; }
+.ax-heartbeat-hover { transition: transform 0.2s; }
+.ax-heartbeat-hover:hover { animation: axHeartbeat 0.9s ease; }
+.ax-shake        { animation: axShake 0.5s ease; }
+.ax-bounce-soft  { animation: axBounceSoft 2s ease-in-out infinite; }
+
+/* Glow halos — persistent + animated */
+.ax-glow-cyan   { animation: axGlowPulse 2.5s ease-in-out infinite; }
+.ax-glow-gold   { animation: axGlowPulseGold 2.5s ease-in-out infinite; }
+.ax-glow-green  { animation: axGlowPulseGreen 2.5s ease-in-out infinite; }
+
+/* 3D tilt on hover — perspective tilt + lift. Needs no extra markup. */
+.ax-tilt-hover {
+  transition: transform 0.3s cubic-bezier(0.2,1,0.3,1), box-shadow 0.3s, filter 0.3s;
+  transform-style: preserve-3d;
+}
+.ax-tilt-hover:hover {
+  transform: perspective(900px) rotateX(3deg) rotateY(-3deg) translateY(-4px);
+  filter: brightness(1.08) saturate(1.1);
+}
+
+/* Shiny animated border — pair with a gradient background on ::before */
+.ax-shine-border {
+  position: relative; isolation: isolate;
+}
+.ax-shine-border::before {
+  content: ""; position: absolute; inset: -1px; z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(120deg,#00d4ff,#00FF88,#FFB700,#00d4ff);
+  background-size: 300% 100%;
+  animation: axBorderDance 6s linear infinite;
+  opacity: 0.5;
+  transition: opacity 0.3s;
+}
+.ax-shine-border:hover::before { opacity: 1; }
+
+/* Animated sheen that moves across text — put on an inline element */
+.ax-sheen {
+  background: linear-gradient(90deg,
+    rgba(255,255,255,0.1) 0%,
+    rgba(255,255,255,0.6) 50%,
+    rgba(255,255,255,0.1) 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: axSheenMove 3s linear infinite;
+}
+
+/* Icons that spin on container hover — add .ax-icon-spin to the icon,
+   the parent handles :hover. */
+.ax-icon-wrap:hover .ax-icon-spin { animation: axIconHoverSpin 0.8s cubic-bezier(0.2,1,0.3,1); }
+
+/* Staggered children — assign custom delays via inline style or nth-child.
+   Default: evenly staggered up to 10 items. */
+.ax-stagger > * { animation: axFadeUp 0.5s cubic-bezier(0.2,1,0.3,1) both; }
+.ax-stagger > *:nth-child(1)  { animation-delay: 0.00s; }
+.ax-stagger > *:nth-child(2)  { animation-delay: 0.06s; }
+.ax-stagger > *:nth-child(3)  { animation-delay: 0.12s; }
+.ax-stagger > *:nth-child(4)  { animation-delay: 0.18s; }
+.ax-stagger > *:nth-child(5)  { animation-delay: 0.24s; }
+.ax-stagger > *:nth-child(6)  { animation-delay: 0.30s; }
+.ax-stagger > *:nth-child(7)  { animation-delay: 0.36s; }
+.ax-stagger > *:nth-child(8)  { animation-delay: 0.42s; }
+.ax-stagger > *:nth-child(9)  { animation-delay: 0.48s; }
+.ax-stagger > *:nth-child(10) { animation-delay: 0.54s; }
+
+/* Scan line — slow vertical sweep inside a card. Add to a child div
+   that is absolutely positioned to full inset. */
+.ax-scan-line {
+  position: absolute; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0,212,255,0.6), transparent);
+  animation: axScanLine 4s linear infinite;
+  pointer-events: none;
+}
+
+/* ── Web3 utility classes ── */
+.ax-neon-flicker  { animation: axNeonFlicker 4s infinite; }
+.ax-aura          { animation: axAura 3s ease-in-out infinite; }
+.ax-prism-glow    { animation: axPrismGlow 4s ease-in-out infinite; }
+.ax-purple-glow   { animation: axPurpleGlow 2.5s ease-in-out infinite; }
+.ax-float-3d      { animation: axFloat3D 6s ease-in-out infinite; transform-style: preserve-3d; }
+.ax-rotate-3d     { animation: axRotate3D 12s linear infinite; transform-style: preserve-3d; }
+
+/* Holographic gradient text — rainbow sheen that cycles hues */
+.ax-holo-text {
+  background: linear-gradient(90deg,
+    #ff6ec4 0%, #7B2FFF 25%, #00d4ff 50%, #00FF88 75%, #ff6ec4 100%);
+  background-size: 300% auto;
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: axHoloShift 6s linear infinite;
+}
+
+/* Animated grid background — scrolling cyberpunk grid.
+   Pair with position:absolute + inset:0 inside a positioned parent. */
+.ax-grid-bg {
+  background-image:
+    linear-gradient(rgba(123,47,255,0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(123,47,255,0.08) 1px, transparent 1px);
+  background-size: 50px 50px;
+  animation: axGridScroll 20s linear infinite;
+}
+
+/* Energy ring — expanding glow pulse. Use as inner absolute element. */
+.ax-energy-ring {
+  position: absolute; inset: 0; border-radius: inherit;
+  border: 2px solid rgba(123,47,255,0.5);
+  pointer-events: none;
+  animation: axEnergyRing 2s cubic-bezier(0.2,0.9,0.3,1) infinite;
+}
+
+/* Laser sweep — add inside a position:relative overflow:hidden container */
+.ax-laser-sweep {
+  position: absolute; top: 0; bottom: 0; width: 40%;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0,212,255,0.08) 30%,
+    rgba(0,212,255,0.35) 50%,
+    rgba(0,212,255,0.08) 70%,
+    transparent 100%);
+  pointer-events: none;
+  animation: axLaserSweep 3.5s cubic-bezier(0.4,0,0.2,1) infinite;
+}
+
+/* Sparkle particle — fire-and-forget bits on key moments */
+.ax-sparkle {
+  position: absolute; width: 10px; height: 10px;
+  background: radial-gradient(circle, #fff 0%, transparent 70%);
+  pointer-events: none;
+  animation: axSparkle 1.6s ease-in-out infinite;
+}
+
+/* Glitch effect — add .ax-glitch-hover to trigger on hover */
+.ax-glitch-hover:hover { animation: axGlitch 0.4s steps(5) 1; }
+
+/* Reflective shine — crosses the surface on hover */
+.ax-shine-sweep {
+  position: relative; overflow: hidden;
+}
+.ax-shine-sweep::after {
+  content: ""; position: absolute; top: 0; left: -75%;
+  width: 50%; height: 100%; z-index: 1;
+  background: linear-gradient(100deg,
+    transparent 0%,
+    rgba(255,255,255,0.08) 40%,
+    rgba(255,255,255,0.25) 50%,
+    rgba(255,255,255,0.08) 60%,
+    transparent 100%);
+  transform: skewX(-20deg);
+  transition: left 0.75s ease;
+  pointer-events: none;
+}
+.ax-shine-sweep:hover::after { left: 125%; }
+
+/* ── Advanced motion utilities ── */
+
+/* Click-ripple — add .ax-ripple to a button; a ::after circle expands on
+   :active press and fades. Works with position:relative / overflow:hidden. */
+.ax-ripple {
+  position: relative; overflow: hidden;
+}
+.ax-ripple::after {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: rgba(255,255,255,0.5);
+  transform: translate(-50%, -50%) scale(0);
+  opacity: 0; pointer-events: none;
+}
+.ax-ripple:active::after {
+  animation: axRipple 0.6s cubic-bezier(0.2,0.9,0.3,1);
+}
+
+/* Magnetic hover — slight pull toward cursor. Needs the .ax-magnetic
+   container; the JS hook (optional) or just transform transitions. */
+.ax-magnetic {
+  transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
+  will-change: transform;
+}
+.ax-magnetic:hover { transform: translateY(-2px) scale(1.03); }
+
+/* Typewriter caret — pair with text that reveals character-by-character */
+.ax-caret::after {
+  content: "▎"; margin-left: 2px;
+  animation: axTypewriterBlink 0.9s steps(2) infinite;
+  color: currentColor;
+}
+
+/* Marquee ticker — infinite horizontal scroll for feature strips */
+.ax-marquee {
+  display: flex; overflow: hidden; width: 100%; mask-image:
+    linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+}
+.ax-marquee-track {
+  display: flex; gap: 36px;
+  animation: axMarquee 22s linear infinite;
+  flex-shrink: 0;
+}
+.ax-marquee:hover .ax-marquee-track { animation-play-state: paused; }
+
+/* Reveal variants — pair with IntersectionObserver via `in-view` class
+   OR trigger immediately on mount. */
+.ax-reveal-up    { opacity: 0; transform: translateY(40px); }
+.ax-reveal-left  { opacity: 0; transform: translateX(-40px); }
+.ax-reveal-scale { opacity: 0; transform: scale(0.85); }
+.ax-reveal-blur  { opacity: 0; filter: blur(10px); }
+.ax-reveal-up.in-view    { animation: axRevealFromBottom 0.7s cubic-bezier(0.2,1,0.3,1) forwards; }
+.ax-reveal-left.in-view  { animation: axRevealFromLeft 0.7s cubic-bezier(0.2,1,0.3,1) forwards; }
+.ax-reveal-scale.in-view { animation: axRevealScale 0.6s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+.ax-reveal-blur.in-view  { animation: axRevealBlur 0.8s cubic-bezier(0.2,1,0.3,1) forwards; }
+
+/* Rise — a dramatic unblur+rise on mount, great for titles */
+.ax-rise { animation: axRise 0.9s cubic-bezier(0.2,1,0.3,1) both; }
+
+/* Dot-cluster loader — three bouncing dots. Use with .ax-dot children. */
+.ax-dots { display: inline-flex; gap: 4px; }
+.ax-dots .ax-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+  animation: axDotLoading 1.4s ease-in-out infinite;
+}
+.ax-dots .ax-dot:nth-child(2) { animation-delay: 0.16s; }
+.ax-dots .ax-dot:nth-child(3) { animation-delay: 0.32s; }
+
+/* Dual-ring spinner — concentric rings turning in opposite directions */
+.ax-spinner-dual {
+  position: relative; width: 36px; height: 36px;
+}
+.ax-spinner-dual::before,
+.ax-spinner-dual::after {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+.ax-spinner-dual::before {
+  border-top-color: #7B2FFF; border-right-color: #7B2FFF;
+  animation: axSpinnerDual 1s linear infinite;
+}
+.ax-spinner-dual::after {
+  inset: 6px;
+  border-top-color: #00d4ff; border-left-color: #00d4ff;
+  animation: axSpinnerDual 1.4s linear infinite reverse;
+}
+
+/* Ping dot — concentric pulse (notification badge, live indicator) */
+.ax-ping {
+  position: relative; display: inline-flex;
+}
+.ax-ping::after {
+  content: ""; position: absolute; inset: -2px;
+  border-radius: 50%; background: currentColor;
+  opacity: 0.6; animation: axPingDot 1.6s cubic-bezier(0,0,0.2,1) infinite;
+  pointer-events: none;
+}
+
+/* Skeleton loader — modern shine on a dim block */
+.ax-skeleton {
+  background:
+    linear-gradient(90deg,
+      rgba(123,47,255,0.05) 25%,
+      rgba(123,47,255,0.14) 50%,
+      rgba(123,47,255,0.05) 75%);
+  background-size: 200% 100%;
+  animation: axSkeletonShine 1.4s ease-in-out infinite;
+  border-radius: 8px;
+}
+
+/* Grain overlay — subtle noise drift for premium feel.
+   Place inside a position:relative container; sized to fill. */
+.ax-grain {
+  position: absolute; inset: -5%;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.4'/></svg>");
+  opacity: 0.06; pointer-events: none;
+  animation: axGrainDrift 2.5s steps(5) infinite;
+  mix-blend-mode: overlay;
+}
+
+/* Animated gradient background — pair with gradient inline style */
+.ax-grad-bg {
+  background-size: 300% 300% !important;
+  animation: axGradientBg 8s ease infinite;
+}
+
+/* Shiny beam that sweeps across a hover target.
+   Add ax-beam-host to the hoverable parent (needs position:relative + overflow:hidden).
+   The beam renders via ::after automatically.                                   */
+.ax-beam-host { position: relative; overflow: hidden; }
+.ax-beam-host::after {
+  content: ""; position: absolute; top: 0; left: 0;
+  height: 100%; width: 60px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+  opacity: 0; transition: opacity 0.2s;
+  pointer-events: none;
+}
+.ax-beam-host:not(:disabled):hover::after { opacity: 1; animation: axBeamSweep 1.1s ease-in-out infinite; }
+
+/* Rising card: lifts + glows on hover. Pair with your own border/bg. */
+.ax-lift {
+  transition: transform 0.25s cubic-bezier(0.2,1,0.3,1), box-shadow 0.25s, border-color 0.25s, filter 0.25s;
+}
+.ax-lift:hover { transform: translateY(-4px); filter: brightness(1.05); }
+
+/* Row that highlights with a cyan sweep on hover (used in leaderboards). */
+.ax-row {
+  position: relative; transition: background 0.18s;
+}
+.ax-row::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, rgba(0,212,255,0.08), transparent 60%);
+  opacity: 0; transition: opacity 0.2s;
+  pointer-events: none;
+}
+.ax-row:hover::before { opacity: 1; }
+
+/* Gradient-text helper. Pair with a `background: ...` inline-style for the hue. */
+.ax-grad-text {
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-size: 300% auto;
+  animation: axGradFlow 8s linear infinite;
+}
+
+/* Numeric "pulsing new value" accent — toggle class on + off to re-fire. */
+.ax-count-flash { animation: axCountFlash 1s ease; }
+
+/* Reduced-motion fallback — honour the user's OS setting */
+@media (prefers-reduced-motion: reduce) {
+  .ax-fade-up, .ax-fade-down, .ax-fade-in, .ax-pop-in, .ax-zoom-in,
+  .ax-slide-left, .ax-slide-right,
+  .ax-float, .ax-float-rotate, .ax-breathe, .ax-flicker, .ax-bounce-soft,
+  .ax-glow-cyan, .ax-glow-gold, .ax-glow-green,
+  .ax-neon-flicker, .ax-aura, .ax-prism-glow, .ax-purple-glow,
+  .ax-float-3d, .ax-rotate-3d,
+  .ax-holo-text, .ax-grid-bg, .ax-energy-ring, .ax-laser-sweep, .ax-sparkle,
+  .ax-sheen, .ax-shine-border::before, .ax-scan-line, .ax-shine-sweep::after,
+  .ax-grad-text, .ax-beam-host::after,
+  .ax-count-flash, .ax-stagger > * {
+    animation: none !important;
+  }
+  .ax-lift, .ax-tilt-hover { transition: none; }
+  .ax-lift:hover, .ax-tilt-hover:hover { transform: none; filter: none; }
 }

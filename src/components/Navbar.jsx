@@ -1,3 +1,4 @@
+// Place at: src/components/Navbar.jsx (REPLACES existing)
 import { useState, useRef, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAppKit } from "@reown/appkit/react";
@@ -7,6 +8,11 @@ import { useArcadeBalance } from "../hooks/useArcadeBalance";
 import { getActiveAvatarStyle } from "../utils/avatarUtils";
 import { useChain } from "../context/ChainContext";
 import { useFirebaseAuth } from "../hooks/useFirebaseAuth";
+import { useMode } from "../hooks/useMode";
+import { WEB2_ENABLED } from "../context/ModeContext";
+import { useWeb2Auth } from "../hooks/useWeb2Auth";
+import { useArcadeCoins } from "../hooks/useArcadeCoins";
+import { Icon } from "./Icon";
 
 const LOGO_SIZE = 28;
 
@@ -18,11 +24,18 @@ export default function Navbar() {
   const navigate = useNavigate();
   const location = useLocation();
   const { balance } = useArcadeBalance();
-  
+
   // Need rewardToken to display ARCADE or MSTC dynamically
   const { chainName, clearChainSelection, rewardToken, activeChain, chainKey, contracts } = useChain();
   const publicClient = usePublicClient();
-  
+
+  // ── Mode + Web2 auth ──────────────────────────────────────────────────
+  const { mode, clearMode: switchMode } = useMode();
+  const { user: web2User, signOut: web2SignOut } = useWeb2Auth();
+  const isWeb2 = mode === "web2";
+  // ArcadeCoin balance for the Web2 navbar pill. Guests always see 0.
+  const { balance: coinBalance, stats: coinStats } = useArcadeCoins();
+
   const [ddOpen, setDdOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -40,10 +53,12 @@ export default function Navbar() {
 
   // Wallet menu (Copy address + Disconnect) — desktop dropdown, mobile modal
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
+  const [web2MenuOpen, setWeb2MenuOpen]     = useState(false);
 
   const ddRef = useRef(null);
   const menuRef = useRef(null);
   const walletMenuRef = useRef(null); // desktop wallet button + dropdown
+  const web2MenuRef   = useRef(null);
 
   // ── Faucet: check if already claimed on MST connect ──────────────
   // SH0035 — localStorage cache to eliminate repeat MST RPC calls.
@@ -55,7 +70,7 @@ export default function Navbar() {
   // Ab first-visit ke baad instant status from localStorage — RPC calls
   // 90%+ kam.
   useEffect(() => {
-    if (!isConnected || !address || chainKey !== "mst") return;
+    if (!isConnected || !address || chainKey !== "mst" || isWeb2) return;
 
     const CACHE_KEY = `arcadex_gas_claimed_${address.toLowerCase()}`;
     const NEGATIVE_TTL_MS = 5 * 60 * 1000; // false result: 5 min
@@ -91,7 +106,7 @@ export default function Navbar() {
         if (data.claimed) setFaucetClaimed(true);
       } catch (e) { /* silent fail */ }
     })();
-  }, [isConnected, address, chainKey]);
+  }, [isConnected, address, chainKey, isWeb2]);
 
   const { user: xUser, loginWithTwitter } = useFirebaseAuth();
 
@@ -191,9 +206,6 @@ export default function Navbar() {
       }
 
       // Step 2: Ab wagmi ko directly connect karo injected connector se.
-      // AppKit open() NAHI — woh internally switchChain(BOTChain) karta hai.
-      // wagmi connectAsync with chainId = MetaMask pehle se correct chain pe hai,
-      // toh koi extra switch request nahi aayegi.
       try {
         await connectAsync({
           connector: injected(),
@@ -212,8 +224,6 @@ export default function Navbar() {
   };
 
   // ── Disconnect: wagmi disconnect + clear JWT (chain preserved) ────────
-  // Chain selection deliberately preserved — next connect reuses same
-  // chain instead of forcing chain picker again.
   const handleDisconnect = () => {
     try {
       localStorage.removeItem("arcadex_jwt");
@@ -228,10 +238,31 @@ export default function Navbar() {
     setEarningsOpen(false);
   };
 
+  // ── Web2: sign out current user, keep mode = web2 (login screen reappears)
+  const handleWeb2SignOut = async () => {
+    try { await web2SignOut(); } catch (e) { console.warn("Web2 sign-out:", e); }
+    setWeb2MenuOpen(false);
+    setMenuOpen(false);
+  };
+
+  // ── Mode switch: clear mode so ModeSelector reappears ─────────────────
+  const handleSwitchMode = () => {
+    switchMode();
+    setDdOpen(false);
+    setMenuOpen(false);
+    setWalletMenuOpen(false);
+    setWeb2MenuOpen(false);
+  };
+
   const shortAddress = (addr) => addr ? addr.slice(0, 5) + "..." + addr.slice(-3) : "";
   const isActive = (path) => location.pathname === path;
   const avatarUrl = address
     ? `https://api.dicebear.com/9.x/${avatarStyle}/svg?seed=${address}`
+    : null;
+
+  // Web2 avatar — use OAuth photoURL if present, else dicebear from uid
+  const web2AvatarUrl = web2User
+    ? (web2User.photoURL || `https://api.dicebear.com/9.x/bottts/svg?seed=${web2User.uid}`)
     : null;
 
   useEffect(() => {
@@ -258,12 +289,15 @@ export default function Navbar() {
       if (!isMobile && walletMenuRef.current && !walletMenuRef.current.contains(e.target)) {
         setWalletMenuOpen(false);
       }
+      if (!isMobile && web2MenuRef.current && !web2MenuRef.current.contains(e.target)) {
+        setWeb2MenuOpen(false);
+      }
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [isMobile]);
 
-  useEffect(() => { setMenuOpen(false); setWalletMenuOpen(false); }, [location.pathname]);
+  useEffect(() => { setMenuOpen(false); setWalletMenuOpen(false); setWeb2MenuOpen(false); }, [location.pathname]);
 
   // Auto-close wallet menu if wallet disconnects externally
   useEffect(() => {
@@ -271,20 +305,12 @@ export default function Navbar() {
   }, [isConnected]);
 
   // ── Earnings fetch ───────────────────────────────────────────────────
-  // SH0030 — cost fix. Pehle `/api/games?action=scores` full scores collection
-  // fetch karta tha (100K+ docs possible) sirf user ke apne scores filter
-  // karne ke liye. Ab dedicated `user-scores` endpoint jo backend pe
-  // `where("player", "==", wallet)` karta hai — reads sirf user ke docs.
-  // Har user ke ~5-50 scores, not 100K.
   const fetchEarnings = async () => {
     if (!address) return;
     setEarningsLoading(true);
     try {
       const token = localStorage.getItem("arcadex_jwt");
       const [scoresRes, gamesRes] = await Promise.all([
-        // user-scores requires JWT; if missing (user rejected auto-auth),
-        // return empty gracefully — earnings panel just shows "no data"
-        // instead of failing / exposing everyone's scores.
         token
           ? fetch(`/api/games?action=user-scores`, { headers: { Authorization: `Bearer ${token}` } })
           : Promise.resolve({ json: async () => ({ scores: [] }) }),
@@ -315,8 +341,6 @@ export default function Navbar() {
         }
       } catch (e) { /* keep default 80 */ }
 
-      // user-scores endpoint already returns only this player's scores —
-      // no client-side .filter() needed anymore. Just sort by recency.
       const mine = (scoresData.scores || [])
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       setEarningsData(mine);
@@ -365,15 +389,28 @@ export default function Navbar() {
   );
   const isCurrentMst = (chainKey || "botchain").toLowerCase() === "mst";
 
-  const navLinks = [
-    { label: "Home", path: "/" },
-    { label: "Games", path: "/games" },
-    { label: "Leaderboard", path: "/leaderboard" },
-    { label: "Tournaments", path: "/tournaments" },
-    { label: "Marketplace", path: "/marketplace" },
-    { label: "Creators", path: "/publish" },
-    { label: "Support", path: "/support" }
-  ];
+  // Web2 mode: Tournaments & Creators are Firestore-backed showcases;
+  // Marketplace remains Web3-only.
+  const navLinks = isWeb2
+    ? [
+        { label: "Home", path: "/" },
+        { label: "Games", path: "/games" },
+        { label: "Tournaments", path: "/tournaments" },
+        { label: "Creators", path: "/publish" },
+        { label: "AI Studio", path: "/studio" },
+        { label: "Leaderboard", path: "/leaderboard" },
+        { label: "Support", path: "/support" }
+      ]
+    : [
+        { label: "Home", path: "/" },
+        { label: "Games", path: "/games" },
+        { label: "Leaderboard", path: "/leaderboard" },
+        { label: "Tournaments", path: "/tournaments" },
+        { label: "Marketplace", path: "/marketplace" },
+        { label: "Creators", path: "/publish" },
+        { label: "AI Studio", path: "/studio" },
+        { label: "Support", path: "/support" }
+      ];
 
   // ── Wallet menu items (shared by desktop dropdown + mobile modal) ─────
   const renderWalletMenuActions = () => (
@@ -427,6 +464,78 @@ export default function Navbar() {
     </>
   );
 
+  // ── Web2 user menu actions (switch mode + sign out) ───────────────────
+  const renderWeb2MenuActions = () => (
+    <>
+      <button
+        onClick={handleSwitchMode}
+        style={{
+          width: "100%", padding: "12px 14px",
+          background: "rgba(123,47,255,0.08)",
+          border: "1px solid rgba(123,47,255,0.25)",
+          borderRadius: 10, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 10,
+          fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13,
+          color: "#c4a0ff",
+          transition: "all 0.15s",
+          justifyContent: "flex-start",
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = "rgba(123,47,255,0.16)"; e.currentTarget.style.borderColor = "rgba(123,47,255,0.5)"; }}
+        onMouseLeave={e => { e.currentTarget.style.background = "rgba(123,47,255,0.08)"; e.currentTarget.style.borderColor = "rgba(123,47,255,0.25)"; }}
+      >
+        <Icon name="exchange" size={14} />
+        <span>Switch to Web3 Mode</span>
+      </button>
+
+      <button
+        onClick={handleWeb2SignOut}
+        style={{
+          width: "100%", padding: "12px 14px",
+          background: "rgba(255,68,88,0.08)",
+          border: "1px solid rgba(255,68,88,0.28)",
+          borderRadius: 10, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 10,
+          fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13,
+          color: "#ff6b7f",
+          transition: "all 0.15s",
+          justifyContent: "flex-start",
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,68,88,0.16)"; e.currentTarget.style.borderColor = "rgba(255,68,88,0.55)"; }}
+        onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,68,88,0.08)"; e.currentTarget.style.borderColor = "rgba(255,68,88,0.28)"; }}
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M6 2H3.5C2.67 2 2 2.67 2 3.5V10.5C2 11.33 2.67 12 3.5 12H6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+          <path d="M9 4L12 7L9 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M12 7H5.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+        </svg>
+        <span>Sign Out</span>
+      </button>
+    </>
+  );
+
+  // ── Mode badge next to logo ───────────────────────────────────────────
+  const ModeBadge = () => {
+    if (!mode) return null;
+    const isWeb2Badge = mode === "web2";
+    const color = isWeb2Badge ? "#00d4ff" : "#a67fff";
+    const label = isWeb2Badge ? "WEB2" : "WEB3";
+    return (
+      <div style={{
+        display: "flex", alignItems: "center", gap: 4,
+        padding: "2px 7px",
+        background: `${color}14`,
+        border: `1px solid ${color}40`,
+        borderRadius: 4,
+        fontSize: 9, fontWeight: 800, letterSpacing: "0.8px",
+        color: color, fontFamily: "'Rajdhani',sans-serif",
+        marginLeft: 4,
+      }}>
+        <span style={{ width: 4, height: 4, borderRadius: "50%", background: color, boxShadow: `0 0 4px ${color}` }} />
+        {label}
+      </div>
+    );
+  };
+
   return (
     <>
     <nav style={{
@@ -439,15 +548,18 @@ export default function Navbar() {
       backdropFilter: "blur(20px)",
     }}>
 
-      {/* 1. FIXED LOGO - Hamesha IA-logo dikhega */}
+      {/* 1. LOGO + MODE BADGE */}
       <div ref={ddRef} style={{ position: "relative", display: "flex", alignItems: "center" }}>
         <div onClick={() => isMobile ? navigate("/") : setDdOpen(p => !p)} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", userSelect: "none" }}>
-          
+
           <img src="/IA-logo.webp" alt="ArcadeX Logo" style={{ width: 30, height: 30, objectFit: "contain", filter: "drop-shadow(0 0 12px rgba(150,80,255,0.9)) drop-shadow(0 0 22px rgba(0,212,255,0.35))" }} />
-          
+
           <span style={{ fontSize: 14.5, fontWeight: 800, color: "#fff", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "0.6px", background: "linear-gradient(90deg,#fff,#d8bfff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>ArcadeX</span>
+
+          <ModeBadge />
+
           {!isMobile && (
-            <svg width="9" height="9" viewBox="0 0 9 9" style={{ opacity: 0.3, transform: ddOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>
+            <svg width="9" height="9" viewBox="0 0 9 9" style={{ opacity: 0.3, transform: ddOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s", marginLeft: 2 }}>
               <path d="M1.5 3L4.5 6L7.5 3" stroke="#fff" strokeWidth="1.2" fill="none" strokeLinecap="round" />
             </svg>
           )}
@@ -458,19 +570,27 @@ export default function Navbar() {
           <div style={{
             position: "absolute", top: "calc(100% + 8px)", left: 0,
             background: "#0e0c1a", border: "1px solid rgba(123,47,255,0.2)",
-            borderRadius: 8, overflow: "hidden", minWidth: 152,
+            borderRadius: 8, overflow: "hidden", minWidth: 160,
             boxShadow: "0 16px 40px rgba(0,0,0,0.8)",
             opacity: ddOpen ? 1 : 0, pointerEvents: ddOpen ? "all" : "none",
             transform: ddOpen ? "translateY(0)" : "translateY(-6px)",
             transition: "opacity 0.16s, transform 0.16s",
           }}>
-            {[
-              { label: "Games", path: "/games", color: "#a67fff" },
-              { label: "Tournaments", path: "/tournaments", color: "#FFB700" },
-              { label: "Marketplace", path: "/marketplace", color: "#00FF88" },
-              { label: "Creators", path: "/publish", color: "#00d4ff" },
-            ].map(({ label, path, color }) => (
-              <div key={label} onClick={() => { navigate(path); setDdOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 14px", fontSize: 12, cursor: "pointer", borderBottom: label === "Games" ? "1px solid rgba(123,47,255,0.08)" : "none", color: isActive(path) ? color : "#9a8fc2", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.3px", transition: "background 0.15s, color 0.15s" }}
+            {(isWeb2
+              ? [
+                  { label: "Games", path: "/games", color: "#00d4ff" },
+                  { label: "Tournaments", path: "/tournaments", color: "#FFB700" },
+                  { label: "Creators", path: "/publish", color: "#c4a0ff" },
+                  { label: "Leaderboard", path: "/leaderboard", color: "#00FF88" },
+                ]
+              : [
+                  { label: "Games", path: "/games", color: "#a67fff" },
+                  { label: "Tournaments", path: "/tournaments", color: "#FFB700" },
+                  { label: "Marketplace", path: "/marketplace", color: "#00FF88" },
+                  { label: "Creators", path: "/publish", color: "#00d4ff" },
+                ]
+            ).map(({ label, path, color }) => (
+              <div key={label} onClick={() => { navigate(path); setDdOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 14px", fontSize: 12, cursor: "pointer", borderBottom: "1px solid rgba(123,47,255,0.08)", color: isActive(path) ? color : "#9a8fc2", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.3px", transition: "background 0.15s, color 0.15s" }}
                 onMouseEnter={e => { e.currentTarget.style.background = "rgba(123,47,255,0.08)"; e.currentTarget.style.color = color; }}
                 onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = isActive(path) ? color : "#9a8fc2"; }}
               >
@@ -478,6 +598,16 @@ export default function Navbar() {
                 {label}
               </div>
             ))}
+
+            {WEB2_ENABLED && <div
+              onClick={handleSwitchMode}
+              style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 14px", fontSize: 12, cursor: "pointer", color: "#ff8bb4", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.3px", transition: "background 0.15s" }}
+              onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,47,94,0.08)"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <Icon name="exchange" size={11} />
+              Switch Mode
+            </div>}
           </div>
         )}
       </div>
@@ -485,23 +615,47 @@ export default function Navbar() {
       {/* Desktop Nav Links */}
       {!isMobile && (
         <div style={{ display: "flex", gap: 4 }}>
-          {[["Home", "/"], ["Games", "/games"], ["Leaderboard", "/leaderboard"], ["Tournaments", "/tournaments"], ["Marketplace", "/marketplace"],["Support", "/support"]].map(([label, path]) => (
-            <Link key={label} to={path} style={{
-              position: "relative", padding: "6px 14px", borderRadius: 6,
-              color: isActive(path) ? "#fff" : "#9a8fc2",
-              background: isActive(path) ? "rgba(123,47,255,0.14)" : "transparent",
-              fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13, letterSpacing: "0.3px",
-              textDecoration: "none", transition: "all 0.2s",
-            }}
-              onMouseEnter={e => { if (!isActive(path)) { e.target.style.color = "#fff"; e.target.style.background = "rgba(123,47,255,0.08)"; } }}
-              onMouseLeave={e => { if (!isActive(path)) { e.target.style.color = "#9a8fc2"; e.target.style.background = "transparent"; } }}
+          {navLinks.map(({ label, path }) => (
+            <Link
+              key={label}
+              to={path}
+              style={{
+                position: "relative", padding: "8px 18px", borderRadius: 7,
+                color: isActive(path) ? "#fff" : "#c0b8e0",
+                background: isActive(path)
+                  ? "linear-gradient(135deg, rgba(123,47,255,0.22), rgba(0,212,255,0.08))"
+                  : "transparent",
+                fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 14, letterSpacing: "0.4px",
+                textDecoration: "none",
+                transition: "color 0.25s, background 0.25s, transform 0.2s, box-shadow 0.3s",
+                textShadow: isActive(path) ? "0 0 10px rgba(123,47,255,0.6)" : "none",
+                boxShadow: isActive(path) ? "inset 0 0 20px rgba(123,47,255,0.1)" : "none",
+                display: "inline-block",
+              }}
+              onMouseEnter={e => {
+                if (!isActive(path)) {
+                  e.currentTarget.style.color = "#fff";
+                  e.currentTarget.style.background = "rgba(123,47,255,0.1)";
+                  e.currentTarget.style.transform = "translateY(-1px)";
+                }
+              }}
+              onMouseLeave={e => {
+                if (!isActive(path)) {
+                  e.currentTarget.style.color = "#c0b8e0";
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.transform = "translateY(0)";
+                }
+              }}
             >
               {label}
               {isActive(path) && (
                 <span style={{
                   position: "absolute", bottom: -3, left: 12, right: 12, height: 2,
-                  background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", borderRadius: 2,
-                  boxShadow: "0 0 8px rgba(123,47,255,0.8)",
+                  background: "linear-gradient(90deg,#7B2FFF,#00d4ff,#7B2FFF)",
+                  backgroundSize: "200% 100%",
+                  animation: "axSheenMove 2.5s linear infinite",
+                  borderRadius: 2,
+                  boxShadow: "0 0 10px rgba(123,47,255,0.9), 0 0 20px rgba(0,212,255,0.5)",
                 }} />
               )}
             </Link>
@@ -509,11 +663,11 @@ export default function Navbar() {
         </div>
       )}
 
-      {/* RIGHT */}
+      {/* RIGHT SIDE */}
       <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
 
-        {/* CHAIN SWITCHER */}
-        {isConnected && chainName && (
+        {/* ─── WEB3 MODE: chain switcher ─── */}
+        {!isWeb2 && isConnected && chainName && (
           <button onClick={clearChainSelection} title="Switch chain" style={{
             display: "flex", alignItems: "center", gap: 5,
             padding: isMobile ? "4px 8px" : "5px 11px",
@@ -534,8 +688,8 @@ export default function Navbar() {
           </button>
         )}
 
-        {/* 2. REWARD BALANCE — clickable → earnings panel */}
-        {isConnected && balance !== null && !(isMobile && chainKey === "mst" && !faucetClaimed && Number(balance) === 0) && (
+        {/* REWARD BALANCE — clickable → earnings panel (Web3 only) */}
+        {!isWeb2 && isConnected && balance !== null && !(isMobile && chainKey === "mst" && !faucetClaimed && Number(balance) === 0) && (
           <div
             onClick={handleEarningsOpen}
             title="View earning history"
@@ -558,8 +712,8 @@ export default function Navbar() {
           </div>
         )}
 
-        {/* ⛽ FAUCET — MST only, balance 0, not claimed */}
-        {isConnected && chainKey === "mst" &&
+        {/* ⛽ FAUCET — MST only, balance 0, not claimed (Web3) */}
+        {!isWeb2 && isConnected && chainKey === "mst" &&
          !faucetClaimed && Number(balance) === 0 && (
           <button
             onClick={() => { setFaucetPanel(true); setFaucetStage("idle"); setFaucetError(""); }}
@@ -584,8 +738,8 @@ export default function Navbar() {
           </button>
         )}
 
-        {/* Wallet button — Desktop */}
-        {!isMobile && (
+        {/* Wallet button — Desktop (Web3) */}
+        {!isWeb2 && !isMobile && (
           isConnected ? (
             <div ref={walletMenuRef} style={{ position: "relative" }}>
               <button
@@ -605,7 +759,6 @@ export default function Navbar() {
                 onMouseEnter={e => { if (!walletMenuOpen) { e.currentTarget.style.borderColor = "rgba(123,47,255,0.55)"; e.currentTarget.style.boxShadow = "0 0 14px rgba(123,47,255,0.25)"; } }}
                 onMouseLeave={e => { if (!walletMenuOpen) { e.currentTarget.style.borderColor = "rgba(123,47,255,0.28)"; e.currentTarget.style.boxShadow = "none"; } }}
               >
-                {/* wallet icon */}
                 <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
                   <rect x="1.5" y="3.5" width="11" height="8" rx="1.5" stroke="#a67fff" strokeWidth="1.2"/>
                   <path d="M1.5 6H12.5" stroke="#a67fff" strokeWidth="1.2"/>
@@ -619,7 +772,6 @@ export default function Navbar() {
                 </svg>
               </button>
 
-              {/* Desktop wallet dropdown */}
               <div style={{
                 position: "absolute", top: "calc(100% + 8px)", right: 0,
                 background: "linear-gradient(160deg,#141021,#0d0a17)",
@@ -632,10 +784,8 @@ export default function Navbar() {
                 transition: "opacity 0.18s, transform 0.18s",
                 zIndex: 200,
               }}>
-                {/* Top gradient bar */}
                 <div style={{ height: 2, background: "linear-gradient(90deg,#7B2FFF,#00d4ff,#7B2FFF)" }} />
 
-                {/* Full address header */}
                 <div style={{ padding: "14px 14px 12px", borderBottom: "1px solid rgba(123,47,255,0.1)", display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 34, height: 34, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(123,47,255,0.4)", flexShrink: 0, background: "#0e0c1a" }}>
                     <img src={avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${address}`} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -648,7 +798,6 @@ export default function Navbar() {
                   </div>
                 </div>
 
-                {/* Actions */}
                 <div style={{ padding: "12px", display: "flex", flexDirection: "column", gap: 8 }}>
                   {renderWalletMenuActions()}
                 </div>
@@ -664,17 +813,139 @@ export default function Navbar() {
           )
         )}
 
+        {/* ─── WEB2 MODE: ArcadeCoin balance pill ─── */}
+        {isWeb2 && web2User && !web2User.isGuest && (
+          <div
+            onClick={() => navigate("/profile")}
+            title={coinStats ? `${coinStats.todayEarned || 0}/${coinStats.dailyCap || 500} earned today` : "Your ArcadeCoin balance"}
+            style={{
+              display: "flex", alignItems: "center", gap: 6,
+              padding: isMobile ? "0 10px" : "0 13px",
+              height: LOGO_SIZE + 8,
+              borderRadius: (LOGO_SIZE + 8) / 2,
+              background: "linear-gradient(135deg, rgba(255,183,0,0.14), rgba(0,212,255,0.1))",
+              border: "1px solid rgba(255,183,0,0.35)",
+              boxShadow: "0 0 14px rgba(255,183,0,0.15)",
+              cursor: "pointer", transition: "all 0.2s",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "linear-gradient(135deg, rgba(255,183,0,0.22), rgba(0,212,255,0.16))"; e.currentTarget.style.borderColor = "rgba(255,183,0,0.6)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "linear-gradient(135deg, rgba(255,183,0,0.14), rgba(0,212,255,0.1))"; e.currentTarget.style.borderColor = "rgba(255,183,0,0.35)"; }}
+          >
+            <Icon name="coin" size={isMobile ? 13 : 14} color="#FFD56A" />
+            <span style={{
+              color: "#FFD56A", fontWeight: 700,
+              fontFamily: "'Orbitron',sans-serif",
+              fontSize: isMobile ? 11 : 12, letterSpacing: "0.3px",
+            }}>
+              {Number(coinBalance || 0).toLocaleString()}
+            </span>
+            {!isMobile && (
+              <span style={{
+                color: "#b58500", fontWeight: 700,
+                fontFamily: "'Rajdhani',sans-serif", fontSize: 9,
+                textTransform: "uppercase", letterSpacing: "1px",
+              }}>
+                Coins
+              </span>
+            )}
+          </div>
+        )}
+        {isWeb2 && web2User?.isGuest && (
+          <div
+            title="Guests don't earn ArcadeCoins — sign in to start earning"
+            style={{
+              display: "flex", alignItems: "center", gap: 5,
+              padding: isMobile ? "4px 10px" : "5px 12px",
+              borderRadius: 20,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px dashed rgba(255,255,255,0.18)",
+              fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 10 : 11,
+              color: "rgba(200,215,235,0.5)", fontWeight: 700,
+              letterSpacing: "0.5px",
+            }}>
+            <Icon name="coin" size={12} />
+            <span>Guest</span>
+          </div>
+        )}
+
+        {/* ─── WEB2 MODE: user chip (desktop) ─── */}
+        {isWeb2 && !isMobile && web2User && (
+          <div ref={web2MenuRef} style={{ position: "relative" }}>
+            <button
+              onClick={() => setWeb2MenuOpen(p => !p)}
+              title="Account"
+              style={{
+                padding: "4px 10px 4px 4px",
+                background: web2MenuOpen ? "rgba(0,212,255,0.14)" : "rgba(0,212,255,0.08)",
+                border: web2MenuOpen ? "1px solid rgba(0,212,255,0.5)" : "1px solid rgba(0,212,255,0.25)",
+                borderRadius: 20, color: "#8ab8d8",
+                fontSize: 11, cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 8,
+                fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+                transition: "all 0.2s",
+                boxShadow: web2MenuOpen ? "0 0 14px rgba(0,212,255,0.25)" : "none",
+              }}
+            >
+              <div style={{ width: 24, height: 24, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(0,212,255,0.5)", flexShrink: 0, background: "#0e0c1a" }}>
+                <img src={web2AvatarUrl} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.src = `https://api.dicebear.com/9.x/bottts/svg?seed=${web2User.uid}`; }} />
+              </div>
+              <span style={{ fontSize: 12, color: "#d4eaf8", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {web2User.displayName}
+              </span>
+              {web2User.isGuest && (
+                <span style={{ fontSize: 8, padding: "1px 5px", background: "rgba(255,255,255,0.08)", color: "#8ab8d8", borderRadius: 4, letterSpacing: "0.5px", fontWeight: 800 }}>GUEST</span>
+              )}
+              <svg width="8" height="8" viewBox="0 0 9 9" style={{ opacity: 0.6, transform: web2MenuOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>
+                <path d="M1.5 3L4.5 6L7.5 3" stroke="#8ab8d8" strokeWidth="1.2" fill="none" strokeLinecap="round" />
+              </svg>
+            </button>
+
+            <div style={{
+              position: "absolute", top: "calc(100% + 8px)", right: 0,
+              background: "linear-gradient(160deg,#0e1a2a,#0a0f1a)",
+              border: "1px solid rgba(0,212,255,0.25)",
+              borderRadius: 12, overflow: "hidden", minWidth: 260,
+              boxShadow: "0 16px 40px rgba(0,0,0,0.8), 0 0 24px rgba(0,212,255,0.12)",
+              opacity: web2MenuOpen ? 1 : 0,
+              pointerEvents: web2MenuOpen ? "all" : "none",
+              transform: web2MenuOpen ? "translateY(0)" : "translateY(-6px)",
+              transition: "opacity 0.18s, transform 0.18s",
+              zIndex: 200,
+            }}>
+              <div style={{ height: 2, background: "linear-gradient(90deg,#00d4ff,#0088ff,#00FF88)" }} />
+              <div style={{ padding: "14px 14px 12px", borderBottom: "1px solid rgba(0,212,255,0.1)", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 38, height: 38, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(0,212,255,0.4)", flexShrink: 0, background: "#0e0c1a" }}>
+                  <img src={web2AvatarUrl} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.src = `https://api.dicebear.com/9.x/bottts/svg?seed=${web2User.uid}`; }} />
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13, color: "#e8f4ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {web2User.displayName}
+                  </div>
+                  <div style={{ fontFamily: "'Rajdhani',sans-serif", fontSize: 10, color: "rgba(0,212,255,0.7)", textTransform: "uppercase", letterSpacing: "1px", marginTop: 2 }}>
+                    {web2User.provider === "google" ? "Google Account"
+                     : web2User.provider === "twitter" ? "X Account"
+                     : "Guest Session"}
+                  </div>
+                </div>
+              </div>
+              <div style={{ padding: "12px", display: "flex", flexDirection: "column", gap: 8 }}>
+                {renderWeb2MenuActions()}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Mobile: wallet icon + hamburger */}
         {isMobile && (
           <>
-            {!isConnected && (
+            {!isWeb2 && !isConnected && (
               <button onClick={handleConnect} style={{ padding: "6px 12px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>
                 Connect
               </button>
             )}
 
-            {/* Wallet chip — mobile (connected only) */}
-            {isConnected && (
+            {/* Wallet chip — mobile (connected, Web3) */}
+            {!isWeb2 && isConnected && (
               <button
                 onClick={() => setWalletMenuOpen(true)}
                 title="Wallet options"
@@ -697,6 +968,25 @@ export default function Navbar() {
               </button>
             )}
 
+            {/* Web2 avatar button — mobile */}
+            {isWeb2 && web2User && (
+              <button
+                onClick={() => setWeb2MenuOpen(true)}
+                title="Account"
+                style={{
+                  width: 36, height: 36,
+                  background: "rgba(0,212,255,0.08)",
+                  border: "1px solid rgba(0,212,255,0.28)",
+                  borderRadius: 7,
+                  cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  padding: 0, overflow: "hidden",
+                }}
+              >
+                <img src={web2AvatarUrl} alt="avatar" style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }} onError={e => { e.target.src = `https://api.dicebear.com/9.x/bottts/svg?seed=${web2User.uid}`; }} />
+              </button>
+            )}
+
             {/* Hamburger */}
             <div ref={menuRef} style={{ position: "relative" }}>
               <button onClick={() => setMenuOpen(p => !p)} style={{ width: 36, height: 36, background: "rgba(123,47,255,0.08)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 7, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, padding: 0 }}>
@@ -705,11 +995,10 @@ export default function Navbar() {
                 <span style={{ width: 16, height: 1.5, background: menuOpen ? "#7B2FFF" : "#a67fff", borderRadius: 2, transition: "all 0.2s", transform: menuOpen ? "rotate(-45deg) translate(4px, -4px)" : "none" }} />
               </button>
 
-              {/* Mobile menu dropdown */}
               {menuOpen && (
-                <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: "#0e0c1a", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 12, overflow: "hidden", minWidth: 200, boxShadow: "0 16px 40px rgba(0,0,0,0.9)", zIndex: 200 }}>
+                <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: "#0e0c1a", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 12, overflow: "hidden", minWidth: 220, boxShadow: "0 16px 40px rgba(0,0,0,0.9)", zIndex: 200 }}>
                   {navLinks.map(({ label, path }, i) => (
-                    <div key={label} onClick={() => { navigate(path); setMenuOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", fontSize: 13, cursor: "pointer", borderBottom: i < navLinks.length - 1 ? "1px solid rgba(123,47,255,0.07)" : "none", background: isActive(path) ? "rgba(123,47,255,0.14)" : "transparent", color: isActive(path) ? "#c4a0ff" : "#9a8fc2", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, transition: "background 0.15s" }}
+                    <div key={label} onClick={() => { navigate(path); setMenuOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", fontSize: 13, cursor: "pointer", borderBottom: "1px solid rgba(123,47,255,0.07)", background: isActive(path) ? "rgba(123,47,255,0.14)" : "transparent", color: isActive(path) ? "#c4a0ff" : "#9a8fc2", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, transition: "background 0.15s" }}
                       onMouseEnter={e => { e.currentTarget.style.background = "rgba(123,47,255,0.1)"; e.currentTarget.style.color = "#c4a0ff"; }}
                       onMouseLeave={e => { e.currentTarget.style.background = isActive(path) ? "rgba(123,47,255,0.14)" : "transparent"; e.currentTarget.style.color = isActive(path) ? "#c4a0ff" : "#9a8fc2"; }}
                     >
@@ -717,15 +1006,36 @@ export default function Navbar() {
                       {label}
                     </div>
                   ))}
-                  {isConnected && (
+
+                  {WEB2_ENABLED && <div
+                    onClick={handleSwitchMode}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", fontSize: 12, cursor: "pointer", borderBottom: (isConnected || (isWeb2 && web2User)) ? "1px solid rgba(123,47,255,0.12)" : "none", color: "#ff8bb4", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.3px" }}
+                  >
+                    <Icon name="exchange" size={12} />
+                    Switch Mode
+                  </div>}
+
+                  {!isWeb2 && isConnected && (
                     <div
                       onClick={() => { setMenuOpen(false); setWalletMenuOpen(true); }}
-                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 16px", fontSize: 12, cursor: "pointer", borderTop: "1px solid rgba(123,47,255,0.12)", background: "transparent", color: "#b8a8e0", fontFamily: "monospace", transition: "background 0.15s" }}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 16px", fontSize: 12, cursor: "pointer", background: "transparent", color: "#b8a8e0", fontFamily: "monospace", transition: "background 0.15s" }}
                       onMouseEnter={e => { e.currentTarget.style.background = "rgba(123,47,255,0.08)"; }}
                       onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
                     >
                       <span>{shortAddress(address)}</span>
                       <span style={{ fontSize: 10, color: "#8866cc", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px" }}>WALLET ▸</span>
+                    </div>
+                  )}
+
+                  {isWeb2 && web2User && (
+                    <div
+                      onClick={() => { setMenuOpen(false); setWeb2MenuOpen(true); }}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 16px", fontSize: 12, cursor: "pointer", background: "transparent", color: "#b8d4e8", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, transition: "background 0.15s" }}
+                      onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,212,255,0.08)"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>{web2User.displayName}</span>
+                      <span style={{ fontSize: 10, color: "#00d4ff", letterSpacing: "0.5px" }}>ACCOUNT ▸</span>
                     </div>
                   )}
                 </div>
@@ -736,21 +1046,19 @@ export default function Navbar() {
       </div>
     </nav>
 
-      {/* ── 💳 MOBILE WALLET MENU MODAL ─────────────────────────────── */}
-      {isMobile && walletMenuOpen && isConnected && (
+      {/* ── 💳 MOBILE WALLET MENU MODAL (Web3) ─────────────────────── */}
+      {!isWeb2 && isMobile && walletMenuOpen && isConnected && (
         <>
           <style>{`
             @keyframes wmBgIn    { from{opacity:0} to{opacity:1} }
             @keyframes wmModalIn { from{opacity:0;transform:scale(0.92) translateY(10px)} to{opacity:1;transform:scale(1) translateY(0)} }
           `}</style>
 
-          {/* backdrop */}
           <div
             onClick={() => setWalletMenuOpen(false)}
             style={{ position: "fixed", inset: 0, zIndex: 3100, background: "rgba(4,3,10,0.82)", backdropFilter: "blur(10px)", animation: "wmBgIn 0.22s ease" }}
           />
 
-          {/* modal */}
           <div style={{
             position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
             zIndex: 3101, width: "min(360px, 92vw)",
@@ -760,13 +1068,10 @@ export default function Navbar() {
             boxShadow: "0 20px 70px rgba(0,0,0,0.6), 0 0 40px rgba(123,47,255,0.15)",
             fontFamily: "'Rajdhani',sans-serif",
           }}>
-            {/* top gradient bar */}
             <div style={{ height: 3, background: "linear-gradient(90deg,#7B2FFF,#00d4ff,#7B2FFF)" }} />
 
-            {/* close */}
             <button onClick={() => setWalletMenuOpen(false)} style={{ position: "absolute", top: 12, right: 12, width: 28, height: 28, borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2 }}>✕</button>
 
-            {/* Header — avatar + full address */}
             <div style={{ padding: "22px 20px 16px", borderBottom: "1px solid rgba(123,47,255,0.1)", display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{ width: 44, height: 44, borderRadius: "50%", overflow: "hidden", border: "2px solid rgba(123,47,255,0.45)", flexShrink: 0, background: "#0e0c1a", boxShadow: "0 0 18px rgba(123,47,255,0.25)" }}>
                 <img src={avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${address}`} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -779,7 +1084,6 @@ export default function Navbar() {
               </div>
             </div>
 
-            {/* Actions */}
             <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: 10 }}>
               {renderWalletMenuActions()}
             </div>
@@ -787,8 +1091,56 @@ export default function Navbar() {
         </>
       )}
 
-      {/* ── ⛽ GAS FAUCET PANEL — X login + staged animations ────────── */}
-      {faucetPanel && (
+      {/* ── 💳 MOBILE WEB2 ACCOUNT MODAL ──────────────────────────── */}
+      {isWeb2 && isMobile && web2MenuOpen && web2User && (
+        <>
+          <style>{`
+            @keyframes w2mBgIn    { from{opacity:0} to{opacity:1} }
+            @keyframes w2mModalIn { from{opacity:0;transform:scale(0.92) translateY(10px)} to{opacity:1;transform:scale(1) translateY(0)} }
+          `}</style>
+
+          <div
+            onClick={() => setWeb2MenuOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 3100, background: "rgba(4,3,10,0.82)", backdropFilter: "blur(10px)", animation: "w2mBgIn 0.22s ease" }}
+          />
+
+          <div style={{
+            position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+            zIndex: 3101, width: "min(360px, 92vw)",
+            background: "linear-gradient(160deg,#0e1a2a,#0a0f1a)",
+            border: "1px solid rgba(0,212,255,0.3)", borderRadius: 18,
+            overflow: "hidden", animation: "w2mModalIn 0.28s cubic-bezier(0.34,1.56,0.64,1)",
+            boxShadow: "0 20px 70px rgba(0,0,0,0.6), 0 0 40px rgba(0,212,255,0.15)",
+            fontFamily: "'Rajdhani',sans-serif",
+          }}>
+            <div style={{ height: 3, background: "linear-gradient(90deg,#00d4ff,#0088ff,#00FF88)" }} />
+            <button onClick={() => setWeb2MenuOpen(false)} style={{ position: "absolute", top: 12, right: 12, width: 28, height: 28, borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2 }}>✕</button>
+
+            <div style={{ padding: "22px 20px 16px", borderBottom: "1px solid rgba(0,212,255,0.1)", display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 48, height: 48, borderRadius: "50%", overflow: "hidden", border: "2px solid rgba(0,212,255,0.45)", flexShrink: 0, background: "#0e0c1a", boxShadow: "0 0 18px rgba(0,212,255,0.25)" }}>
+                <img src={web2AvatarUrl} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.src = `https://api.dicebear.com/9.x/bottts/svg?seed=${web2User.uid}`; }} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 14, color: "#e8f4ff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {web2User.displayName}
+                </div>
+                <div style={{ fontFamily: "'Rajdhani',sans-serif", fontSize: 10, color: "rgba(0,212,255,0.7)", textTransform: "uppercase", letterSpacing: "1.4px", marginTop: 3 }}>
+                  {web2User.provider === "google" ? "Google Account"
+                   : web2User.provider === "twitter" ? "X Account"
+                   : "Guest Session"}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: 10 }}>
+              {renderWeb2MenuActions()}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── ⛽ GAS FAUCET PANEL (Web3 only) ──────────────────────────── */}
+      {faucetPanel && !isWeb2 && (
         <>
           <style>{`
             @keyframes fpModalIn    { from{opacity:0;transform:scale(0.92) translateY(10px)} to{opacity:1;transform:scale(1) translateY(0)} }
@@ -810,13 +1162,11 @@ export default function Navbar() {
             }
           `}</style>
 
-          {/* backdrop */}
           <div
             onClick={() => { if (faucetStage === "idle" || faucetStage === "error" || faucetStage === "success") setFaucetPanel(false); }}
             style={{ position: "fixed", inset: 0, zIndex: 3000, background: "rgba(4,3,10,0.82)", backdropFilter: "blur(10px)", animation: "fpBgIn 0.25s ease" }}
           />
 
-          {/* panel */}
           <div style={{
             position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
             zIndex: 3001, width: "min(400px, 92vw)",
@@ -826,17 +1176,14 @@ export default function Navbar() {
             boxShadow: "0 20px 70px rgba(0,0,0,0.6), 0 0 40px rgba(255,47,94,0.12)",
             fontFamily: "'Rajdhani',sans-serif",
           }}>
-            {/* top gradient bar */}
             <div style={{ height: 3, background: "linear-gradient(90deg,#ff2f5e,#ff6b35,#ffb800)" }} />
 
-            {/* close */}
             {(faucetStage === "idle" || faucetStage === "error" || faucetStage === "success") && (
               <button onClick={() => setFaucetPanel(false)} style={{ position: "absolute", top: 14, right: 14, width: 30, height: 30, borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2 }}>✕</button>
             )}
 
             <div style={{ padding: "34px 30px 30px", textAlign: "center" }}>
 
-              {/* ═══ STAGE: IDLE ═══ */}
               {faucetStage === "idle" && (
                 <>
                   <div style={{ width: 64, height: 64, borderRadius: "50%", background: "linear-gradient(135deg,#ff2f5e,#ff6b35)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, margin: "0 auto 18px", boxShadow: "0 0 26px rgba(255,47,94,0.4)", animation: "fpFloat 3s ease-in-out infinite" }}>⛽</div>
@@ -864,15 +1211,11 @@ export default function Navbar() {
                 </>
               )}
 
-              {/* ═══ STAGE: REDIRECTING TO X ═══ */}
               {faucetStage === "redirecting" && (
                 <div style={{ padding: "18px 0" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginBottom: 26 }}>
-                    {/* ArcadeX orb */}
                     <div style={{ width: 52, height: 52, borderRadius: "50%", background: "linear-gradient(135deg,#7B2FFF,#a67fff)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>🎮</div>
-                    {/* arrow */}
                     <div style={{ fontSize: 22, color: "#1da1f2", animation: "fpArrowSlide 1s ease-in-out infinite", margin: "0 4px" }}>→</div>
-                    {/* X badge with pulse */}
                     <div style={{ width: 52, height: 52, borderRadius: "50%", background: "#1da1f2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 900, color: "#fff", flexShrink: 0, animation: "fpPulseRing 1.4s ease-out infinite" }}>𝕏</div>
                   </div>
                   <div style={{ fontSize: 18, fontWeight: 700, color: "#fff", marginBottom: 6 }}>Redirecting to X</div>
@@ -880,7 +1223,6 @@ export default function Navbar() {
                 </div>
               )}
 
-              {/* ═══ STAGE: CLAIMING ═══ */}
               {faucetStage === "claiming" && (
                 <div style={{ padding: "18px 0" }}>
                   <div style={{ width: 66, height: 66, margin: "0 auto 22px", position: "relative" }}>
@@ -892,7 +1234,6 @@ export default function Navbar() {
                 </div>
               )}
 
-              {/* ═══ STAGE: SUCCESS ═══ */}
               {faucetStage === "success" && (
                 <div style={{ padding: "14px 0" }}>
                   <div style={{ width: 72, height: 72, borderRadius: "50%", background: "linear-gradient(135deg,#00c853,#00e676)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, margin: "0 auto 20px", animation: "fpDropIn 0.5s cubic-bezier(0.34,1.56,0.64,1)", boxShadow: "0 0 30px rgba(0,230,118,0.4)" }}>✓</div>
@@ -901,7 +1242,6 @@ export default function Navbar() {
                 </div>
               )}
 
-              {/* ═══ STAGE: ERROR ═══ */}
               {faucetStage === "error" && (
                 <div style={{ padding: "14px 0" }}>
                   <div style={{ width: 66, height: 66, borderRadius: "50%", background: "rgba(255,68,68,0.12)", border: "2px solid rgba(255,68,68,0.35)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, margin: "0 auto 18px" }}>⚠️</div>
@@ -916,8 +1256,8 @@ export default function Navbar() {
         </>
       )}
 
-      {/* ── EARNINGS PANEL — Premium Design ──────────────────────── */}
-      {earningsOpen && (
+      {/* ── EARNINGS PANEL (Web3 only) ──────────────────────────── */}
+      {earningsOpen && !isWeb2 && (
         <>
           <style>{`
             @keyframes slideInRight  { from{opacity:0;transform:translateX(32px)} to{opacity:1;transform:translateX(0)} }
@@ -932,11 +1272,9 @@ export default function Navbar() {
             .tx-link:hover { color: #00d4ff !important; }
           `}</style>
 
-          {/* Backdrop */}
           <div onClick={() => setEarningsOpen(false)}
             style={{ position:"fixed", inset:0, zIndex:998, background:"rgba(0,0,0,0.7)", backdropFilter:"blur(8px)", animation:"fadeInBg 0.2s ease" }} />
 
-          {/* Panel */}
           <div style={{
             position:"fixed", top:0, right:0, bottom:0, zIndex:999,
             width: isMobile ? "100vw" : 400,
@@ -947,14 +1285,11 @@ export default function Navbar() {
             display: "flex", flexDirection: "column", overflow: "hidden",
           }}>
 
-            {/* Animated rainbow top bar */}
             <div style={{ height:3, flexShrink:0, background:"linear-gradient(90deg,#7B2FFF,#00d4ff,#00FF88,#FFB700,#7B2FFF)", backgroundSize:"300% 100%", animation:"gradPulse 3s ease infinite" }} />
 
-            {/* Ambient glow orbs */}
             <div style={{ position:"absolute", top:-80, right:-80, width:240, height:240, background:"radial-gradient(circle,rgba(123,47,255,0.12) 0%,transparent 65%)", borderRadius:"50%", pointerEvents:"none" }} />
             <div style={{ position:"absolute", bottom:-60, left:-60, width:180, height:180, background:"radial-gradient(circle,rgba(0,212,255,0.07) 0%,transparent 65%)", borderRadius:"50%", pointerEvents:"none" }} />
 
-            {/* ── HEADER ── */}
             <div style={{ padding:"20px 22px 16px", borderBottom:"1px solid rgba(255,255,255,0.05)", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0, position:"relative" }}>
               <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                 <div style={{ width:38, height:38, borderRadius:12, background:"linear-gradient(135deg,rgba(123,47,255,0.3),rgba(0,212,255,0.15))", border:"1px solid rgba(123,47,255,0.4)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, boxShadow:"0 0 20px rgba(123,47,255,0.2)" }}>
@@ -973,12 +1308,9 @@ export default function Navbar() {
               </button>
             </div>
 
-                {/* ── TOTAL BALANCE CARD ── */}
             <div style={{ margin:"16px 16px 0", flexShrink:0 }}>
               {(() => {
-                // Total earned — only current chain's plays
                 const totalEarned = chainFiltered.reduce((sum, s) => {
-                  // Use actual saved earned if > 0, else fallback with on-chain playerShare
                   if (s.earned != null && Number(s.earned) > 0) return sum + Number(s.earned);
                   const g = gameMap[s.gameId] || {};
                   const rate = isCurrentMst ? (g.rewardRateNative || 1) : (g.rewardRate || 50);
@@ -990,7 +1322,6 @@ export default function Navbar() {
               <div style={{ borderRadius:16, padding:"18px 20px", position:"relative", overflow:"hidden", background:"linear-gradient(135deg,rgba(123,47,255,0.18) 0%,rgba(0,212,255,0.06) 100%)", border:"1px solid rgba(123,47,255,0.25)", boxShadow:"0 8px 32px rgba(123,47,255,0.12), inset 0 1px 0 rgba(255,255,255,0.05)" }}>
                 <div style={{ position:"absolute", top:0, left:0, right:0, height:"50%", background:"linear-gradient(180deg,rgba(255,255,255,0.03) 0%,transparent 100%)", borderRadius:"16px 16px 0 0", pointerEvents:"none" }} />
 
-                {/* Current Balance */}
                 <div style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:10, color:"rgba(0,212,255,0.7)", textTransform:"uppercase", letterSpacing:"2px", marginBottom:6, fontWeight:700 }}>Current Balance</div>
                 <div style={{ display:"flex", alignItems:"flex-end", gap:8, marginBottom:14 }}>
                   <span style={{ fontFamily:"'Orbitron',sans-serif", fontWeight:700, fontSize:34, color:"#fff", lineHeight:1, textShadow:"0 0 30px rgba(123,47,255,0.5)" }}>
@@ -999,7 +1330,6 @@ export default function Navbar() {
                   <span style={{ fontFamily:"'Rajdhani',sans-serif", fontWeight:700, fontSize:14, color:"rgba(0,212,255,0.8)", marginBottom:4 }}>{earnSymbol}</span>
                 </div>
 
-                {/* Total Earned — current chain only */}
                 <div style={{ borderTop:"1px solid rgba(255,255,255,0.07)", paddingTop:12, marginBottom:14 }}>
                   <div style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:10, color:"rgba(255,255,255,0.3)", textTransform:"uppercase", letterSpacing:"1.5px", marginBottom:8, fontWeight:700 }}>Total Earned (Est.)</div>
                   {earningsLoading ? (
@@ -1014,7 +1344,6 @@ export default function Navbar() {
                   )}
                 </div>
 
-                {/* Stats row */}
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
                   {[
                     { label:"Plays", val: earningsLoading ? "—" : chainFiltered.length, color:"#00FF88" },
@@ -1032,10 +1361,8 @@ export default function Navbar() {
               })()}
             </div>
 
-            {/* ── DAY-WISE LIST ── */}
             <div style={{ flex:1, overflowY:"auto", padding:"14px 0 8px", scrollbarWidth:"none" }}>
               {earningsLoading ? (
-                // Skeleton shimmer
                 <div style={{ padding:"0 16px", display:"flex", flexDirection:"column", gap:10 }}>
                   {[1,2,3,4].map(i => (
                     <div key={i} style={{ height:64, borderRadius:14, background:"linear-gradient(90deg,rgba(123,47,255,0.06) 25%,rgba(123,47,255,0.12) 50%,rgba(123,47,255,0.06) 75%)", backgroundSize:"400px 100%", animation:"shimmer 1.4s infinite", animationDelay:`${i*0.1}s` }} />
@@ -1050,8 +1377,6 @@ export default function Navbar() {
               ) : (
                 Object.entries(groupByDay(chainFiltered)).map(([date, plays], dayIdx) => (
                   <div key={date} style={{ marginBottom:4 }}>
-
-                    {/* Day header chip */}
                     <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 20px 6px" }}>
                       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                         <div style={{ width:3, height:14, borderRadius:2, background:"linear-gradient(180deg,#7B2FFF,#00d4ff)" }} />
@@ -1062,23 +1387,18 @@ export default function Navbar() {
                       </span>
                     </div>
 
-                    {/* Play rows */}
                     <div style={{ padding:"0 12px", display:"flex", flexDirection:"column", gap:4 }}>
                       {plays.map((play, i) => {
                         const gInfo = gameMap[play.gameId] || {};
                         const thumb = gInfo.thumbnail;
                         const time = play.createdAt ? new Date(play.createdAt).toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit", hour12:true }) : "";
-                        // Earned amount — use the chain THIS play was on, not current chain
                         const playChain = (play.chain || "botchain").toLowerCase();
                         const isMstPlay = playChain === "mst";
                         const rate = isMstPlay ? (gInfo.rewardRateNative || 1) : (gInfo.rewardRate || 50);
-                        // Use actual saved earned ONLY if > 0 (0 = save failed, use fallback)
                         const earned = (play.earned != null && Number(play.earned) > 0)
                           ? Number(play.earned)
                           : Math.round(rate * playerShareForEarnings / 100 * 100) / 100;
-                        // Always override symbol based on chain — ignore wrong "ARCADE" on MST
                         const earnedSymbol = isMstPlay ? "MSTC" : (play.earnedSymbol || "ARCADE");
-                        // Chain color
                         const chainColor = playChain === "mst" ? "#ff2f5e" : playChain === "botchain" ? "#00d4ff" : "#FFB700";
                         return (
                           <div key={play.id || i} className="earn-row"
@@ -1090,18 +1410,15 @@ export default function Navbar() {
                               animation:`rowIn 0.3s ease both`, animationDelay:`${(dayIdx*3 + i) * 0.04}s`,
                             }}>
 
-                            {/* Game thumbnail */}
                             <div style={{ width:44, height:44, borderRadius:10, overflow:"hidden", border:"1px solid rgba(123,47,255,0.25)", flexShrink:0, background:"linear-gradient(135deg,rgba(123,47,255,0.2),rgba(0,212,255,0.1))", position:"relative" }}>
                               {thumb ? (
                                 <img src={thumb} alt={play.gameName} style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} onError={e => { e.target.style.display="none"; }} />
                               ) : (
                                 <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>🎮</div>
                               )}
-                              {/* Shimmer on thumbnail */}
                               <div style={{ position:"absolute", inset:0, background:"linear-gradient(135deg,transparent 40%,rgba(255,255,255,0.06) 50%,transparent 60%)" }} />
                             </div>
 
-                            {/* Info */}
                             <div style={{ flex:1, minWidth:0 }}>
                               <div style={{ fontFamily:"'Rajdhani',sans-serif", fontWeight:700, fontSize:13, color:"#e8deff", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginBottom:3 }}>
                                 {play.gameName || gInfo.name || `Game #${play.gameId}`}
@@ -1118,7 +1435,6 @@ export default function Navbar() {
                               </div>
                             </div>
 
-                            {/* Earned + TX */}
                             <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:3, flexShrink:0 }}>
                               <div style={{ display:"flex", alignItems:"baseline", gap:3 }}>
                                 <span style={{ fontFamily:"'Orbitron',sans-serif", fontSize:11, fontWeight:700, color:"#00FF88" }}>+{earned}</span>
@@ -1139,7 +1455,6 @@ export default function Navbar() {
               )}
             </div>
 
-            {/* ── FOOTER ── */}
             <div style={{ padding:"12px 20px", borderTop:"1px solid rgba(255,255,255,0.06)", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
               <span style={{ fontSize:11 }}>⚡</span>
               <span style={{ fontFamily:"'Rajdhani',sans-serif", fontSize:11, color:"rgba(176,136,255,0.6)", letterSpacing:"0.8px" }}>Powered by ArcadeX · On-Chain Gaming</span>

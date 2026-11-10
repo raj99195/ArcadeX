@@ -103,24 +103,24 @@ export async function getGame(gameId) {
 // ── All games (Admin) ──
 export async function getAllGames() {
   try {
-    const data = await apiCall("/api/admin/games");
+    const data = await apiCall("/api/admin?action=games");
     return data.games || [];
   } catch { return []; }
 }
 // ── Pending games (Admin) ──
 export async function getPendingGames() {
   try {
-    const data = await apiCall("/api/admin/games?status=pending");
+    const data = await apiCall("/api/admin?action=games&status=pending");
     return data.games || [];
   } catch { return []; }
 }
 // ── Approve game (Admin) ──
 export async function approveGameInFirebase(gameId) {
-  return apiCall("/api/admin/games?action=approve", { method: "POST", body: { gameId } });
+  return apiCall("/api/admin?action=games-approve", { method: "POST", body: { gameId } });
 }
 // ── Reject game (Admin) ──
 export async function rejectGameInFirebase(gameId) {
-  return apiCall("/api/admin/games?action=reject", { method: "POST", body: { gameId } });
+  return apiCall("/api/admin?action=games-reject", { method: "POST", body: { gameId } });
 }
 // ── Total games count ──
 export async function getTotalGamesCount() {

@@ -15,3 +15,32 @@ node_modules
 
 # Hardhat Ignition default folder for deployments against a local node
 ignition/deployments/chain-31337
+
+.vercel
+.env*
+dist
+firebase-debug.log
+.studio-data/
+!.env.studio.example
+
+# Local credentials
+serviceAccountKey.json
+serviceAccountKeys.json
+
+# Local diagnostics and scratch files
+/node
+/check-platform-stats.js
+/leaderboard-check.js
+/test-gasless.js
+
+# Local scripts and Firebase deployment files
+/scripts/
+/firebase.json
+/.firebaserc
+/firebaserc
+/firestore.rules
+/firestore.indexes.json
+/storage.rules
+
+# Local research notes and captures
+/docs/research/

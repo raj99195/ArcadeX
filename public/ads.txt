@@ -1,0 +1,10 @@
+# Google AdSense authorized sellers file.
+#
+# After signing up at https://www.google.com/adsense, replace the line below
+# with your real publisher ID. The format AdSense gives you in the dashboard
+# ("Sites → ads.txt guidance") is exactly:
+#
+# google.com, pub-XXXXXXXXXXXXXXXX, DIRECT, f08c47fec0942fa0
+#
+# Deploy ads.txt to https://www.playarcadex.in/ads.txt — Google will auto-detect.
+google.com, pub-XXXXXXXXXXXXXXXX, DIRECT, f08c47fec0942fa0

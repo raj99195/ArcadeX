@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAccount, usePublicClient } from "wagmi";
 import { useGames } from "../hooks/useGames";
 import { useChain } from "../context/ChainContext";
+import { Icon } from "../components/Icon";
 
 // ── On-chain leaderboard ABI ──────────────────────────────────────────────
 // Scores ab seedha Leaderboard.sol contract se aate hain — Firestore se nahi.
@@ -43,17 +44,25 @@ const LEADERBOARD_ABI = [
 const shortAddr = (a) => a ? a.slice(0, 8) + "..." + a.slice(-4) : "—";
 const fmtScore = (s) => s >= 1000000 ? (s / 1000000).toFixed(1) + "M" : s >= 1000 ? (s / 1000).toFixed(1) + "K" : String(s || "0");
 
-function Avatar({ player, size = 36 }) {
+function Avatar({ player, size = 36, isTop3 = false }) {
   const initials = player ? player.slice(2, 4).toUpperCase() : "?";
   return (
-    <div style={{
-      width: size, height: size, borderRadius: "50%",
-      background: "linear-gradient(135deg,#7B2FFF,#00d4ff)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      fontSize: size * 0.3, fontWeight: 700, color: "#fff",
-      fontFamily: "'Orbitron',sans-serif", flexShrink: 0,
-      border: "2px solid rgba(123,47,255,0.4)",
-    }}>{initials}</div>
+    <div
+      className={`ax-heartbeat-hover ${isTop3 ? "ax-aura" : ""}`}
+      style={{
+        width: size, height: size, borderRadius: "50%",
+        background: "linear-gradient(135deg,#7B2FFF,#00d4ff,#7B2FFF)",
+        backgroundSize: "200% 200%",
+        animation: isTop3 ? "axGradFlow 4s ease infinite, axAura 3s ease-in-out infinite" : "axGradFlow 6s ease infinite",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: size * 0.3, fontWeight: 700, color: "#fff",
+        fontFamily: "'Orbitron',sans-serif", flexShrink: 0,
+        border: "2px solid rgba(123,47,255,0.5)",
+        transition: "box-shadow 0.3s, transform 0.3s",
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 0 18px rgba(123,47,255,0.7)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "none"; }}
+    >{initials}</div>
   );
 }
 
@@ -75,15 +84,21 @@ function RankMedal({ rank }) {
   const m = medals[rank];
   if (!m) return <span style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 12, fontWeight: 700, color: "#8b6fd4", minWidth: 28, textAlign: "center" }}>{rank}</span>;
   return (
-    <div style={{
-      width: 28, height: 28, borderRadius: "50%",
-      background: m.bg, boxShadow: m.shadow,
-      border: `1.5px solid ${m.border}`,
-      display: "flex", alignItems: "center", justifyContent: "center",
-      fontFamily: "'Orbitron',sans-serif", fontWeight: 800, fontSize: 11,
-      color: "#1a1206", flexShrink: 0,
-      ...(rank === 1 ? { animation: "crownGlow 2s ease-in-out infinite" } : {}),
-    }}>{rank}</div>
+    <div
+      className="ax-heartbeat-hover medal-anim"
+      style={{
+        width: 30, height: 30, borderRadius: "50%",
+        background: m.bg, boxShadow: m.shadow,
+        border: `1.5px solid ${m.border}`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontFamily: "'Orbitron',sans-serif", fontWeight: 800, fontSize: 11,
+        color: "#1a1206", flexShrink: 0,
+        animation: rank === 1
+          ? "crownGlow 2s ease-in-out infinite, axFloatY 3s ease-in-out infinite"
+          : rank === 2
+            ? "axFloatY 3.4s ease-in-out infinite 0.1s"
+            : "axFloatY 3.8s ease-in-out infinite 0.2s",
+      }}>{rank}</div>
   );
 }
 
@@ -267,42 +282,113 @@ export default function Leaderboard() {
 
       {/* Grid BG */}
       <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", background: "#08070f" }}>
-        <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(123,47,255,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(123,47,255,0.07) 1px, transparent 1px)", backgroundSize: "50px 50px" }} />
-        <div style={{ position: "absolute", top: "10%", left: "50%", transform: "translateX(-50%)", width: 600, height: 400, background: "radial-gradient(circle, rgba(123,47,255,0.15) 0%, transparent 70%)", borderRadius: "50%", animation: "floatUp 8s ease-in-out infinite" }} />
-        <div style={{ position: "absolute", bottom: 0, right: 0, width: 400, height: 400, background: "radial-gradient(circle, rgba(0,212,255,0.06) 0%, transparent 70%)", borderRadius: "50%", animation: "floatUp 10s ease-in-out infinite" }} />
+        <div className="ax-grid-bg" style={{ position: "absolute", inset: 0 }} />
+        <div
+          className="ax-float"
+          style={{
+            position: "absolute", top: "10%", left: "50%", transform: "translateX(-50%)",
+            width: 600, height: 400,
+            background: "radial-gradient(circle, rgba(123,47,255,0.18) 0%, transparent 70%)",
+            borderRadius: "50%",
+          }} />
+        <div
+          className="ax-float-rotate"
+          style={{
+            position: "absolute", bottom: 0, right: 0, width: 400, height: 400,
+            background: "radial-gradient(circle, rgba(0,212,255,0.08) 0%, transparent 70%)",
+            borderRadius: "50%",
+          }} />
+        <div
+          className="ax-breathe"
+          style={{
+            position: "absolute", top: "35%", left: "10%", width: 300, height: 300,
+            background: "radial-gradient(circle, rgba(255,110,196,0.07) 0%, transparent 70%)",
+            borderRadius: "50%",
+          }} />
       </div>
 
       <div style={{ position: "relative", zIndex: 1 }}>
 
         {/* HERO HEADER */}
-        <div style={{ padding: isMobile ? "20px 16px 16px" : "36px 36px 28px" }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 11px", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 4, fontSize: 9, color: "rgba(180,150,255,0.6)", letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 14, background: "rgba(123,47,255,0.06)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 600 }}>
-            <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "lbPulse 1.5s ease-in-out infinite" }} />
+        <div className="ax-fade-down" style={{ padding: isMobile ? "20px 16px 16px" : "36px 36px 28px" }}>
+          <div
+            className="ax-fade-down"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "4px 11px", border: "1px solid rgba(123,47,255,0.3)",
+              borderRadius: 4, fontSize: 9, color: "#c4a0ff",
+              letterSpacing: "1.5px", textTransform: "uppercase",
+              marginBottom: 14, background: "rgba(123,47,255,0.08)",
+              fontFamily: "'Rajdhani',sans-serif", fontWeight: 600,
+              boxShadow: "0 0 20px rgba(123,47,255,0.15)",
+            }}>
+            <span style={{
+              width: 5, height: 5, borderRadius: "50%", background: "#00FF88",
+              animation: "lbPulse 1.5s ease-in-out infinite",
+              boxShadow: "0 0 8px #00FF88",
+            }} />
             Live On-Chain Scores
           </div>
           <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "flex-start" : "center", gap: isMobile ? 10 : 12 }}>
-            <h1 style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: isMobile ? 28 : 48, letterSpacing: "-0.5px", textTransform: "uppercase", lineHeight: 1, color: "#fff" }}>
+            <h1
+              className="ax-slide-left"
+              style={{
+                fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+                fontSize: isMobile ? 28 : 48, letterSpacing: "-0.5px",
+                textTransform: "uppercase", lineHeight: 1, color: "#fff", margin: 0,
+              }}>
               Global{" "}
-              <span className="lb-title-grad">
-                Leaderboard
-              </span>
+              <span className="ax-holo-text">Leaderboard</span>
             </h1>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div className="ax-slide-right" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             {chainName && (
-              <span style={{ fontSize: 9, padding: "3px 10px", background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: 10, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", whiteSpace: "nowrap" }}>
+              <span
+                className="ax-purple-glow"
+                style={{
+                  fontSize: 9, padding: "4px 12px",
+                  background: "linear-gradient(135deg, rgba(0,212,255,0.15), rgba(123,47,255,0.1))",
+                  border: "1px solid rgba(0,212,255,0.3)",
+                  borderRadius: 20, color: "#00d4ff",
+                  fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+                  letterSpacing: "0.5px", whiteSpace: "nowrap",
+                  display: "inline-block",
+                }}>
                 {chainName}
               </span>
             )}
-            <button onClick={refresh} disabled={refreshing} style={{
-              padding: "8px 18px", background: "rgba(123,47,255,0.15)",
-              border: "1px solid rgba(123,47,255,0.3)", borderRadius: 7,
-              color: "#a67fff", fontSize: 11, cursor: "pointer",
-              fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px",
-              transition: "all 0.2s", backdropFilter: "blur(8px)",
-            }}
-              onMouseEnter={e => e.currentTarget.style.borderColor = "rgba(123,47,255,0.55)"}
-              onMouseLeave={e => e.currentTarget.style.borderColor = "rgba(123,47,255,0.3)"}
-            >{refreshing ? "..." : "↻ Refresh"}</button>
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="refresh-spin ax-beam-host"
+              style={{
+                padding: "8px 18px",
+                background: "linear-gradient(135deg,rgba(123,47,255,0.2),rgba(0,212,255,0.08))",
+                border: "1px solid rgba(123,47,255,0.4)", borderRadius: 7,
+                color: "#c4a0ff", fontSize: 11, cursor: "pointer",
+                fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px",
+                transition: "all 0.25s cubic-bezier(0.2,1,0.3,1)",
+                backdropFilter: "blur(8px)",
+                display: "inline-flex", alignItems: "center", gap: 6,
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = "rgba(123,47,255,0.75)";
+                e.currentTarget.style.transform = "translateY(-2px)";
+                e.currentTarget.style.boxShadow = "0 6px 20px rgba(123,47,255,0.3)";
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = "rgba(123,47,255,0.4)";
+                e.currentTarget.style.transform = "translateY(0)";
+                e.currentTarget.style.boxShadow = "none";
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ animation: refreshing ? "axOrbit 0.9s linear infinite" : "none" }}>
+                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+                <path d="M21 3v5h-5"/>
+                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+                <path d="M8 16H3v5"/>
+              </svg>
+              {refreshing ? "Refreshing" : "Refresh"}
+            </button>
             </div>
           </div>
           <p style={{ color: "rgba(180,150,255,0.7)", fontSize: 12, marginTop: 8, fontFamily: "'Rajdhani',sans-serif" }}>
@@ -364,7 +450,9 @@ export default function Leaderboard() {
                 <div style={{ padding: 48, textAlign: "center", fontSize: 12, color: "#7755aa", fontFamily: "'Rajdhani',sans-serif" }}>Loading scores...</div>
               ) : displayData.length === 0 ? (
                 <div style={{ padding: 64, textAlign: "center" }}>
-                  <div style={{ fontSize: 40, marginBottom: 14 }}>🏆</div>
+                  <div style={{ marginBottom: 14, color: "#9977cc", display: "flex", justifyContent: "center" }}>
+                    <Icon name="trophy" size={40} />
+                  </div>
                   <div style={{ fontSize: 13, color: "#9977cc", fontFamily: "'Rajdhani',sans-serif" }}>No scores yet</div>
                   <button onClick={() => navigate("/games")} style={{ marginTop: 12, padding: "8px 18px", background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>Play a Game →</button>
                 </div>

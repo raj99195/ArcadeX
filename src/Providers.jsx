@@ -1,12 +1,16 @@
+// Place at: src/Providers.jsx (REPLACES existing)
 import { WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createAppKit } from "@reown/appkit/react";
 import { WagmiAdapter } from "@reown/appkit-adapter-wagmi";
 import { defineChain } from "@reown/appkit/networks";
 import { ChainProvider } from "./context/ChainContext";
+import { ModeProvider } from "./context/ModeContext";
+import { Web2AuthProvider } from "./context/Web2AuthContext";
 import { TurnstileProvider } from "./context/TurnstileContext";
 import { CHAIN_LIST } from "./config/chains";
 import { useAutoAuth } from "./hooks/useAutoAuth";
+import { useMode } from "./hooks/useMode";
 
 
 const wagmiNetworks = CHAIN_LIST
@@ -108,7 +112,12 @@ createAppKit({
 export { wagmiAdapter };
 
 function AutoAuth() {
-  useAutoAuth();
+  // Only arm wallet auto-sign in Web3 mode. In Web2 the user signed in
+  // with Google/X/Guest — wagmi may still silently reconnect a cached
+  // wallet in the background, but we must never ask for a signature,
+  // otherwise MetaMask pops up unprompted.
+  const { mode } = useMode();
+  useAutoAuth(mode === "web3");
   return null;
 }
 
@@ -116,15 +125,24 @@ export default function Providers({ children }) {
   return (
     <WagmiProvider config={wagmiAdapter.wagmiConfig}>
       <QueryClientProvider client={queryClient}>
-        <ChainProvider>
-          {/* TurnstileProvider mounts the invisible widget once and makes
-              getToken() available via useTurnstile() to AutoAuth and to
-              components (e.g. GamePlay.submitScore's on-demand sign-in). */}
-          <TurnstileProvider>
-            <AutoAuth />
-            {children}
-          </TurnstileProvider>
-        </ChainProvider>
+        {/* ModeProvider at top so useMode is available throughout —
+            Navbar reads it, App.jsx uses it for overlay routing. */}
+        <ModeProvider>
+          {/* Web2AuthProvider shares auth state across App.jsx overlay,
+              Navbar chip, and Web2LoginScreen so guest sign-in & sign-out
+              propagate everywhere. */}
+          <Web2AuthProvider>
+            <ChainProvider>
+              {/* TurnstileProvider mounts the invisible widget once and makes
+                  getToken() available via useTurnstile() to AutoAuth and to
+                  components (e.g. GamePlay.submitScore's on-demand sign-in). */}
+              <TurnstileProvider>
+                <AutoAuth />
+                {children}
+              </TurnstileProvider>
+            </ChainProvider>
+          </Web2AuthProvider>
+        </ModeProvider>
       </QueryClientProvider>
     </WagmiProvider>
   );

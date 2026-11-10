@@ -14,7 +14,7 @@
  * Just edit the constant below for a different address.
  */
 
-const NEW_ADMIN_ADDRESS = "0x120462Bbe7f0111c972fEE1FFa8eb88421b6169c";
+const NEW_ADMIN_ADDRESS = "0x28478E5a0121c7fC1052910E2A64c839eF938Bff";
 
 const hre = require("hardhat");
 const { ethers } = hre;

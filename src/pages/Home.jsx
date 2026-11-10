@@ -6,8 +6,12 @@ import GameCard from "../components/GameCard";
 import { useEffect, useState, useRef } from "react";
 import { getScores } from "../lib/gameService";
 import { useArcadeBalance } from "../hooks/useArcadeBalance";
+import { useArcadeCoins } from "../hooks/useArcadeCoins";
 import { useChain } from "../context/ChainContext";
+import { useMode } from "../hooks/useMode";
 import Seo from "../components/Seo";
+import { Icon } from "../components/Icon";
+import { CountUp, Typewriter, ScrollReveal, Ripple } from "../components/Motion";
 
 // ── Full-screen Snake Animation ───────────────────────────────────────────────
 function SnakeCanvas() {
@@ -133,10 +137,21 @@ export default function Home() {
   const { isConnected } = useAccount();
   const { open } = useAppKit();
   const { balance } = useArcadeBalance();
+  const { balance: web2Balance } = useArcadeCoins();
   const { games } = useGames();
   const { contracts, rewardToken, isNativeToken } = useChain();
-  const getRate = (g) => (g ? ((isNativeToken ? g.rewardRateNative : g.rewardRate) || (isNativeToken ? 1 : 50)) : 0);
-  const rewardSymbol = rewardToken || "ARCADE";
+  const { mode } = useMode();
+  const isWeb2 = mode === "web2";
+  // In Web2 mode every game pays ArcadeCoins — the on-chain native rate
+  // (0.5 MSTC etc.) is irrelevant and misleading. ArcadeCoins come from
+  // Firestore `rewardRate` on the game doc with a 50 default.
+  const getRate = (g) => {
+    if (!g) return 0;
+    if (isWeb2) return g.rewardRate || 50;
+    return (isNativeToken ? g.rewardRateNative : g.rewardRate) || (isNativeToken ? 1 : 50);
+  };
+  const rewardSymbol = isWeb2 ? "ArcadeCoins" : (rewardToken || "ARCADE");
+  const effectiveBalance = isWeb2 ? web2Balance : balance;
   const TOURNAMENT_ADDRESS = contracts?.tournament;
   const [scores, setScores] = useState([]);
   const [page, setPage] = useState(0);
@@ -181,16 +196,31 @@ export default function Home() {
   };
 
   useEffect(() => {
-    // SH0039 — homepage leaderboard sirf top 8 players dikhata hai
-    // (see line ~235 .slice(0, 8)). 500 recent scores fetch karna waste
-    // tha — 200 mein bhi wahi top 8 aggregate ho jate hain, aur cache
-    // hit rate zyada rehta hai. gameService.js pe sessionStorage cache
-    // (10-min TTL) bhi lag chuka — repeated homepage visits zero-cost.
-    getScores(null, 200).then(setScores).catch(() => {});
+    // SH0039 — homepage leaderboard sirf top 8 players dikhata hai.
+    // Web2 pulls from the Firestore-backed /web2-leaderboard aggregate;
+    // Web3 keeps the on-chain scores path.
+    if (isWeb2) {
+      fetch("/api/games?action=web2-leaderboard&limit=20")
+        .then(r => r.json())
+        .then(d => {
+          const rows = (d.leaderboard || []).map(x => ({
+            player: x.uid,
+            playerName: x.displayName,
+            playerPhoto: x.photoURL,
+            provider: x.provider,
+            score: Number(x.totalArcadeCoins || 0),
+            gameName: "",
+          }));
+          setScores(rows);
+        })
+        .catch(() => {});
+    } else {
+      getScores(null, 200).then(setScores).catch(() => {});
+    }
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, []);
+  }, [isWeb2]);
 
   useEffect(() => {
     if (!games || games.length === 0) return;
@@ -208,6 +238,24 @@ export default function Home() {
 
   useEffect(() => {
     const fetchUpcoming = async () => {
+      // Web2: Firestore-backed tournaments. ms epochs, raw ArcadeCoin
+      // numbers — the sidebar renderer branches on `source: 'web2'` to
+      // avoid dividing by 1e18 / treating times as seconds.
+      if (isWeb2) {
+        try {
+          const r = await fetch("/api/games?action=web2-tournaments");
+          const d = await r.json();
+          const now = Date.now();
+          const upcoming = (d.tournaments || [])
+            .filter(t => t.status !== "ended" && t.status !== "cancelled" && now < t.endTime)
+            .sort((a, b) => a.startTime - b.startTime)
+            .slice(0, 3)
+            .map(t => ({ ...t, source: "web2" }));
+          setUpcomingTournaments(upcoming);
+        } catch (err) { console.warn("Home web2 tournaments fetch:", err.message); }
+        finally { setTournamentsLoaded(true); }
+        return;
+      }
       if (!publicClient || !TOURNAMENT_ADDRESS) return;
       try {
         const nextId = await publicClient.readContract({ address: TOURNAMENT_ADDRESS, abi: TOURNAMENT_ABI, functionName: "nextTournamentId" });
@@ -227,21 +275,36 @@ export default function Home() {
       finally { setTournamentsLoaded(true); }
     };
     fetchUpcoming();
-  }, [publicClient]);
+  }, [publicClient, isWeb2]);
 
-  const leaderboard = Object.values(
-    scores.reduce((acc, s) => {
-      const p = s.player;
-      if (!acc[p]) acc[p] = { player: p, bestScore: 0, bestGame: "", totalScore: 0 };
-      acc[p].totalScore += s.score;
-      if (s.score > acc[p].bestScore) { acc[p].bestScore = s.score; acc[p].bestGame = s.gameName; }
-      return acc;
-    }, {})
-  ).sort((a, b) => b.bestScore - a.bestScore).slice(0, 8);
+  // Web2: scores already come as a pre-aggregated leaderboard (uid + total
+  // ArcadeCoins). Web3: raw score events need per-player bestScore rollup.
+  const leaderboard = isWeb2
+    ? scores.slice(0, 8).map(s => ({
+        player: s.player,
+        playerName: s.playerName,
+        playerPhoto: s.playerPhoto,
+        bestScore: s.score,
+        bestGame: "",
+        totalScore: s.score,
+      }))
+    : Object.values(
+        scores.reduce((acc, s) => {
+          const p = s.player;
+          if (!acc[p]) acc[p] = { player: p, bestScore: 0, bestGame: "", totalScore: 0 };
+          acc[p].totalScore += s.score;
+          if (s.score > acc[p].bestScore) { acc[p].bestScore = s.score; acc[p].bestGame = s.gameName; }
+          return acc;
+        }, {})
+      ).sort((a, b) => b.bestScore - a.bestScore).slice(0, 8);
 
   const top3 = leaderboard.slice(0, 3);
   const rest = leaderboard.slice(3);
   const shortAddr = (a) => a ? a.slice(0, 7) + "..." + a.slice(-4) : "—";
+  // Web2 shows real display names from Firebase/OAuth; Web3 shows truncated wallet addresses.
+  const playerLabel = (entry) => isWeb2
+    ? (entry?.playerName || "Player")
+    : shortAddr(entry?.player);
   const fmtScore = (s) => s >= 1000000 ? (s / 1000000).toFixed(1) + "M" : s >= 1000 ? (s / 1000).toFixed(1) + "K" : (s ? String(s) : "—");
 
   return (
@@ -256,7 +319,9 @@ export default function Home() {
       position: "relative",
     }}>
       <Seo
-        description="Play free on-chain arcade games on ArcadeX. Compete on verified leaderboards, earn token rewards, and own your progress — no download, instant browser play on any chain."
+        description={isWeb2
+          ? "Play free arcade games on ArcadeX and earn ArcadeCoins — no wallet, no download. Sign in with Google or X and climb the daily leaderboards instantly."
+          : "Play free on-chain arcade games on ArcadeX. Compete on verified leaderboards, earn token rewards, and own your progress — no download, instant browser play on any chain."}
         path="/"
         jsonLd={{
           "@context": "https://schema.org",
@@ -303,25 +368,36 @@ export default function Home() {
       }}>
 
         {/* Grid BG */}
-        <div style={{
+        <div className="ax-grid-bg" style={{
           position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none",
-          backgroundImage: "linear-gradient(rgba(123,47,255,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(123,47,255,0.07) 1px, transparent 1px)",
-          backgroundSize: "50px 50px",
         }} />
         {/* Purple glow top center */}
-        <div style={{
-          position: "absolute", top: "-10%", left: "40%", transform: "translateX(-50%)",
-          width: 500, height: 400,
-          background: "radial-gradient(circle, rgba(123,47,255,0.18) 0%, transparent 70%)",
-          borderRadius: "50%", pointerEvents: "none", zIndex: 0,
-        }} />
+        <div
+          className="ax-float"
+          style={{
+            position: "absolute", top: "-10%", left: "40%", transform: "translateX(-50%)",
+            width: 500, height: 400,
+            background: "radial-gradient(circle, rgba(123,47,255,0.22) 0%, transparent 70%)",
+            borderRadius: "50%", pointerEvents: "none", zIndex: 0,
+          }} />
         {/* Cyan glow bottom right */}
-        <div style={{
-          position: "absolute", bottom: 0, right: 0,
-          width: 300, height: 300,
-          background: "radial-gradient(circle, rgba(0,212,255,0.07) 0%, transparent 70%)",
-          borderRadius: "50%", pointerEvents: "none", zIndex: 0,
-        }} />
+        <div
+          className="ax-float-rotate"
+          style={{
+            position: "absolute", bottom: 0, right: 0,
+            width: 300, height: 300,
+            background: "radial-gradient(circle, rgba(0,212,255,0.1) 0%, transparent 70%)",
+            borderRadius: "50%", pointerEvents: "none", zIndex: 0,
+          }} />
+        {/* Pink accent glow */}
+        <div
+          className="ax-breathe"
+          style={{
+            position: "absolute", top: "60%", left: "5%",
+            width: 260, height: 260,
+            background: "radial-gradient(circle, rgba(255,110,196,0.08) 0%, transparent 70%)",
+            borderRadius: "50%", pointerEvents: "none", zIndex: 0,
+          }} />
 
         {/* Hero */}
         <div style={{
@@ -333,42 +409,98 @@ export default function Home() {
           {/* TEXT */}
           <div style={{ padding: isMobile ? "20px 16px" : "16px 36px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
 
-            <div style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              padding: "4px 11px", border: "1px solid rgba(180,150,255,0.25)",
-              borderRadius: 4, fontSize: 9, color: "rgba(210,190,255,0.75)",
-              letterSpacing: "1.5px", textTransform: "uppercase",
-              marginBottom: 14, width: "fit-content",
-              background: "rgba(123,47,255,0.1)",
-              fontFamily: "'Rajdhani',sans-serif", fontWeight: 600,
-            }}>
-              The Future of Gaming is On-Chain
+            <div
+              className="ax-fade-down ax-purple-glow"
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                padding: "5px 13px",
+                border: `1px solid ${isWeb2 ? "rgba(0,212,255,0.4)" : "rgba(180,150,255,0.4)"}`,
+                borderRadius: 4, fontSize: 9,
+                color: isWeb2 ? "#9ee8ff" : "#d8c0ff",
+                letterSpacing: "1.5px", textTransform: "uppercase",
+                marginBottom: 14, width: "fit-content",
+                background: isWeb2
+                  ? "linear-gradient(135deg,rgba(0,212,255,0.15),rgba(0,255,136,0.05))"
+                  : "linear-gradient(135deg,rgba(123,47,255,0.18),rgba(255,110,196,0.05))",
+                fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+              }}>
+              {isWeb2 ? (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Icon name="coin" size={12} /> Earn ArcadeCoins — No Wallet Needed
+                </span>
+              ) : "The Future of Gaming is On-Chain"}
             </div>
 
-            <h1 style={{
-              fontSize: isMobile ? 34 : 48, fontWeight: 700, lineHeight: 0.93,
-              letterSpacing: "-0.5px", marginBottom: 12,
-              fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", color: "#fff",
-            }}>
-              Play. Earn.<br />Dominate<br />
-              <span style={{ background: "linear-gradient(90deg,#7B2FFF,#00d4ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>
-                The Chain.
-              </span>
+            <h1
+              className="ax-slide-left"
+              style={{
+                fontSize: isMobile ? 34 : 48, fontWeight: 700, lineHeight: 0.93,
+                letterSpacing: "-0.5px", marginBottom: 12,
+                fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", color: "#fff",
+                textShadow: "0 2px 30px rgba(123,47,255,0.3)",
+              }}>
+              {isWeb2 ? (
+                <>
+                  Play. Earn.<br />Instantly.<br />
+                  <span className="ax-holo-text">No Wallet.</span>
+                </>
+              ) : (
+                <>
+                  Play. Earn.<br />Dominate<br />
+                  <span className="ax-holo-text">The Chain.</span>
+                </>
+              )}
             </h1>
 
-            <p style={{ fontSize: 13, color: "rgba(220,200,255,0.6)", lineHeight: 1.65, maxWidth: 340, marginBottom: 16 }}>
-              Discover, play and publish fully on-chain games.<br />
-              True ownership. Real rewards. Infinite possibilities.
+            <p
+              className="ax-fade-in"
+              style={{
+                fontSize: 15, color: "#d8ccf0",
+                lineHeight: 1.6, maxWidth: 380, marginBottom: 18,
+                animationDelay: "0.2s",
+                fontFamily: "'Rajdhani',sans-serif",
+                fontWeight: 500,
+              }}>
+              {isWeb2 ? (
+                <>Sign in with Google or X and start earning ArcadeCoins.<br />
+                Free to play. Daily rewards. Ready in seconds.</>
+              ) : (
+                <>Discover, play and publish fully on-chain games.<br />
+                True ownership. Real rewards. Infinite possibilities.</>
+              )}
             </p>
 
-            <div style={{ display: "flex", gap: 9, marginBottom: 10, flexWrap: "wrap" }}>
-              <button onClick={() => navigate("/games")} style={{
-                display: "flex", alignItems: "center", gap: 8,
-                padding: isMobile ? "10px 18px" : "11px 22px",
-                background: "linear-gradient(135deg,#7B2FFF,#5a1fd4)", border: "none", borderRadius: 7,
-                fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer",
-                fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1px", textTransform: "uppercase",
-              }}>
+            <div className="ax-fade-up" style={{ display: "flex", gap: 9, marginBottom: 10, flexWrap: "wrap", animationDelay: "0.3s" }}>
+              <button
+                onClick={() => navigate("/games")}
+                className="ax-beam-host"
+                style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: isMobile ? "11px 20px" : "12px 24px",
+                  background: isWeb2
+                    ? "linear-gradient(135deg,#00d4ff,#1a7bbd,#00d4ff)"
+                    : "linear-gradient(135deg,#7B2FFF,#5a1fd4,#7B2FFF)",
+                  backgroundSize: "200% 200%", backgroundPosition: "0% 50%",
+                  border: "none", borderRadius: 8,
+                  fontSize: 12, fontWeight: 800, color: "#fff", cursor: "pointer",
+                  fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1.2px",
+                  textTransform: "uppercase",
+                  boxShadow: isWeb2
+                    ? "0 6px 20px rgba(0,212,255,0.3)"
+                    : "0 6px 20px rgba(123,47,255,0.4)",
+                  transition: "transform 0.25s, box-shadow 0.25s, background-position 0.5s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateY(-2px) scale(1.03)";
+                  e.currentTarget.style.backgroundPosition = "100% 50%";
+                  e.currentTarget.style.boxShadow = isWeb2 ? "0 12px 32px rgba(0,212,255,0.5)" : "0 12px 32px rgba(123,47,255,0.6)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateY(0) scale(1)";
+                  e.currentTarget.style.backgroundPosition = "0% 50%";
+                  e.currentTarget.style.boxShadow = isWeb2 ? "0 6px 20px rgba(0,212,255,0.3)" : "0 6px 20px rgba(123,47,255,0.4)";
+                }}
+              >
                 <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
                   <rect x="1" y="1" width="5" height="5" rx="1" fill="white" opacity="0.9" />
                   <rect x="7" y="1" width="5" height="5" rx="1" fill="white" opacity="0.55" />
@@ -377,32 +509,105 @@ export default function Home() {
                 </svg>
                 Play Games
               </button>
-              <button onClick={() => navigate("/publish")} style={{
-                padding: isMobile ? "10px 16px" : "11px 20px",
-                background: "rgba(123,47,255,0.09)",
-                border: "1px solid rgba(180,150,255,0.28)", borderRadius: 7,
-                fontSize: 12, fontWeight: 700, color: "rgba(210,185,255,0.85)", cursor: "pointer",
-                fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1px", textTransform: "uppercase",
-              }}>
-                Publish Game +
-              </button>
+              {isWeb2 ? (
+                <button
+                  onClick={() => navigate("/leaderboard")}
+                  className="ax-wiggle-hover"
+                  style={{
+                    padding: isMobile ? "11px 18px" : "12px 22px",
+                    background: "linear-gradient(135deg,rgba(0,212,255,0.15),rgba(0,212,255,0.05))",
+                    border: "1px solid rgba(0,212,255,0.35)", borderRadius: 8,
+                    fontSize: 12, fontWeight: 800, color: "#9ee8ff", cursor: "pointer",
+                    fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1.2px",
+                    textTransform: "uppercase",
+                    transition: "all 0.25s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "rgba(0,212,255,0.7)";
+                    e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,212,255,0.2)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "rgba(0,212,255,0.35)";
+                    e.currentTarget.style.boxShadow = "none";
+                  }}
+                >
+                  🏆 Leaderboard
+                </button>
+              ) : (
+                <button
+                  onClick={() => navigate("/publish")}
+                  className="ax-wiggle-hover"
+                  style={{
+                    padding: isMobile ? "11px 18px" : "12px 22px",
+                    background: "linear-gradient(135deg,rgba(123,47,255,0.18),rgba(123,47,255,0.05))",
+                    border: "1px solid rgba(180,150,255,0.4)", borderRadius: 8,
+                    fontSize: 12, fontWeight: 800, color: "#d8c0ff", cursor: "pointer",
+                    fontFamily: "'Rajdhani',sans-serif", letterSpacing: "1.2px",
+                    textTransform: "uppercase",
+                    transition: "all 0.25s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "rgba(180,150,255,0.8)";
+                    e.currentTarget.style.boxShadow = "0 6px 20px rgba(123,47,255,0.25)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "rgba(180,150,255,0.4)";
+                    e.currentTarget.style.boxShadow = "none";
+                  }}
+                >
+                  Publish Game +
+                </button>
+              )}
             </div>
+
+            {/* Web2-only 3-step explainer, keeps the hero tight on mobile */}
+            {isWeb2 && !isMobile && (
+              <div style={{
+                marginTop: 14, display: "flex", gap: 12, flexWrap: "wrap",
+                maxWidth: 440,
+              }}>
+                {[
+                  { n: "1", t: "Sign in",   d: "Google or X",       accent: "#00d4ff" },
+                  { n: "2", t: "Play",      d: "Any game, free",    accent: "#9ee8ff" },
+                  { n: "3", t: "Earn 🪙",   d: "500 coins/day cap", accent: "#00FF88" },
+                ].map((s, i) => (
+                  <div key={s.n} className="ax-lift" style={{
+                    flex: "1 1 120px", minWidth: 100,
+                    padding: "12px 14px",
+                    border: `1px solid ${s.accent}33`, borderRadius: 10,
+                    background: "linear-gradient(165deg, rgba(10,22,36,0.6), rgba(6,14,22,0.75))",
+                    boxShadow: "0 6px 18px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04)",
+                    animation: `axFadeUp 0.5s cubic-bezier(0.2,1,0.3,1) ${0.1 + i * 0.08}s both`,
+                    position: "relative", overflow: "hidden",
+                  }}>
+                    <div style={{
+                      position: "absolute", top: -24, right: -24, width: 80, height: 80,
+                      background: `radial-gradient(circle, ${s.accent}22 0%, transparent 70%)`,
+                      borderRadius: "50%", pointerEvents: "none",
+                    }} />
+                    <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 11, color: s.accent, fontWeight: 800, letterSpacing: "0.14em" }}>STEP {s.n}</div>
+                    <div style={{ fontFamily: "'Rajdhani',sans-serif", fontSize: 15, color: "#fff", fontWeight: 700, marginTop: 2 }}>{s.t}</div>
+                    <div style={{ fontFamily: "'Space Grotesk',sans-serif", fontSize: 12.5, color: "#cfc8ea", marginTop: 2 }}>{s.d}</div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <button onClick={() => navigate("/games")} style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               padding: "0", background: "transparent", border: "none",
-              fontSize: 11, color: "rgba(180,150,255,0.55)", cursor: "pointer",
+              fontSize: 13, color: "#c0b8e0", cursor: "pointer",
               fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
-              letterSpacing: "1px", textTransform: "uppercase",
+              letterSpacing: "0.08em", textTransform: "uppercase",
               marginBottom: 10, width: "fit-content",
             }}>
               Explore All Games
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
+                <path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
 
-            <div style={{ fontSize: 9, color: "rgba(180,155,220,0.35)", letterSpacing: "0.3px", marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: "#a79cd8", letterSpacing: "0.08em", marginBottom: 10, fontFamily: "'Rajdhani',sans-serif", fontWeight: 600 }}>
               Fast · Secure · Interoperable
             </div>
 
@@ -410,7 +615,7 @@ export default function Home() {
 
           {/* 3D Rotating Game Cards — desktop only */}
           {!isMobile && games && games.length > 0 && (() => {
-            const getThumb = (g) => g?.thumbnail || g?.imageUrl || g?.image || g?.coverImage || g?.thumbnailUrl || null;
+            const getThumb = (g) => g?.thumbnailUrl || g?.thumbnail || g?.imageUrl || g?.image || g?.coverImage || null;
             const n = games.length;
             const ci = heroCardIndex % n;
             const lIdx = (ci - 1 + n) % n;
@@ -497,7 +702,7 @@ export default function Home() {
                     {/* Gloss */}
                     <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "44%", background: "linear-gradient(180deg,rgba(255,255,255,0.05) 0%,transparent 100%)", borderRadius: "14px 14px 0 0", pointerEvents: "none", zIndex: 6 }} />
                     {/* Icon badge */}
-                    <div style={{ position: "absolute", top: 10, right: 10, zIndex: 7, width: 28, height: 28, borderRadius: "50%", background: "rgba(123,47,255,0.4)", border: "1px solid rgba(180,150,255,0.5)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🎮</div>
+                    <div style={{ position: "absolute", top: 10, right: 10, zIndex: 7, width: 28, height: 28, borderRadius: "50%", background: "rgba(123,47,255,0.4)", border: "1px solid rgba(180,150,255,0.5)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}><Icon name="controller" size={14} /></div>
                     {getThumb(games[ci])
                       ? <img src={getThumb(games[ci])} alt={games[ci]?.name} style={{ width: "100%", height: C.imgH, objectFit: "contain", objectPosition: "center", display: "block", background: "#06040f" }} />
                       : <FallbackDiv height={C.imgH} size={44} />}
@@ -679,39 +884,49 @@ export default function Home() {
         <div style={{ position: "absolute", top: -40, left: "50%", transform: "translateX(-50%)", width: 200, height: 200, background: "radial-gradient(circle, rgba(123,47,255,0.18) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
 
         {/* Header */}
-        <div style={{ position: "relative", zIndex: 1, padding: "10px 14px", borderBottom: "1px solid rgba(123,47,255,0.15)", flexShrink: 0 }}>
+        <div style={{ position: "relative", zIndex: 1, padding: "12px 16px", borderBottom: "1px solid rgba(123,47,255,0.15)", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "1.5px", color: "#e0d0ff" }}>
+            <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13, textTransform: "uppercase", letterSpacing: "1.2px", color: "#f0e6ff" }}>
               Live Leaderboard
             </span>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00FF88", animation: "lbPulse 1.5s ease-in-out infinite" }} />
-                <span style={{ fontSize: 9, color: "#4aaa6a", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>Live</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00FF88", boxShadow: "0 0 6px #00FF88", animation: "lbPulse 1.5s ease-in-out infinite" }} />
+                <span style={{ fontSize: 11, color: "#6adb84", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px" }}>Live</span>
               </div>
-              <button onClick={() => navigate("/leaderboard")} style={{ fontSize: 9, color: "#8866cc", background: "transparent", border: "none", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase" }}>
-                View All
+              <button
+                onClick={() => navigate("/leaderboard")}
+                style={{
+                  fontSize: 11, color: "#c0a8ee", background: "transparent",
+                  border: "none", cursor: "pointer",
+                  fontFamily: "'Rajdhani',sans-serif", fontWeight: 700,
+                  letterSpacing: "0.5px", textTransform: "uppercase",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = "#fff"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = "#c0a8ee"; }}
+              >
+                View All →
               </button>
             </div>
           </div>
         </div>
 
         {/* Top 3 Podium */}
-        <div style={{ position: "relative", zIndex: 1, padding: "14px 8px 12px", borderBottom: "1px solid rgba(123,47,255,0.1)", display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 10, flexShrink: 0 }}>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-            <div style={{ width: 38, height: 38, borderRadius: "50%", background: "rgba(123,47,255,0.2)", border: "2px solid rgba(192,192,192,0.5)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🥈</div>
-            <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 6, color: "#7755aa", textAlign: "center", maxWidth: 58, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{top3[1] ? shortAddr(top3[1].player) : "—"}</div>
-            <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, color: "#C0C0C0" }}>{top3[1] ? fmtScore(top3[1].bestScore) : "—"}</div>
+        <div style={{ position: "relative", zIndex: 1, padding: "16px 10px 14px", borderBottom: "1px solid rgba(123,47,255,0.1)", display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 14, flexShrink: 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div style={{ width: 44, height: 44, borderRadius: "50%", background: top3[1]?.playerPhoto ? `url(${top3[1].playerPhoto}) center/cover` : "rgba(123,47,255,0.2)", border: "2px solid rgba(192,192,192,0.5)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#C0C0C0", overflow: "hidden" }}>{!top3[1]?.playerPhoto && <span style={{ fontSize: 14, fontWeight: 800, color: "#C0C0C0", fontFamily: "'Rajdhani',sans-serif" }}>2</span>}</div>
+            <div style={{ fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, color: "#c7bfe8", textAlign: "center", maxWidth: 78, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: "0.2px" }}>{top3[1] ? playerLabel(top3[1]) : "—"}</div>
+            <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 13, color: "#C0C0C0" }}>{top3[1] ? fmtScore(top3[1].bestScore) : "—"}</div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, marginBottom: 10 }}>
-            <div style={{ width: 46, height: 46, borderRadius: "50%", background: "rgba(123,47,255,0.15)", border: "2px solid rgba(255,215,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, boxShadow: "0 0 20px rgba(255,215,0,0.25)" }}>🥇</div>
-            <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 6, color: "#9977dd", textAlign: "center", maxWidth: 68, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{top3[0] ? shortAddr(top3[0].player) : "—"}</div>
-            <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 15, color: "#d4b8ff" }}>{top3[0] ? fmtScore(top3[0].bestScore) : "0.0K"}</div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, marginBottom: 12 }}>
+            <div style={{ width: 54, height: 54, borderRadius: "50%", background: top3[0]?.playerPhoto ? `url(${top3[0].playerPhoto}) center/cover` : "rgba(123,47,255,0.15)", border: "2px solid rgba(255,215,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 20px rgba(255,215,0,0.3)", overflow: "hidden" }}>{!top3[0]?.playerPhoto && <span style={{ fontSize: 18, fontWeight: 800, color: "#FFD700", fontFamily: "'Rajdhani',sans-serif" }}>1</span>}</div>
+            <div style={{ fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, color: "#f0e6ff", textAlign: "center", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: "0.2px" }}>{top3[0] ? playerLabel(top3[0]) : "—"}</div>
+            <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 16, color: "#e8d8ff", textShadow: "0 0 10px rgba(255,215,0,0.3)" }}>{top3[0] ? fmtScore(top3[0].bestScore) : "0.0K"}</div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-            <div style={{ width: 38, height: 38, borderRadius: "50%", background: "rgba(123,47,255,0.15)", border: "2px solid rgba(205,127,50,0.5)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🥉</div>
-            <div style={{ fontFamily: "'Orbitron',sans-serif", fontSize: 6, color: "#6644aa", textAlign: "center", maxWidth: 58, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{top3[2] ? shortAddr(top3[2].player) : "—"}</div>
-            <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, color: "#CD7F32" }}>{top3[2] ? fmtScore(top3[2].bestScore) : "—"}</div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div style={{ width: 44, height: 44, borderRadius: "50%", background: top3[2]?.playerPhoto ? `url(${top3[2].playerPhoto}) center/cover` : "rgba(123,47,255,0.15)", border: "2px solid rgba(205,127,50,0.5)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>{!top3[2]?.playerPhoto && <span style={{ fontSize: 14, fontWeight: 800, color: "#CD7F32", fontFamily: "'Rajdhani',sans-serif" }}>3</span>}</div>
+            <div style={{ fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, color: "#c7bfe8", textAlign: "center", maxWidth: 78, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: "0.2px" }}>{top3[2] ? playerLabel(top3[2]) : "—"}</div>
+            <div style={{ fontFamily: "'Orbitron',sans-serif", fontWeight: 700, fontSize: 13, color: "#CD7F32" }}>{top3[2] ? fmtScore(top3[2].bestScore) : "—"}</div>
           </div>
         </div>
 
@@ -721,22 +936,31 @@ export default function Home() {
 
           {/* ── CREATOR SPOTLIGHT ── */}
           {(() => {
-            // Find top creator by earnings (plays × rewardRate × 0.2)
+            // Find top creator by earnings (plays × rewardRate × 0.2). In Web2
+            // games the identifier is `creatorUid` + `creatorName`; in Web3
+            // games it's the lowercase wallet address.
             const creatorEarnings = {};
             const creatorGames = {};
+            const creatorMeta = {};
             games.forEach(g => {
-              const addr = g.creator?.toLowerCase();
-              if (!addr) return;
+              const key = isWeb2 ? g.creatorUid : g.creator?.toLowerCase();
+              if (!key) return;
               const earned = Math.floor((g.plays || 0) * getRate(g) * 0.2);
-              if (!creatorEarnings[addr]) { creatorEarnings[addr] = 0; creatorGames[addr] = []; }
-              creatorEarnings[addr] += earned;
-              creatorGames[addr].push(g);
+              if (!creatorEarnings[key]) {
+                creatorEarnings[key] = 0;
+                creatorGames[key] = [];
+                creatorMeta[key] = { name: g.creatorName || "", photo: g.creatorPhoto || null };
+              }
+              creatorEarnings[key] += earned;
+              creatorGames[key].push(g);
             });
             const topCreatorAddr = Object.entries(creatorEarnings).sort((a, b) => b[1] - a[1])[0];
             if (!topCreatorAddr) return null;
             const [addr, earned] = topCreatorAddr;
             const topGame = (creatorGames[addr] || []).sort((a, b) => (b.plays || 0) - (a.plays || 0))[0];
+            const meta = creatorMeta[addr] || {};
             const shortA = (a) => a ? a.slice(0, 6) + "..." + a.slice(-4) : "?";
+            const creatorLabel = isWeb2 ? (meta.name || "Creator") : shortA(addr);
             return (
               <div style={{ margin: "10px 10px 8px", position: "relative", overflow: "hidden" }}>
                 {/* Header */}
@@ -773,11 +997,11 @@ export default function Home() {
                     {/* Creator info */}
                     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
                       <div style={{ width: 42, height: 42, borderRadius: "50%", overflow: "hidden", border: "2px solid rgba(255,183,0,0.5)", boxShadow: "0 0 12px rgba(255,183,0,0.2)", flexShrink: 0, background: "#0e0c1a" }}>
-                        <img src={`https://api.dicebear.com/9.x/bottts/svg?seed=${addr}`} alt="" style={{ width: "100%", height: "100%" }} />
+                        <img src={meta.photo || `https://api.dicebear.com/9.x/bottts/svg?seed=${addr}`} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.src = `https://api.dicebear.com/9.x/bottts/svg?seed=${addr}`; }} />
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "'Rajdhani',sans-serif", marginBottom: 2 }}>Top Creator</div>
-                        <div style={{ fontSize: 9, color: "rgba(255,183,0,0.6)", fontFamily: "monospace" }}>{shortA(addr)}</div>
+                        <div style={{ fontSize: 10, color: "rgba(255,183,0,0.75)", fontFamily: isWeb2 ? "'Rajdhani',sans-serif" : "monospace", fontWeight: isWeb2 ? 700 : 400 }}>{creatorLabel}</div>
                       </div>
                       <div style={{ textAlign: "right" }}>
                         <div style={{ fontSize: 8, color: "rgba(255,183,0,0.5)", fontFamily: "'Rajdhani',sans-serif", marginBottom: 1 }}>EARNED</div>
@@ -809,20 +1033,47 @@ export default function Home() {
           <div style={{ margin: "0 10px 8px", padding: "12px 14px", background: "rgba(123,47,255,0.05)", borderRadius: 12, border: "1px solid rgba(123,47,255,0.15)" }}>
             <div style={{ fontSize: 9, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1.5px", color: "rgba(180,150,255,0.5)", marginBottom: 10 }}>Network Stats</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {[
-                { label: "Top Players", value: leaderboard.length || "—", icon: "👥", color: "#c4a0ff" },
-                { label: "Games Live",  value: games.length || "—",        icon: "🎮", color: "#00d4ff" },
-                { label: "Top Score",   value: leaderboard.length > 0 ? fmtScore(leaderboard[0]?.bestScore) : "—", icon: "🏆", color: "#FFD700" },
-                { label: "On-Chain",    value: "100%",                      icon: "⛓️", color: "#00FF88" },
-              ].map((stat, i) => (
-                <div key={i} style={{ background: "rgba(123,47,255,0.07)", borderRadius: 7, padding: "9px 12px", border: "1px solid rgba(123,47,255,0.1)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <span style={{ fontSize: 14 }}>{stat.icon}</span>
-                    <span style={{ fontSize: 9, color: "rgba(180,150,255,0.45)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>{stat.label}</span>
+              {(isWeb2
+                ? [
+                    { label: "Top Players",  value: leaderboard.length || "—", icon: "users",      color: "#c4a0ff" },
+                    { label: "Games Live",   value: games.length || "—",       icon: "controller", color: "#00d4ff" },
+                    { label: "Top Earner",   value: leaderboard.length > 0 ? fmtScore(leaderboard[0]?.bestScore) : "—", icon: "coin",   color: "#FFD700" },
+                    { label: "Free to Play", value: "100%",                    icon: "check",      color: "#00FF88" },
+                  ]
+                : [
+                    { label: "Top Players", value: leaderboard.length || "—", icon: "users",      color: "#c4a0ff" },
+                    { label: "Games Live",  value: games.length || "—",       icon: "controller", color: "#00d4ff" },
+                    { label: "Top Score",   value: leaderboard.length > 0 ? fmtScore(leaderboard[0]?.bestScore) : "—", icon: "trophy", color: "#FFD700" },
+                    { label: "On-Chain",    value: "100%",                    icon: "shield",     color: "#00FF88" },
+                  ]
+              ).map((stat, i) => {
+                const numeric = typeof stat.value === "number" && Number.isFinite(stat.value) ? stat.value : null;
+                return (
+                  <div
+                    key={i}
+                    className="ax-lift"
+                    style={{
+                      background: "rgba(123,47,255,0.07)", borderRadius: 7,
+                      padding: "10px 13px", border: "1px solid rgba(123,47,255,0.12)",
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      transition: "background 0.25s, border-color 0.25s",
+                      animation: `axFadeUp 0.5s cubic-bezier(0.2,1,0.3,1) ${i * 0.08}s both`,
+                    }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <Icon name={stat.icon} size={15} color={stat.color} />
+                      <span style={{ fontSize: 11, color: "#c7bfe8", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.6px" }}>{stat.label}</span>
+                    </div>
+                    <span
+                      style={{
+                        fontFamily: "'Orbitron',sans-serif", fontWeight: 700,
+                        fontSize: 14, color: stat.color,
+                        textShadow: `0 0 10px ${stat.color}55`,
+                      }}>
+                      {numeric !== null ? <CountUp to={numeric} duration={1200} /> : stat.value}
+                    </span>
                   </div>
-                  <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 13, color: stat.color }}>{stat.value}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -845,7 +1096,7 @@ export default function Home() {
               /* Empty state */
               <div style={{ background: "linear-gradient(135deg, rgba(123,47,255,0.06) 0%, rgba(0,212,255,0.04) 100%)", borderRadius: 12, border: "1px solid rgba(123,47,255,0.15)", padding: "18px 14px", textAlign: "center", position: "relative", overflow: "hidden" }}>
                 <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: "linear-gradient(90deg, transparent, rgba(123,47,255,0.4), transparent)" }} />
-                <div style={{ fontSize: 28, marginBottom: 8, filter: "grayscale(0.3)" }}>🏆</div>
+                <div style={{ marginBottom: 8, color: "rgba(255,215,0,0.6)", display: "flex", justifyContent: "center" }}><Icon name="trophy" size={28} /></div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#c4a0ff", fontFamily: "'Rajdhani',sans-serif", marginBottom: 4 }}>No Active Tournaments</div>
                 <div style={{ fontSize: 9, color: "rgba(120,90,180,0.6)", fontFamily: "'Rajdhani',sans-serif", marginBottom: 14, lineHeight: 1.5 }}>New tournaments dropping soon.<br/>Stay tuned!</div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
@@ -870,17 +1121,23 @@ export default function Home() {
             ) : (
               /* Real tournament cards */
               upcomingTournaments.map((t) => {
-                const now = Date.now() / 1000;
-                const isActive = now >= t.startTime && now <= t.endTime;
+                // Web2 docs store ms epochs + raw ArcadeCoin numbers; on-chain
+                // docs store seconds + 1e18-denominated big ints. Normalise once.
+                const isW2 = t.source === "web2";
+                const nowSec = Date.now() / 1000;
+                const startSec = isW2 ? Number(t.startTime) / 1000 : Number(t.startTime);
+                const endSec   = isW2 ? Number(t.endTime)   / 1000 : Number(t.endTime);
+                const isActive = nowSec >= startSec && nowSec <= endSec;
                 const statusColor = isActive ? "#00FF88" : "#00d4ff";
                 const statusBorder = isActive ? "rgba(0,255,136,0.2)" : "rgba(0,212,255,0.18)";
                 const statusGlow = isActive ? "rgba(0,255,136,0.08)" : "rgba(0,212,255,0.08)";
-                const prize = Number(t.prizePool) / 1e18;
-                const entryFee = Number(t.entryFee) / 1e18;
-                const diff = (isActive ? t.endTime : t.startTime) - now;
+                const prize = isW2 ? Number(t.prizePool || 0)       : Number(t.prizePool) / 1e18;
+                const entryFee = isW2 ? Number(t.entryFee || 0)     : Number(t.entryFee)  / 1e18;
+                const diff = (isActive ? endSec : startSec) - nowSec;
                 const h = Math.floor(diff / 3600);
                 const m = Math.floor((diff % 3600) / 60);
                 const timeStr = h > 48 ? `In ${Math.floor(h/24)}d` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+                const tokenLabel = isW2 ? "ArcadeCoins" : rewardSymbol;
                 return (
                   <div key={t.id} onClick={() => navigate("/tournaments")}
                     style={{ background: `linear-gradient(135deg, ${statusGlow} 0%, rgba(12,8,28,0.9) 100%)`, borderRadius: 10, border: `1px solid ${statusBorder}`, padding: "10px 12px", marginBottom: 6, position: "relative", overflow: "hidden", cursor: "pointer" }}>
@@ -896,16 +1153,16 @@ export default function Home() {
                       <div style={{ textAlign: "right", flexShrink: 0 }}>
                         <div style={{ fontSize: 7, color: "rgba(255,215,0,0.5)", fontFamily: "'Rajdhani',sans-serif" }}>PRIZE</div>
                         <div style={{ fontSize: 13, fontWeight: 700, color: "#FFD700", fontFamily: "'Orbitron',sans-serif", lineHeight: 1 }}>{prize > 0 ? prize.toFixed(0) : (entryFee * t.maxPlayers * 0.95).toFixed(0)}</div>
-                        <div style={{ fontSize: 7, color: "rgba(255,215,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>{rewardSymbol}</div>
+                        <div style={{ fontSize: 7, color: "rgba(255,215,0,0.4)", fontFamily: "'Rajdhani',sans-serif" }}>{tokenLabel}</div>
                       </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <span style={{ fontSize: 8 }}>⏱️</span>
+                        <Icon name="clock" size={9} color={statusColor} />
                         <span style={{ fontSize: 8, color: statusColor, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700 }}>{timeStr}</span>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <span style={{ fontSize: 8 }}>👥</span>
+                        <Icon name="users" size={9} color="rgba(180,150,255,0.6)" />
                         <span style={{ fontSize: 8, color: "rgba(180,150,255,0.5)", fontFamily: "'Rajdhani',sans-serif" }}>{t.players?.length || 0}/{t.maxPlayers}</span>
                       </div>
                       <div style={{ fontSize: 7, padding: "2px 7px", background: "rgba(123,47,255,0.15)", border: `1px solid ${statusBorder}`, borderRadius: 3, color: statusColor, fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>
