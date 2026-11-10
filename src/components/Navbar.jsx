@@ -397,7 +397,6 @@ export default function Navbar() {
         { label: "Games", path: "/games" },
         { label: "Tournaments", path: "/tournaments" },
         { label: "Creators", path: "/publish" },
-        { label: "AI Studio", path: "/studio" },
         { label: "Leaderboard", path: "/leaderboard" },
         { label: "Support", path: "/support" }
       ]
@@ -408,7 +407,6 @@ export default function Navbar() {
         { label: "Tournaments", path: "/tournaments" },
         { label: "Marketplace", path: "/marketplace" },
         { label: "Creators", path: "/publish" },
-        { label: "AI Studio", path: "/studio" },
         { label: "Support", path: "/support" }
       ];
 

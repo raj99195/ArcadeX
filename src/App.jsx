@@ -1,7 +1,5 @@
 // Place at: src/App.jsx (REPLACES existing)
 import BattlePass from "./pages/BattlePass";
-import { lazy, Suspense } from "react";
-const GameStudio = lazy(() => import("./pages/GameStudio"));
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useChain } from "./context/ChainContext";
 import { useMode } from "./hooks/useMode";
@@ -113,7 +111,6 @@ export default function App() {
 
   return (
     <Routes>
-      <Route path="/studio" element={<Suspense fallback={<div style={{ padding: 40, background: '#0c1017', minHeight: '100vh', color: '#c8b4ff' }}>Opening Game Studio…</div>}><GameStudio /></Suspense>} />
       {/* Direct chain links — bypass mode/chain gates */}
       <Route path="/mstblockchain" element={<ChainLanding chainKey="mst" />} />
       <Route path="/botchain" element={<ChainLanding chainKey="botchain" />} />

@@ -2,7 +2,7 @@
 import jwt from "jsonwebtoken";
 import admin from "firebase-admin";
 import { ethers } from "ethers";
-import { creatorThumbnailBucket, uploadCreatorThumbnail } from "../lib/creatorThumbnail.mjs";
+import { creatorThumbnailBucket, uploadCreatorThumbnail } from "../lib/creatorThumbnail.cjs";
 function verifyToken(req) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith("Bearer ")) return null;
