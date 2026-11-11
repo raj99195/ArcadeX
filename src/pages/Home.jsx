@@ -403,7 +403,7 @@ export default function Home() {
         <div style={{
           position: "relative", zIndex: 2, flex: isMobile ? "none" : 1,
           display: "grid",
-          gridTemplateColumns: isMobile ? "1fr" : "420px 1fr",
+          gridTemplateColumns: isMobile ? "1fr" : "minmax(300px, 36%) minmax(0, 1fr)",
           minHeight: 0,
         }}>
           {/* TEXT */}
@@ -626,8 +626,8 @@ export default function Home() {
             const isEnter = carouselAnim === "enter";
 
             // ── SIZE CONTROLS ── change these to resize everything
-            const C = { w: 330, h: 410, imgH: 290 };   // center card
-            const S = { w: 175, h: 238, imgH: 148 };   // side cards (left/right)
+            const C = { w: "min(330px, 52cqw)" };
+            const S = { w: "min(175px, 25cqw)", h: "min(238px, 100%)", imgH: "58%" };
             const P = { w: 110, h: 152 };               // peek cards (far left/right)
             const sideLeft = "8%";                      // left card position from left
             const sideRight = "8%";                     // right card position from right
@@ -646,12 +646,12 @@ export default function Home() {
             );
 
             return (
-              <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", height: "100%" }}>
+              <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", height: "100%", minWidth: 0, minHeight: 0, containerType: "size" }}>
                 {/* Glow rings */}
                 <div style={{ position: "absolute", width: 380, height: 380, borderRadius: "50%", background: "radial-gradient(circle,rgba(123,47,255,0.11) 0%,transparent 70%)", pointerEvents: "none" }} />
                 <div style={{ position: "absolute", width: 300, height: 300, borderRadius: "50%", border: "1px solid rgba(123,47,255,0.09)", pointerEvents: "none", animation: "tagFloat 7s ease-in-out infinite" }} />
 
-                <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ position: "relative", width: "100%", height: "100%", boxSizing: "border-box", padding: "20px 0 54px", display: "flex", alignItems: "center", justifyContent: "center" }}>
 
                   {/* Far left peek */}
                   <div style={{
@@ -667,7 +667,7 @@ export default function Home() {
                   </div>
 
                   {/* Left card */}
-                  <div style={{
+                  <div key={`left-${games[lIdx]?.id}`} style={{
                     position: "absolute", left: sideLeft,
                     width: S.w, height: S.h, borderRadius: 12, overflow: "hidden",
                     border: "1px solid rgba(123,47,255,0.25)",
@@ -688,9 +688,10 @@ export default function Home() {
                   </div>
 
                   {/* CENTER — Active */}
-                  <div style={{
+                  <div key={`center-${games[ci]?.id}`} style={{
                     position: "absolute",
-                    width: C.w, height: C.h, borderRadius: 14, overflow: "hidden",
+                    width: C.w, height: "min(410px, calc(100cqh - 74px))", boxSizing: "border-box",
+                    display: "flex", flexDirection: "column", borderRadius: 14, overflow: "hidden",
                     border: "2px solid rgba(123,47,255,0.9)",
                     zIndex: 4, background: "#0d0a1e", cursor: "pointer",
                     animation: isExit
@@ -704,9 +705,9 @@ export default function Home() {
                     {/* Icon badge */}
                     <div style={{ position: "absolute", top: 10, right: 10, zIndex: 7, width: 28, height: 28, borderRadius: "50%", background: "rgba(123,47,255,0.4)", border: "1px solid rgba(180,150,255,0.5)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}><Icon name="controller" size={14} /></div>
                     {getThumb(games[ci])
-                      ? <img src={getThumb(games[ci])} alt={games[ci]?.name} style={{ width: "100%", height: C.imgH, objectFit: "contain", objectPosition: "center", display: "block", background: "#06040f" }} />
-                      : <FallbackDiv height={C.imgH} size={44} />}
-                    <div style={{ padding: "14px 16px 16px", display: "flex", flexDirection: "column", gap: 10, flex: 1 }}>
+                      ? <img src={getThumb(games[ci])} alt={games[ci]?.name} style={{ width: "100%", height: 0, minHeight: 0, flex: "1 1 0", objectFit: "contain", objectPosition: "center", display: "block", background: "#06040f" }} />
+                      : <div style={{ flex: "1 1 0", minHeight: 0 }}><FallbackDiv height="100%" size={44} /></div>}
+                    <div style={{ padding: "10px 14px 12px", display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
                       {/* Name + genre row */}
                       <div>
                         <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 18, color: "#e0d0ff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 4 }}>{games[ci]?.name}</div>
@@ -715,7 +716,7 @@ export default function Home() {
                       {/* Divider */}
                       <div style={{ height: 1, background: "rgba(123,47,255,0.18)", borderRadius: 1 }} />
                       {/* Reward + play row */}
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
                         {games[ci]?.rewardRate != null
                           ? <span style={{ fontSize: 14, color: "#00d4ff", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 6, padding: "5px 12px" }}>+{getRate(games[ci])} {rewardSymbol}</span>
                           : <span />}
@@ -729,7 +730,7 @@ export default function Home() {
                   </div>
 
                   {/* Right card */}
-                  <div style={{
+                  <div key={`right-${games[rIdx]?.id}`} style={{
                     position: "absolute", right: sideRight,
                     width: S.w, height: S.h, borderRadius: 12, overflow: "hidden",
                     border: "1px solid rgba(123,47,255,0.25)",
