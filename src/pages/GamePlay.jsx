@@ -2,7 +2,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useState, useRef, useCallback, memo, forwardRef } from "react";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { writeContract, waitForTransactionReceipt, readContract } from "@wagmi/core";
-import { keccak256, toHex } from "viem";
+import { formatEther, keccak256, parseAbi, toHex } from "viem";
 import { wagmiAdapter } from "../Providers";
 import { useGames, bustGamesCache } from "../hooks/useGames";
 import { saveScore } from "../lib/gameService";
@@ -15,6 +15,9 @@ import Seo from "../components/Seo";
 
 const TOURNAMENT_SCORE_ABI = [{ name: "submitTournamentScore", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tournamentId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
 const PLATFORM_ABI = [{ name: "recordPlayAndEarn", type: "function", stateMutability: "nonpayable", inputs: [{ name: "gameId", type: "uint256" }, { name: "score", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "signature", type: "bytes" }], outputs: [] }];
+const FALLBACK_ABI = parseAbi([
+  "function claim(bytes32 playId, uint256 gameId, address creator, uint256 playerReward, uint256 creatorReward, uint256 deadline, bytes signature)",
+]);
 const PLATFORM_READ_ABI = [
   { name: "games", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "gameId", type: "uint256" }, { name: "name", type: "string" }, { name: "creator", type: "address" }, { name: "iframeUrl", type: "string" }, { name: "rewardRate", type: "uint256" }, { name: "totalPlays", type: "uint256" }, { name: "isActive", type: "bool" }] },
   { name: "playerSharePercent", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
@@ -225,6 +228,7 @@ export default function GamePlay() {
   const [taskonElapsed, setTaskonElapsed] = useState(0); // seconds — for UI counter
   const [gameLoading, setGameLoading] = useState(true);
   const [tokensEarned, setTokensEarned] = useState(0);
+  const [paidRewardSymbol, setPaidRewardSymbol] = useState(null);
   const [totalPlays, setTotalPlays] = useState(0);
   const [uniquePlayers, setUniquePlayers] = useState(0);
   const [creatorProfile, setCreatorProfile] = useState(null);
@@ -1162,6 +1166,7 @@ export default function GamePlay() {
       // ── STEP 3: Backend sign-score (ECDSA proof) ─────────────────
       setSubmitStage("signing");
       let nonce, signature;
+      let fallbackClaim;
       let tNonce = null, tSig = null;   // tournament proof (set below if tournamentId)
       try {
         const sigRes = await fetch("/api/games?action=sign-score", {
@@ -1195,27 +1200,9 @@ export default function GamePlay() {
         const sigData = await sigRes.json();
         nonce = BigInt(sigData.nonce);
         signature = sigData.signature;
+        fallbackClaim = sigData.fallbackClaim;
         tNonce = sigData.tournamentNonce ? BigInt(sigData.tournamentNonce) : null;
         tSig   = sigData.tournamentSignature || null;
-        sessionTokenRef.current = null; // burn — one-time use
-
-        // Auto-renew session for next game round (background, non-blocking)
-        ;(async () => {
-          try {
-            const t = localStorage.getItem("arcadex_jwt");
-            if (!t) return;
-            const r = await fetch("/api/games?action=start-session", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${t}` },
-              body: JSON.stringify({ gameId: onChainGameId, chain: chainKey }),
-            });
-            if (r.ok) {
-              const { sessionToken: newToken } = await r.json();
-              sessionTokenRef.current = newToken;
-              console.log("[session] renewed:", newToken?.slice(0, 8) + "...");
-            }
-          } catch (e) { console.warn("[session] renew failed:", e); }
-        })();
       } catch (sigErr) {
         setSubmitStage(null);
         setSubmitError({ type: "session", soft: false, icon: "🔐", title: "Score Verification Failed", msg: "Network error while verifying score. Please try again." });
@@ -1224,17 +1211,31 @@ export default function GamePlay() {
 
       // ── STEP 4: Wallet — user approves the tx ────────────────────
       setSubmitStage("wallet");
-      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+      const payoutCall = fallbackClaim ? {
+        address: fallbackClaim.address, abi: FALLBACK_ABI, functionName: "claim",
+        args: [fallbackClaim.playId, BigInt(onChainGameId), fallbackClaim.creator,
+          BigInt(fallbackClaim.playerReward), BigInt(fallbackClaim.creatorReward),
+          BigInt(fallbackClaim.deadline), fallbackClaim.signature],
+      } : {
         address: PLATFORM_ADDRESS, abi: PLATFORM_ABI,
         functionName: "recordPlayAndEarn",
         args: [BigInt(onChainGameId), BigInt(finalScore), nonce, signature],
+      };
+      const hash = await writeContract(wagmiAdapter.wagmiConfig, {
+        ...payoutCall,
         gas: BigInt(500000),
         chainId: CHAIN_ID,
       });
 
       // ── STEP 5: Wait for on-chain receipt ────────────────────────
       setSubmitStage("confirming");
-      await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      const receipt = await waitForTransactionReceipt(wagmiAdapter.wagmiConfig, { hash });
+      if (receipt.status !== "success") throw new Error("Reward transaction reverted");
+      const fallbackTopic = keccak256(toHex("ArcadeFallbackPaid()"));
+      sessionTokenRef.current = null;
+      const payoutSymbol = fallbackClaim || receipt.logs.some((log) =>
+        log.address.toLowerCase() === PLATFORM_ADDRESS.toLowerCase() && log.topics[0] === fallbackTopic
+      ) ? "ARCADE" : rewardSymbol;
 
       if (tournamentId && tSig) {
         try {
@@ -1257,8 +1258,13 @@ export default function GamePlay() {
         console.warn("Tournament play but no proof returned — check TOURNAMENT_ADDRESSES / SCORE_SIGNER config.");
       }
 
-      setTokensEarned(playerReward);
-      await saveScore({ player: address, score: finalScore, gameId: game.id, gameName: game.name, txHash: hash, chain: chainKey, earned: playerReward, earnedSymbol: rewardSymbol });
+      setTokensEarned(fallbackClaim ? Number(formatEther(BigInt(fallbackClaim.playerReward))) : playerReward);
+      setPaidRewardSymbol(payoutSymbol);
+      await saveScore({
+        player: address, score: finalScore, gameId: game.id, gameName: game.name,
+        txHash: hash, chain: chainKey, earnedSymbol: payoutSymbol,
+        fallbackSessionToken: fallbackClaim ? _session : undefined,
+      });
       setTxHash(hash); setSubmitted(true);
       sendToGame("TRANSACTION_SUCCESS", { txHash: hash });
 
@@ -1418,7 +1424,7 @@ export default function GamePlay() {
       success: {
         icon: "✅",
         title: "Score submitted!",
-        msg: tokensEarned > 0 ? `+${tokensEarned} ${rewardSymbol} earned` : "Your score is now on-chain.",
+        msg: tokensEarned > 0 ? `+${tokensEarned} ${paidRewardSymbol || rewardSymbol} earned` : "Your score is now on-chain.",
         accent: "#00e676",
         spin: false,
       },
@@ -1880,7 +1886,7 @@ export default function GamePlay() {
             {submitted && txHash && (
               <div style={{ background: "rgba(0,255,136,0.05)", border: "1px solid rgba(0,255,136,0.15)", borderRadius: 10, padding: "14px 16px" }}>
                 <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 12, color: C.green, marginBottom: 5 }}>✓ Score submitted on-chain!</div>
-                {tokensEarned > 0 && <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 16, color: C.green, marginBottom: 6 }}>+{tokensEarned} {rewardSymbol} earned! 🎉</div>}
+                {tokensEarned > 0 && <div style={{ fontFamily: C.raj, fontWeight: 700, fontSize: 16, color: C.green, marginBottom: 6 }}>+{tokensEarned} {paidRewardSymbol || rewardSymbol} earned! 🎉</div>}
                 <a href={`${explorerUrl || "https://scan.botchain.ai"}/tx/${txHash}`} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: "#a67fff", textDecoration: "none", fontFamily: C.raj, fontWeight: 700 }}>View on {chainName} Explorer →</a>
               </div>
             )}

@@ -55,17 +55,17 @@ export function useGames() {
   const [loading, setLoading] = useState(() => !readCache("useGames:list"));
 
   useEffect(() => {
-    // Cache hit → skip fetch entirely
+    // Show cached cards immediately, then revalidate approved games on entry.
     const cached = readCache("useGames:list");
     if (cached) {
       setGames(cached);
       setLoading(false);
-      return;
     }
 
     const fetchGames = async () => {
       try {
         const res = await fetch("/api/games?action=list");
+        if (!res.ok) throw new Error("Could not load approved games");
         const data = await res.json();
         const formatted = (data.games || []).map(g => ({
           ...g,

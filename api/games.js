@@ -2,6 +2,7 @@
 import jwt from "jsonwebtoken";
 import admin from "firebase-admin";
 import { ethers } from "ethers";
+import { reserveMstProof, chooseFallback, signFallback, verifyFallbackReceipt } from "../lib/mstPayoutProof.cjs";
 import { creatorThumbnailBucket, uploadCreatorThumbnail } from "../lib/creatorThumbnail.cjs";
 function verifyToken(req) {
   const auth = req.headers.authorization;
@@ -1860,6 +1861,7 @@ export default async function handler(req, res) {
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
         used:      false,
+        arcadeFallbackEligible: chain === "mst" && Boolean(process.env.MST_FALLBACK_CONTRACT_ADDRESS && process.env.MST_FALLBACK_SIGNER_PRIVATE_KEY),
       });
       return res.status(200).json({ sessionToken });
     } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -2108,12 +2110,26 @@ export default async function handler(req, res) {
       // signature, so the contract accepts it at most once (usedScoreProofs).
       const nonce        = ethers.toBigInt(ethers.keccak256(ethers.toUtf8Bytes("sess:" + sessionToken)));
 
+      const payout = chain === "mst"
+        ? await reserveMstProof(db, sessDocRef, {
+            score, platformAddress: platformAddr,
+            fallback: sessData.payoutProof ? null : await chooseFallback({
+              session: sessData, rpcUrl: RPC_URLS.mst, platformAddress: platformAddr, gameId, score,
+            }),
+          })
+        : { route: "mst", score: String(score) };
+      if (!payout) {
+        return res.status(409).json({ error: "This play already has a different payout proof or has expired." });
+      }
       const messageHash = ethers.solidityPackedKeccak256(
         ["address", "uint256", "uint256", "uint256", "address", "uint256"],
-        [player, BigInt(gameId), BigInt(score), nonce, platformAddr, chainId]
+        [player, BigInt(gameId), BigInt(payout.score), nonce, platformAddr, chainId]
       );
 
-      const signature = await signerWallet.signMessage(ethers.getBytes(messageHash));
+      const fallbackClaim = payout.route === "arcade"
+        ? await signFallback(payout.fallback, { chainId, nonce, player, gameId })
+        : null;
+      const signature = fallbackClaim ? null : await signerWallet.signMessage(ethers.getBytes(messageHash));
 
       // ── Tournament proof (only if this play is part of a tournament) ──
       // Contract expects a SEPARATE signature over the tournament tuple:
@@ -2138,6 +2154,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         nonce: nonce.toString(),
         signature,
+        fallbackClaim,
         tournamentNonce: tournamentNonce?.toString() ?? null,
         tournamentSignature,
       });
@@ -3202,12 +3219,15 @@ export default async function handler(req, res) {
       if (receipt.status !== 1) return res.status(400).json({ error: "Transaction failed on-chain" });
 
       // 2) Tx Platform contract ko hi gayi thi?
-      if (receipt.to?.toLowerCase() !== platformAddr.toLowerCase())
+      const fallback = chainKey === "mst" && receipt.to?.toLowerCase() !== platformAddr.toLowerCase()
+        ? await verifyFallbackReceipt(db, receipt, user.address, req.body.fallbackSessionToken)
+        : null;
+      if (!fallback && receipt.to?.toLowerCase() !== platformAddr.toLowerCase())
         return res.status(400).json({ error: "Transaction not to Platform contract" });
 
       // 3) PlayRecorded event parse karo — player match kare?
       const iface = new ethers.Interface(PLATFORM_EVENT_ABI);
-      let matched = null;
+      let matched = fallback;
       for (const log of receipt.logs) {
         if (log.address.toLowerCase() !== platformAddr.toLowerCase()) continue;
         try {
@@ -3233,19 +3253,24 @@ export default async function handler(req, res) {
 
       const scoreDoc = {
         player:        user.address,
-        score:         parseInt(score),          // display score (game se)
+        score:         fallback?.score ?? parseInt(score),
         gameId:        parseInt(onChainGameId),   // on-chain verified
         gameName:      gameName || "Unknown",
         chain:         chainKey,
         earned:        onChainReward,             // player's on-chain reward
         creatorEarned: onChainCreator,            // creator's on-chain reward
-        earnedSymbol:  earnedSymbol || "ARCADE",
+        earnedSymbol:  fallback || receipt.logs.some((log) =>
+          log.address.toLowerCase() === platformAddr.toLowerCase() &&
+          log.topics[0] === ethers.id("ArcadeFallbackPaid()")
+        ) ? "ARCADE" : earnedSymbol || "ARCADE",
         txHash,
         verified:      true,                      // Layer 2 stamp
         createdAt:     new Date(),
         aggregated:    true,                      // marks: aggregates already updated below
       };
       await db.collection("scores").doc(txHash).set(scoreDoc);
+      // The existing chain aggregates represent native MST, so keep ARCADE in score history only.
+      if (fallback) return res.status(200).json({ success: true });
 
       // ── Aggregate rollup (fire-and-log; do not block user response) ──
       // updateAggregates writes 6 docs atomically. If it fails for any

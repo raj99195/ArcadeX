@@ -1,4 +1,5 @@
 // src/lib/gameService.js — All Firebase calls replaced with API calls
+import { bustGamesCache } from "../hooks/useGames";
 // ── helpers ──
 async function apiCall(url, options = {}) {
   const token = localStorage.getItem("arcadex_jwt");
@@ -116,11 +117,15 @@ export async function getPendingGames() {
 }
 // ── Approve game (Admin) ──
 export async function approveGameInFirebase(gameId) {
-  return apiCall("/api/admin?action=games-approve", { method: "POST", body: { gameId } });
+  const result = await apiCall("/api/admin?action=games-approve", { method: "POST", body: { gameId } });
+  bustGamesCache();
+  return result;
 }
 // ── Reject game (Admin) ──
 export async function rejectGameInFirebase(gameId) {
-  return apiCall("/api/admin?action=games-reject", { method: "POST", body: { gameId } });
+  const result = await apiCall("/api/admin?action=games-reject", { method: "POST", body: { gameId } });
+  bustGamesCache();
+  return result;
 }
 // ── Total games count ──
 export async function getTotalGamesCount() {
@@ -130,11 +135,11 @@ export async function getTotalGamesCount() {
   } catch { return 0; }
 }
 // ── Save score ──
-export async function saveScore({ player, score, gameId, gameName, txHash, chain }) {
+export async function saveScore({ player, score, gameId, gameName, txHash, chain, earnedSymbol, fallbackSessionToken }) {
   try {
     await apiCall("/api/games?action=score", {
       method: "POST",
-      body: { player, score, gameId, gameName, txHash, chain },
+      body: { player, score, gameId, gameName, txHash, chain, earnedSymbol, fallbackSessionToken },
     });
   } catch (err) { console.error("Score save failed:", err); }
 }

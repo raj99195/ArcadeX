@@ -17,7 +17,7 @@ import "./Leaderboard.sol";
  *   → mintTo() player and creator
  *
  * Native token chains (MST):
- *   isNativeToken=true, _arcadeToken=address(0), rewardPool=funded wallet
+ *   isNativeToken=true, optional _arcadeToken enables an ERC-20 fallback
  *   → transfer native token held by THIS CONTRACT to player and creator
  *   → Fund the contract itself (send native token to its address) before
  *     rewards can be paid — see note on rewardPool below.
@@ -114,6 +114,7 @@ contract Platform is AccessControl, ReentrancyGuard {
 
     event GameRegistered(uint256 indexed gameId, address indexed creator, string name);
     event GameApproved(uint256 indexed gameId);
+    event ArcadeFallbackPaid();
     event PlayRecorded(address indexed player, uint256 indexed gameId, uint256 playerReward, uint256 creatorReward);
     event RewardRateLimitsUpdated(uint256 minRate, uint256 maxRate);
     event RewardPoolUpdated(address newPool);
@@ -152,8 +153,8 @@ contract Platform is AccessControl, ReentrancyGuard {
 
         if (!_isNativeToken) {
             require(_arcadeToken != address(0), "ArcadeToken address required");
-            arcadeToken = ArcadeToken(_arcadeToken);
         }
+        arcadeToken = ArcadeToken(_arcadeToken);
     }
 
     // ── Creator ───────────────────────────────────────────────────────────────
@@ -301,14 +302,13 @@ contract Platform is AccessControl, ReentrancyGuard {
             chainEarnedInWindow += playerReward + creatorReward;
         }
 
-        if (isNativeToken) {
+        if (isNativeToken && address(this).balance >= rate) {
             // Native token chain (MST) — pay from THIS CONTRACT's own
             // balance. NOTE: previously this checked rewardPool.balance
             // (an external wallet) while actually paying from
             // address(this) — two different addresses, which meant both
             // had to be separately funded. Now it checks the address that
             // actually pays.
-            require(address(this).balance >= rate, "Pool insufficient - fund this contract");
             if (playerReward > 0) {
                 (bool p,) = payable(player).call{value: playerReward}("");
                 require(p, "Player transfer failed");
@@ -318,7 +318,10 @@ contract Platform is AccessControl, ReentrancyGuard {
                 require(c, "Creator transfer failed");
             }
         } else {
-            // ERC-20 chain (BOTChain/Somnia) — mint ARCADE
+            if (isNativeToken) {
+                require(address(arcadeToken) != address(0), "Pool insufficient - fund this contract");
+                emit ArcadeFallbackPaid();
+            }
             if (playerReward > 0)  arcadeToken.mintTo(player,  playerReward);
             if (creatorReward > 0) arcadeToken.mintTo(creator, creatorReward);
         }
