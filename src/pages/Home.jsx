@@ -827,8 +827,8 @@ export default function Home() {
                   <span style={{ fontSize: 9, color: "rgba(180,150,255,0.45)", fontFamily: "'Orbitron',sans-serif" }}>{page + 1} / {totalPages}</span>
                   <div style={{ display: "flex", gap: 5 }}>
                     {[["prev", page === 0], ["next", page >= totalPages - 1]].map(([dir, disabled]) => (
-                      <button key={dir} onClick={() => goTo(dir === "prev" ? page - 1 : page + 1)} disabled={disabled} style={{
-                        width: 22, height: 22, borderRadius: "50%",
+                      <button key={dir} aria-label={dir === "prev" ? "Previous featured games" : "Next featured games"} onClick={() => goTo(dir === "prev" ? page - 1 : page + 1)} disabled={disabled} style={{
+                        width: isMobile ? 44 : 22, height: isMobile ? 44 : 22, borderRadius: "50%",
                         cursor: disabled ? "not-allowed" : "pointer",
                         background: disabled ? "rgba(123,47,255,0.04)" : "rgba(123,47,255,0.16)",
                         border: `1px solid ${disabled ? "rgba(123,47,255,0.08)" : "rgba(123,47,255,0.38)"}`,

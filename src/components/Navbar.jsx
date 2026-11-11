@@ -536,10 +536,20 @@ export default function Navbar() {
 
   return (
     <>
+    <style>{`
+      @media (max-width: 768px) {
+        .ax-nav-mode, .ax-nav-wallet-shortcut { display: none !important; }
+        .ax-nav-balance { max-width: 104px; min-width: 0; box-sizing: border-box; }
+        .ax-nav-balance > div { min-width: 0; }
+      }
+      @media (max-width: 380px) {
+        .ax-nav-brand-name { display: none; }
+      }
+    `}</style>
     <nav style={{
       position: "sticky", top: 0, zIndex: 100,
       display: "flex", alignItems: "center", justifyContent: "space-between",
-      padding: isMobile ? "0 16px" : "0 36px", height: "54px",
+      padding: isMobile ? "0 12px" : "0 36px", height: "54px", boxSizing: "border-box", width: "100%", gap: 8,
       background: "rgba(8,7,15,0.97)",
       borderBottom: "1px solid rgba(123,47,255,0.18)",
       boxShadow: "0 1px 24px rgba(123,47,255,0.1), 0 1px 0 rgba(0,212,255,0.06)",
@@ -547,14 +557,14 @@ export default function Navbar() {
     }}>
 
       {/* 1. LOGO + MODE BADGE */}
-      <div ref={ddRef} style={{ position: "relative", display: "flex", alignItems: "center" }}>
+      <div ref={ddRef} style={{ position: "relative", display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div onClick={() => isMobile ? navigate("/") : setDdOpen(p => !p)} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", userSelect: "none" }}>
 
           <img src="/IA-logo.webp" alt="ArcadeX Logo" style={{ width: 30, height: 30, objectFit: "contain", filter: "drop-shadow(0 0 12px rgba(150,80,255,0.9)) drop-shadow(0 0 22px rgba(0,212,255,0.35))" }} />
 
-          <span style={{ fontSize: 14.5, fontWeight: 800, color: "#fff", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "0.6px", background: "linear-gradient(90deg,#fff,#d8bfff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>ArcadeX</span>
+          <span className="ax-nav-brand-name" style={{ fontSize: 14.5, fontWeight: 800, color: "#fff", fontFamily: "'Rajdhani',sans-serif", letterSpacing: "0.6px", background: "linear-gradient(90deg,#fff,#d8bfff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>ArcadeX</span>
 
-          <ModeBadge />
+          <span className="ax-nav-mode"><ModeBadge /></span>
 
           {!isMobile && (
             <svg width="9" height="9" viewBox="0 0 9 9" style={{ opacity: 0.3, transform: ddOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s", marginLeft: 2 }}>
@@ -662,13 +672,13 @@ export default function Navbar() {
       )}
 
       {/* RIGHT SIDE */}
-      <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: isMobile ? 6 : 7, alignItems: "center", minWidth: 0 }}>
 
         {/* ─── WEB3 MODE: chain switcher ─── */}
         {!isWeb2 && isConnected && chainName && (
           <button onClick={clearChainSelection} title="Switch chain" style={{
             display: "flex", alignItems: "center", gap: 5,
-            padding: isMobile ? "4px 8px" : "5px 11px",
+            padding: isMobile ? "4px 8px" : "5px 11px", minHeight: isMobile ? 44 : undefined,
             background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.22)",
             borderRadius: 20, cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
             transition: "all 0.2s",
@@ -677,7 +687,7 @@ export default function Navbar() {
             onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(0,212,255,0.22)"; e.currentTarget.style.background = "rgba(0,212,255,0.08)"; }}
           >
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00d4ff", flexShrink: 0 }} />
-            <span style={{ color: "#00d4ff", fontSize: isMobile ? 10 : 11, fontWeight: 700, letterSpacing: "0.3px", whiteSpace: "nowrap" }}>
+            <span style={{ color: "#00d4ff", fontSize: isMobile ? 10 : 11, fontWeight: 700, letterSpacing: "0.3px", whiteSpace: "nowrap", maxWidth: isMobile ? 64 : undefined, overflow: "hidden", textOverflow: "ellipsis" }}>
               {isMobile ? (chainName || "").split(" ")[0] : chainName}
             </span>
             <svg width="8" height="8" viewBox="0 0 9 9" style={{ opacity: 0.6 }}>
@@ -689,17 +699,18 @@ export default function Navbar() {
         {/* REWARD BALANCE — clickable → earnings panel (Web3 only) */}
         {!isWeb2 && isConnected && balance !== null && !(isMobile && chainKey === "mst" && !faucetClaimed && Number(balance) === 0) && (
           <div
+            className="ax-nav-balance"
             onClick={handleEarningsOpen}
             title="View earning history"
             style={{ display: "flex", alignItems: "center", gap: 6, padding: isMobile ? "0 8px" : "0 12px", height: LOGO_SIZE + 8, borderRadius: (LOGO_SIZE + 8) / 2, background: "rgba(123,47,255,0.1)", border: "1px solid rgba(123,47,255,0.25)", boxShadow: "0 0 14px rgba(123,47,255,0.12)", cursor: "pointer", transition: "all 0.2s" }}
             onMouseEnter={e => { e.currentTarget.style.background = "rgba(123,47,255,0.18)"; e.currentTarget.style.borderColor = "rgba(123,47,255,0.5)"; }}
             onMouseLeave={e => { e.currentTarget.style.background = "rgba(123,47,255,0.1)"; e.currentTarget.style.borderColor = "rgba(123,47,255,0.25)"; }}
           >
-            <div style={{ width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(123,47,255,0.5)", flexShrink: 0, background: "#0e0c1a" }}>
+            <div style={{ display: isMobile ? "none" : "block", width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: "50%", overflow: "hidden", border: "1.5px solid rgba(123,47,255,0.5)", flexShrink: 0, background: "#0e0c1a" }}>
               <img src={avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${address}`} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-              <span style={{ color: "#c4a0ff", fontWeight: 700, fontFamily: "'Orbitron',sans-serif", fontSize: isMobile ? 10 : 11, letterSpacing: "0.3px" }}>
+              <span style={{ color: "#c4a0ff", fontWeight: 700, fontFamily: "'Orbitron',sans-serif", fontSize: isMobile ? 10 : 11, letterSpacing: "0.3px", maxWidth: isMobile ? 60 : undefined, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {Number(balance).toLocaleString()}
               </span>
               <span style={{ color: "#8866cc", fontWeight: 700, fontFamily: "'Rajdhani',sans-serif", fontSize: 9 }}>
@@ -945,6 +956,7 @@ export default function Navbar() {
             {/* Wallet chip — mobile (connected, Web3) */}
             {!isWeb2 && isConnected && (
               <button
+                className="ax-nav-wallet-shortcut"
                 onClick={() => setWalletMenuOpen(true)}
                 title="Wallet options"
                 style={{
@@ -986,15 +998,15 @@ export default function Navbar() {
             )}
 
             {/* Hamburger */}
-            <div ref={menuRef} style={{ position: "relative" }}>
-              <button onClick={() => setMenuOpen(p => !p)} style={{ width: 36, height: 36, background: "rgba(123,47,255,0.08)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 7, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, padding: 0 }}>
+            <div ref={menuRef} style={{ position: "relative", flexShrink: 0 }}>
+              <button aria-label={menuOpen ? "Close navigation menu" : "Open navigation menu"} aria-expanded={menuOpen} onClick={() => setMenuOpen(p => !p)} style={{ width: 44, height: 44, background: "rgba(123,47,255,0.08)", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 7, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, padding: 0 }}>
                 <span style={{ width: 16, height: 1.5, background: menuOpen ? "#7B2FFF" : "#a67fff", borderRadius: 2, transition: "all 0.2s", transform: menuOpen ? "rotate(45deg) translate(4px, 4px)" : "none" }} />
                 <span style={{ width: 16, height: 1.5, background: menuOpen ? "transparent" : "#a67fff", borderRadius: 2, transition: "all 0.2s" }} />
                 <span style={{ width: 16, height: 1.5, background: menuOpen ? "#7B2FFF" : "#a67fff", borderRadius: 2, transition: "all 0.2s", transform: menuOpen ? "rotate(-45deg) translate(4px, -4px)" : "none" }} />
               </button>
 
               {menuOpen && (
-                <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: "#0e0c1a", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 12, overflow: "hidden", minWidth: 220, boxShadow: "0 16px 40px rgba(0,0,0,0.9)", zIndex: 200 }}>
+                <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: "#0e0c1a", border: "1px solid rgba(123,47,255,0.2)", borderRadius: 12, overflowY: "auto", maxHeight: "calc(100dvh - 78px)", width: "min(280px, calc(100vw - 24px))", boxShadow: "0 16px 40px rgba(0,0,0,0.9)", zIndex: 200 }}>
                   {navLinks.map(({ label, path }, i) => (
                     <div key={label} onClick={() => { navigate(path); setMenuOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", fontSize: 13, cursor: "pointer", borderBottom: "1px solid rgba(123,47,255,0.07)", background: isActive(path) ? "rgba(123,47,255,0.14)" : "transparent", color: isActive(path) ? "#c4a0ff" : "#9a8fc2", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, transition: "background 0.15s" }}
                       onMouseEnter={e => { e.currentTarget.style.background = "rgba(123,47,255,0.1)"; e.currentTarget.style.color = "#c4a0ff"; }}
